@@ -27,6 +27,7 @@ Implemented locally:
 - `/health`, `/internal/quotes`, and x402-gated `/v1/inference` transport shell
 - Authenticated `/purchases/{id}/run` orchestration across decision, payment, delivery, and audit
 - Durable seller `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` journal with restart recovery and at-most-once provider attempts
+- Gas-sponsored x402 Permit2 payments using exact-amount EIP-2612 permits on the project-issued PBLC token, without buyer-funded approvals
 - Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
 - Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
 - Objective ERC-8004 reputation and confirmed external evidence anchors
@@ -110,7 +111,7 @@ After SIWE authentication, a fake-domain purchase stores only normalized data an
 - RFC 8785 plus SHA-256 provides deterministic JSON evidence hashes.
 - AES-256-GCM envelope encryption provides per-payload data keys and an AWS KMS seam.
 - SIWE separates user ownership via MetaMask from the autonomous buyer wallet.
-- x402 v2 plus Permit2 binds the seller payment requirement to the fixed buying decision.
+- Project-issued PBLC plus EIP-2612 and x402 Permit2 avoids token faucets and lets the Facilitator sponsor buyer payment approval gas.
 - ERC-8004 provides provider-level seller-agent identity and objective payment reputation.
 - Next.js separates the reusable audit shell from domain-specific renderers.
 

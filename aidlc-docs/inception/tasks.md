@@ -71,7 +71,7 @@ flowchart LR
 ## Phase 3 — 결제, 체인 검증, ERC-8004
 
 - [x] **3.1 자체 ERC-20의 정확히 한 번 결제와 온체인 평판 연결을 로컬에서 구현**
-  - 6-decimal demo ERC-20, 제한 Permit2 allowance, Base Sepolia bootstrap과 배포 주소 주입 방식을 구현한다.
+  - 6-decimal EIP-2612 demo ERC-20, buyer 무가스 Permit2 승인, 분리된 deployer wallet, Base Sepolia bootstrap과 배포 주소 주입 방식을 구현한다.
   - Commerce Gateway가 `purchaseId`로 고정 decision/quote를 다시 읽고 예산을 원자 예약한 뒤 `DecisionAuthorization`을 저장하게 한다.
   - seller의 HTTP 402 조건과 quote를 완전히 대조하고 같은 Permit2 nonce로 x402 재요청한다.
   - Coinbase Facilitator 응답과 별도로 RPC receipt/status/contract/`Transfer` sender-recipient-amount를 검증한다.
@@ -80,7 +80,7 @@ flowchart LR
   - fake domain도 같은 Commerce Gateway mock 결제 경로를 통과시켜 공통 결제 레일이 AI 추론 구현에 의존하지 않음을 증명한다.
   - **Done when:** 로컬 mock 체인 경로와 실제 Base Sepolia smoke path에서 하나의 purchase가 최대 한 번 settled되고 tx hash가 evidence에 연결된다. 동시 중복, nonce replay, quote/402 치환, 예산 초과, wrong recipient/token/amount, timeout/revert, self-feedback 거부 검사가 통과한다.
   - **External gate:** 실제 tx 검증 전 사용자가 전용 입력 스크립트로 wallet/API 설정을 완료해야 하며, 키는 채팅·로그·Git에 노출하지 않는다.
-  - **External smoke pending:** Base Sepolia deploy/allowance/CDP Facilitator tx hash는 실제 키와 test token이 입력된 뒤 수행한다. 이 외부 증거가 없다는 사실을 로컬 완료와 구분해 보고한다.
+  - **External smoke pending:** Base Sepolia deploy/EIP-2612 gas-sponsored approval/CDP Facilitator tx hash는 deployer gas가 준비된 뒤 수행한다. buyer wallet에 native ETH를 넣지 않으며, 이 외부 증거가 없다는 사실을 로컬 완료와 구분해 보고한다.
   - **Commit boundary:** 결제·체인·identity trust boundary 한 개의 보안 기능 커밋.
 
 ### Verification boundary 2

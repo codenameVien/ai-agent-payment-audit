@@ -9,6 +9,7 @@ This graduation PBL audits whether an AI buyer agent's model choice obeyed the u
 - The buyer must use objective benchmark evidence and live seller quotes before choosing.
 - One user request produces at most one successful payment.
 - Payments use the project-issued 6-decimal ERC-20 demo credit through x402 Permit2 on Base Sepolia.
+- The demo credit implements EIP-2612; x402 payment approval uses an exact-amount gas-sponsored permit, not buyer-funded manual allowance.
 - The Commerce Gateway is the only component allowed to sign or submit blockchain writes.
 - MongoDB stores an auditable evidence chain that connects request, candidates, quotes, decision, payment, delivery, and audit.
 - ERC-8004 provides agent identity and objective reputation evidence; semantic concerns stay off-chain.

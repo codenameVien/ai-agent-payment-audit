@@ -174,6 +174,9 @@ test("inference remains behind an x402 payment gate", async () => {
   assert.equal(required.accepts[0].network, "eip155:84532");
   assert.equal(required.accepts[0].amount, "100000");
   assert.equal(required.accepts[0].extra.assetTransferMethod, "permit2");
+  assert.equal(required.accepts[0].extra.name, "PBL Agent Credit");
+  assert.equal(required.accepts[0].extra.version, "1");
+  assert.equal(required.extensions.eip2612GasSponsoring.info.version, "1");
 });
 
 test("facilitator verifies before delivery, settles after it, and returns PAYMENT-RESPONSE", async () => {
@@ -195,7 +198,11 @@ test("facilitator verifies before delivery, settles after it, and returns PAYMEN
     asset: "0x0000000000000000000000000000000000000002",
     payTo: "0x0000000000000000000000000000000000000003",
     maxTimeoutSeconds: 30,
-    extra: { assetTransferMethod: "permit2" },
+    extra: {
+      assetTransferMethod: "permit2",
+      name: "PBL Agent Credit",
+      version: "1",
+    },
   };
   const paymentSignature = Buffer.from(JSON.stringify({
     x402Version: 2,

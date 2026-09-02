@@ -16,6 +16,7 @@ import type {
 } from "./contracts.js";
 import {
   BASE_SEPOLIA_NETWORK,
+  createEip2612GasSponsoringPayloadExtension,
   createPaymentPayload,
   createPermit2Authorization,
   decodePaymentRequired,
@@ -138,12 +139,18 @@ export class CommerceGateway {
       deadline,
     });
     const permitSignature = await this.#permit2Signer.sign(permit2Authorization);
+    const paymentExtensions = await createEip2612GasSponsoringPayloadExtension({
+      declaredExtensions: required.extensions,
+      requirement,
+      authorization: permit2Authorization,
+      signer: this.#permit2Signer,
+    });
     const payload = createPaymentPayload({
       resource: required.resource,
       requirement,
       authorization: permit2Authorization,
       signature: permitSignature,
-      extensions: required.extensions,
+      extensions: paymentExtensions,
     });
     const paid = await this.#seller.request({
       purchaseId,
