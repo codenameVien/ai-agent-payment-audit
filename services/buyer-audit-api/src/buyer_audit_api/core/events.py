@@ -19,6 +19,8 @@ def create_event(
     previous_event_hash: str | None,
     evidence_refs: tuple[str, ...],
 ) -> EvidenceEvent:
+    # BSON datetimes preserve milliseconds, so hash the exact timestamp that MongoDB stores.
+    occurred_at = occurred_at.replace(microsecond=(occurred_at.microsecond // 1000) * 1000)
     payload_hash = sha256_json(payload)
     event_hash = build_event_hash(
         purchase_id=purchase_id,

@@ -38,7 +38,7 @@
   - [x] 환경 주입형 ERC-8004 identity/reputation adapter·self-feedback 방지
   - [x] fake-domain 구매도 같은 공통 payment claim 경계를 통과
   - [x] 제출 tx hash 결속·확정 revert만 실패 처리·hash 없는 모호 상태에서 결제 재생성 금지와 seller durable journal 복구
-  - [ ] 실제 Base Sepolia Permit2·x402 Facilitator 결제 smoke (계약 배포 완료, 결제 외부 게이트)
+  - [x] buyer ETH 0 상태의 실제 Base Sepolia Permit2·x402 Facilitator 결제와 정확한 PBLC Transfer 영수증
 
 - [x] **Verification boundary 2/3 독립 재리뷰** — `Approve local completion`, P0–P3 없음
   - 최종 리뷰 계약: `docs/reviews/verification-boundary-3.md`
@@ -52,19 +52,23 @@
   - [x] MongoDB/API/dashboard/Gemini Seller/Nemotron Seller/Gateway Compose와 비용 차단 Terraform handoff
   - [x] 모든 5개 애플리케이션 Docker 이미지 build
   - [x] authenticated `/run`, durable seller/payment/provider-attempt recovery, 전달-선택 무결성 감사
-  - [x] broad suite: Python 68, Seller 29, Gateway 32, Solidity 6, native Mongo 1
-  - [ ] 실제 provider/Base Sepolia/ERC-8004/AWS 증거와 화면 캡처 (외부 게이트)
+  - [x] broad suite: Python 71/1 skipped, Seller 29, Gateway 33, Solidity 6, native Mongo 1
+  - [x] Base Sepolia 결제·ERC-8004 feedback·EvidenceAnchor 실거래 증거
+  - [ ] 실제 provider/AWS 증거와 대시보드 화면 캡처 (외부 게이트)
 
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결
 - [x] MVP 결제·감사 검증은 `PROVIDER_MODE=mock`으로 확정; 실제 provider/API key 입력은 최종 provider smoke까지 연기
-- [ ] Base Sepolia wallet·token·facilitator 실거래
+- [x] Base Sepolia wallet·token·facilitator 실거래
   - [x] 전용 deployer/buyer/seller 지갑 생성, 공개 RPC 연결, x402.org v2 exact·EIP-2612 gas sponsorship 지원 확인
   - [x] PBLC EIP-2612 permit과 exact-amount gas-sponsored payment payload 로컬 검증
   - [x] deployer 지갑에 1회 계약 배포용 Base Sepolia ETH 준비
   - [x] DemoToken·EvidenceAnchor 배포, buyer에 1,000,000 PBLC 직접 mint, buyer writer 등록
   - [x] Gemini/Nemotron 판매 에이전트 ERC-8004 identity 등록과 seller wallet 결속
-  - [ ] buyer ETH 없이 실제 x402 결제 및 Transfer receipt 증거 확보
-- AWS 리소스 생성·비용 발생 승인
-- 공개 배포 전 민감 원문 보존/삭제 정책 재승인
+  - [x] buyer ETH 없이 실제 x402 결제 및 Transfer receipt 증거 확보
+  - [x] 정상 감사 뒤 ERC-8004 `NewFeedback(9154, 100, ...)` 실거래
+  - [x] MongoDB 11-event head를 EvidenceAnchor에 기록하고 12번째 evidence로 tx 결속
+- [ ] 실제 Gemini/Nemotron provider API 응답 smoke
+- [ ] AWS 리소스 생성·비용 발생 승인
+- [ ] 공개 배포 전 민감 원문 보존/삭제 정책 재승인

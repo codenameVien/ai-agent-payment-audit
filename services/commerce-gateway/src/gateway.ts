@@ -14,6 +14,7 @@ import type {
   SellerClient,
   StagedDelivery,
 } from "./contracts.js";
+import { digestToBytes32 } from "./digest.js";
 import {
   BASE_SEPOLIA_NETWORK,
   createEip2612GasSponsoringPayloadExtension,
@@ -30,6 +31,14 @@ export class CommerceGatewayError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "CommerceGatewayError";
+  }
+}
+
+function evidenceHashToBytes32(value: string): Hex {
+  try {
+    return digestToBytes32(value);
+  } catch {
+    throw new CommerceGatewayError("decision evidence hash is not a bytes32 SHA-256 digest");
   }
 }
 
@@ -108,7 +117,7 @@ export class CommerceGateway {
 
     const decision: DecisionAuthorization = {
       purchaseId,
-      decisionEventHash: intent.decision_event_hash,
+      decisionEventHash: evidenceHashToBytes32(intent.decision_event_hash),
       quoteId: intent.quote_id,
       amount: BigInt(intent.amount_units),
       token: intent.token,
@@ -379,7 +388,7 @@ export class CommerceGateway {
   #assertViewIntent(
     view: {
       purchase_id: string;
-      decision_event_hash: Hex;
+      decision_event_hash: PaymentIntent["decision_event_hash"];
       buyer_wallet_address: Address;
       quote: { quote_id: string; amount_units: number; token: Address; pay_to: Address };
     },

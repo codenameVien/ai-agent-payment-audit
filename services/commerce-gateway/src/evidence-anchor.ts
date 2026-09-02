@@ -1,9 +1,12 @@
 import { keccak256, stringToHex, type Address, type Hex } from "viem";
 
+import type { EvidenceHash } from "./contracts.js";
+import { digestToBytes32 } from "./digest.js";
+
 export interface EvidenceHeadCheckpoint {
   purchaseId: string;
   eventCount: number;
-  headEventHash: Hex;
+  headEventHash: EvidenceHash;
 }
 
 export interface EvidenceAnchorApi {
@@ -52,15 +55,16 @@ export class EvidenceAnchorService {
   async anchor(purchaseId: string): Promise<Hex> {
     const checkpoint = await this.#api.head(purchaseId);
     const purchaseIdHash = keccak256(stringToHex(purchaseId));
+    const headHash = digestToBytes32(checkpoint.headEventHash);
     const previous = await this.#contract.latest(purchaseIdHash);
     if (
       BigInt(checkpoint.eventCount) === previous.eventCount &&
-      checkpoint.headEventHash.toLowerCase() === previous.headHash.toLowerCase()
+      headHash.toLowerCase() === previous.headHash.toLowerCase()
     ) {
       const transactionHash = await this.#contract.findConfirmed({
         purchaseIdHash,
         eventCount: BigInt(checkpoint.eventCount),
-        headHash: checkpoint.headEventHash,
+        headHash,
       });
       if (transactionHash === null) {
         throw new Error("matching on-chain anchor transaction was not found");
@@ -80,7 +84,7 @@ export class EvidenceAnchorService {
       purchaseIdHash,
       eventCount: BigInt(checkpoint.eventCount),
       previousHeadHash: previous.headHash,
-      headHash: checkpoint.headEventHash,
+      headHash,
     });
     if (!result.confirmed) {
       throw new Error("evidence anchor transaction was not confirmed exactly on-chain");

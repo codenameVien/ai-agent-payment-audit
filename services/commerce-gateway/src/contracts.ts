@@ -1,5 +1,7 @@
 import type { Address, Hex } from "viem";
 
+export type EvidenceHash = Hex | `sha256:${string}`;
+
 export interface PaymentQuoteView {
     quote_id: string;
     seller_agent_id: string;
@@ -22,10 +24,10 @@ export interface PaymentView {
   buyer_wallet_address: Address;
   budget_units: number;
   request_policy: Record<string, unknown>;
-  decision_event_hash: Hex;
+  decision_event_hash: EvidenceHash;
   quote: PaymentQuoteView;
   event_count: number;
-  head_event_hash: Hex;
+  head_event_hash: EvidenceHash;
 }
 
 export type PaymentIntentState =
@@ -40,7 +42,7 @@ export interface PaymentIntent {
   buyer_wallet_address: Address;
   policy_date: string;
   quote_id: string;
-  decision_event_hash: Hex;
+  decision_event_hash: EvidenceHash;
   amount_units: number;
   token: Address;
   pay_to: Address;

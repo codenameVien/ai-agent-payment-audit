@@ -29,6 +29,7 @@ const SELLER = "0x0000000000000000000000000000000000000004" as Address;
 const CONTRACT = "0x0000000000000000000000000000000000000005" as Address;
 const TX = `0x${"ab".repeat(32)}` as Hex;
 const DECISION_HASH = `0x${"11".repeat(32)}` as Hex;
+const STORED_DECISION_HASH = `sha256:${"11".repeat(32)}` as const;
 
 function fixtures() {
   const view: PaymentView = {
@@ -37,7 +38,7 @@ function fixtures() {
     buyer_wallet_address: BUYER,
     budget_units: 250_000,
     request_policy: {},
-    decision_event_hash: DECISION_HASH,
+    decision_event_hash: STORED_DECISION_HASH,
     quote: {
       quote_id: "quote-1",
       seller_agent_id: "seller-agent-1",
@@ -54,14 +55,14 @@ function fixtures() {
       verifying_contract: CONTRACT,
     },
     event_count: 3,
-    head_event_hash: DECISION_HASH,
+    head_event_hash: STORED_DECISION_HASH,
   };
   const intent: PaymentIntent = {
     purchase_id: view.purchase_id,
     buyer_wallet_address: BUYER,
     policy_date: "2026-09-02",
     quote_id: view.quote.quote_id,
-    decision_event_hash: DECISION_HASH,
+    decision_event_hash: STORED_DECISION_HASH,
     amount_units: view.quote.amount_units,
     token: TOKEN,
     pay_to: SELLER,

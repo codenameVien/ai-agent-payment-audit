@@ -13,10 +13,11 @@ const CONTRACT = "0x0000000000000000000000000000000000000005" as Address;
 test("external anchor writes the verified head then records the exact transaction", async () => {
   const recorded: unknown[] = [];
   let anchored: unknown;
+  const apiHead = `sha256:${"11".repeat(32)}` as const;
   const service = new EvidenceAnchorService({
     api: {
       async head(purchaseId) {
-        return { purchaseId, eventCount: 7, headEventHash: HEAD };
+        return { purchaseId, eventCount: 7, headEventHash: apiHead };
       },
       async record(args) { recorded.push(args); },
     },
@@ -31,8 +32,13 @@ test("external anchor writes the verified head then records the exact transactio
   assert.equal(await service.anchor("purchase-1"), TX);
   assert.deepEqual((anchored as { eventCount: bigint }).eventCount, 7n);
   assert.deepEqual((anchored as { previousHeadHash: Hex }).previousHeadHash, ZERO);
+  assert.deepEqual((anchored as { headHash: Hex }).headHash, HEAD);
   assert.equal(recorded.length, 1);
   assert.deepEqual((recorded[0] as { transactionHash: Hex }).transactionHash, TX);
+  assert.deepEqual(
+    (recorded[0] as { checkpoint: { headEventHash: string } }).checkpoint.headEventHash,
+    apiHead,
+  );
 });
 
 test("stale evidence head cannot overwrite a newer on-chain checkpoint", async () => {

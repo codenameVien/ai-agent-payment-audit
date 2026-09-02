@@ -11,6 +11,7 @@ import {
   getAddress,
   http,
   parseAbi,
+  parseEther,
 } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 import { baseSepolia } from "viem/chains";
@@ -22,6 +23,7 @@ const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const CANONICAL_PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001";
 const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
+const BUYER_POST_PAYMENT_GAS_WEI = parseEther("0.0001");
 
 const erc20Abi = parseAbi([
   "function name() view returns (string)",
@@ -171,6 +173,43 @@ async function requireSuccessfulReceipt(publicClient, hash, label) {
   const receipt = await publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success") throw new Error(`${label} transaction reverted: ${hash}`);
   return receipt;
+}
+
+async function fundBuyerGas() {
+  const context = await runtime();
+  const buyerBalance = await context.publicClient.getBalance({ address: context.buyer.address });
+  if (buyerBalance >= BUYER_POST_PAYMENT_GAS_WEI) {
+    process.stdout.write(`${JSON.stringify({
+      funded: false,
+      reason: "buyer already has post-payment gas",
+      buyerAddress: context.buyer.address,
+      buyerEth: formatEther(buyerBalance),
+    }, null, 2)}\n`);
+    return;
+  }
+  const amount = BUYER_POST_PAYMENT_GAS_WEI - buyerBalance;
+  const deployerBalance = await context.publicClient.getBalance({
+    address: context.deployer.address,
+  });
+  if (deployerBalance <= amount) throw new Error("deployer lacks buyer post-payment gas");
+  const transactionHash = await context.walletClient.sendTransaction({
+    account: context.deployer,
+    to: context.buyer.address,
+    value: amount,
+  });
+  const receipt = await requireSuccessfulReceipt(
+    context.publicClient,
+    transactionHash,
+    "buyer post-payment gas funding",
+  );
+  process.stdout.write(`${JSON.stringify({
+    funded: true,
+    buyerAddress: context.buyer.address,
+    amountEth: formatEther(amount),
+    transactionHash,
+    blockNumber: Number(receipt.blockNumber),
+    purpose: "post-payment ERC-8004 feedback and EvidenceAnchor writes",
+  }, null, 2)}\n`);
 }
 
 async function registerBuyerWriter(context, anchorAddress, anchorAbi) {
@@ -381,4 +420,7 @@ const command = process.argv[2] ?? "status";
 if (command === "status") await status();
 else if (command === "deploy") await deploy();
 else if (command === "recover") await recover(process.argv[3], process.argv[4]);
-else throw new Error("usage: node scripts/base_sepolia_setup.mjs [status|deploy|recover]");
+else if (command === "fund-buyer-gas") await fundBuyerGas();
+else throw new Error(
+  "usage: node scripts/base_sepolia_setup.mjs [status|deploy|recover|fund-buyer-gas]",
+);

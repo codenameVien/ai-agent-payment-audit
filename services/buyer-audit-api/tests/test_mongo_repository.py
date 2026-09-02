@@ -4,6 +4,7 @@ import asyncio
 import os
 import uuid
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 from pymongo import AsyncMongoClient
@@ -73,6 +74,17 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
         assert recovered_head is not None
         assert recovered_head.event_count == 1
         assert recovered_head.head_event_hash == recovered.event_hash
+
+        await repository.append_event(
+            purchase_id="purchase-millisecond-round-trip",
+            event_type=EventType.REQUESTED,
+            occurred_at=datetime(2026, 9, 2, 12, 40, 21, 123456, tzinfo=UTC),
+            actor={"id": "test", "type": "test"},
+            payload={"value": "round-trip"},
+        )
+        round_trip_events = await repository.list_events("purchase-millisecond-round-trip")
+        assert round_trip_events[0].occurred_at.microsecond == 123000
+        verify_event_chain(round_trip_events)
 
         await repository.issue_siwe_nonce(
             owner_address="0xabc",

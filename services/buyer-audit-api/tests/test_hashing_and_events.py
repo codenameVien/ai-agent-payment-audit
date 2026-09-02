@@ -2,18 +2,35 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
+from datetime import UTC, datetime
 
 import pytest
 
 from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.errors import EvidenceIntegrityError, EvidenceTransitionError
-from buyer_audit_api.core.events import verify_event_chain
+from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.hashing import build_event_hash, sha256_json
 from buyer_audit_api.core.models import EventType
 
 
 def test_canonical_hash_ignores_object_key_order() -> None:
     assert sha256_json({"a": 1, "b": 2}) == sha256_json({"b": 2, "a": 1})
+
+
+def test_event_hash_uses_bson_millisecond_timestamp() -> None:
+    event = create_event(
+        purchase_id="purchase-bson-time",
+        sequence=1,
+        event_type=EventType.REQUESTED,
+        occurred_at=datetime(2026, 9, 2, 12, 40, 21, 123456, tzinfo=UTC),
+        actor={"id": "tester", "type": "test"},
+        payload={"value": "round-trip"},
+        previous_event_hash=None,
+        evidence_refs=(),
+    )
+
+    assert event.occurred_at.microsecond == 123000
+    verify_event_chain([event])
 
 
 @pytest.mark.asyncio

@@ -250,3 +250,15 @@
 - deployer가 두 identity NFT owner와 온체인 가스를 맡고, seller private key는 EIP-712 `AgentWalletSet`에만 서명한다. 두 seller 지갑에는 native ETH가 필요 없다.
 - 공개 RPC가 성공 receipt 직후 같은 block을 일시적으로 찾지 못한 사례가 있어, 등록 자동화는 receipt block을 최대 20초 재조회한다. agent ID는 등록 직후 `.env.local`에 먼저 보존하며 재실행 시 이미 완료된 등록과 지갑 결속을 온체인 상태로 건너뛴다.
 - `npm run erc8004:status`에서 두 ID의 owner와 `getAgentWallet` 일치가 모두 `true`임을 확인했다. 실제 ERC-8004 feedback은 성공한 구매·감사 뒤에만 제출하므로 아직 남은 외부 게이트다.
+
+## 2026-09-02 — Base Sepolia x402·ERC-8004·EvidenceAnchor 실거래 완료
+
+- 구매자 `0xa45Cd1a41E1e548e2daB0123E7Cb4E3dB964cdaB`의 native ETH가 0인 상태에서 자체 EIP-2612 토큰 PBLC를 x402.org Facilitator로 두 번 정산했다. 각 결제는 `100000` raw units, 즉 `0.1 PBLC`였고 buyer의 수동 Permit2 allowance 거래는 없었다.
+- 첫 결제 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`는 온체인 정산은 성공했지만 mock adapter가 서명된 `gemini-2.5-flash` 대신 `mock-v1`을 반환했다. 시스템은 전달-선택 불일치를 허용하지 않고 `RISK`/`AUD-DELIVERY-MISSING`으로 기록했다. 이 실패는 실제 감사 탐지 증거로 보존한다.
+- 두 번째 구매 `14f37c54-e26c-4ab4-83e6-cbc7c2a7c473`의 결제 `0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680`는 block `46292655`, Transfer log index `23`에서 buyer → Gemini seller의 정확한 `0.1 PBLC`를 독립 검증했다. 전달은 선택된 provider/model/version과 일치했고 감사 결과는 `NORMAL`, findings 없음이었다.
+- 정상 감사 bundle `sha256:436eceace08c3f38d1615bc8cc9105993a558cbd342320d7f19589576c55af38`을 Gemini ERC-8004 agent ID `9154`의 value `100` feedback에 결속했다. tx `0x5702e3ca225e3d0089a14bbc0e7aad851cebe2f6aebc4d230f1dad83d717f491`의 `NewFeedback` event에서 agent ID, buyer client address, value, tags, feedback hash를 Blockscout API로 재확인했다.
+- 평판과 EvidenceAnchor 쓰기는 구매자의 x402 무가스 결제 증거를 보존한 뒤 별도로 공급한 `0.0001 ETH`만 사용했다. funding tx는 `0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336`이다.
+- EvidenceAnchor tx `0xe2a5991639316b16dd30385551d8de02b2838618b1fd88e1a4fc8f455ec21bb0`는 purchase ID hash에 event count `11`, head `0xff6b2dda9c88830b5c3d1b4e2b30ce77d6008625a421032377ca4686e4cbb6a2`를 기록했다. MongoDB는 이를 12번째 `EVIDENCE_ANCHORED` event로 이어서 저장했고 전체 hash chain을 재검증했다.
+- 실환경 smoke에서 네 가지 경계 오류를 발견하고 회귀 테스트를 추가했다: BSON millisecond timestamp hash 정규화, nullable latency 필드 생략, `sha256:` → bytes32 변환, 공개 RPC의 10,000-block log 조회 제한. mock adapter도 설정된 model version을 반환하도록 수정했다.
+- 최종 검증: Ruff/mypy/TypeScript lint 통과; Python `71 passed, 1 skipped`; Seller `29 passed`; Gateway `33 passed`; Solidity `6 passed`; native replica-set Mongo `1 passed`; dashboard production build 통과; production dependency audit `0 vulnerabilities`; `git diff --check` 통과.
+- 아직 외부 게이트인 항목은 실제 Gemini/Nemotron API 응답, AWS 비용 발생 배포, 공개 배포 전 민감 원문 보존/삭제 정책 재승인, 인증된 대시보드 거래 상세 화면 캡처다.
