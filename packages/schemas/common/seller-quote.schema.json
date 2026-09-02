@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pbl.local/schemas/common/seller-quote.schema.json",
+  "title": "Protocol-neutral seller payment quote",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "quoteId", "purchaseId", "sellerAgentId", "erc8004AgentId", "amount", "token", "payTo",
+    "expiresAt", "quoteNonce", "counterofferOf"
+  ],
+  "properties": {
+    "quoteId": { "type": "string", "minLength": 1 },
+    "purchaseId": { "type": "string", "minLength": 1 },
+    "sellerAgentId": { "type": "string", "minLength": 1 },
+    "erc8004AgentId": { "type": "string", "pattern": "^[0-9]+$" },
+    "amount": { "type": "string", "pattern": "^[0-9]+$" },
+    "token": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "payTo": { "type": "string", "pattern": "^0x[0-9a-fA-F]{40}$" },
+    "expiresAt": { "type": "string", "pattern": "^[0-9]+$" },
+    "quoteNonce": { "type": "string", "pattern": "^[0-9]+$" },
+    "counterofferOf": { "type": "string" }
+  }
+}

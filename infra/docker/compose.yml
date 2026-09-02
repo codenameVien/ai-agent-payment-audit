@@ -1,0 +1,146 @@
+services:
+  mongo:
+    image: mongo:8.0
+    command: ["mongod", "--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - pbl-mongo-data:/data/db
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "mongosh --quiet --eval \"try { rs.status().ok } catch (e) { rs.initiate({_id:'rs0',members:[{_id:0,host:'localhost:27017'}]}).ok }\" | grep 1"
+        ]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+  api:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: services/buyer-audit-api/Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      MONGODB_URI: mongodb://mongo:27017/?replicaSet=rs0
+      MONGODB_DATABASE: pbl_audit
+      SIWE_DOMAIN: localhost
+      SIWE_URI: http://localhost:3000
+      SIWE_CHAIN_ID: "84532"
+      COOKIE_SECURE: "false"
+      SESSION_SECRET_BASE64: ${SESSION_SECRET_BASE64:?run scripts/setup_keys.py first}
+      PAYLOAD_MASTER_KEY_BASE64: ${PAYLOAD_MASTER_KEY_BASE64:?run scripts/setup_keys.py first}
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?run scripts/setup_keys.py first}
+      GATEWAY_SERVICE_TOKEN: ${GATEWAY_SERVICE_TOKEN:?run scripts/setup_keys.py first}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      COMMERCE_GATEWAY_URL: http://commerce-gateway:8081
+      SELLER_ROUTES_JSON: '{"gemini":"http://seller-gemini:8080","nemotron":"http://seller-nemotron:8080"}'
+      QUOTE_VERIFYING_CONTRACT: ${QUOTE_VERIFYING_CONTRACT:-}
+      ERC8004_IDENTITY_REGISTRY: ${ERC8004_IDENTITY_REGISTRY:-}
+      GEMINI_MODEL_ID: ${GEMINI_MODEL_ID:-gemini-2.5-flash}
+      GEMINI_MODEL_VERSION: ${GEMINI_MODEL_VERSION:-gemini-2.5-flash}
+      NEMOTRON_MODEL_ID: ${NEMOTRON_MODEL_ID:-nvidia/llama-3.3-nemotron-super-49b-v1.5}
+      NEMOTRON_MODEL_VERSION: ${NEMOTRON_MODEL_VERSION:-nvidia/llama-3.3-nemotron-super-49b-v1.5}
+    depends_on:
+      mongo:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  dashboard:
+    profiles: ["app"]
+    build:
+      context: ../..
+      dockerfile: apps/dashboard/Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      API_ORIGIN: http://api:8000
+    depends_on:
+      api:
+        condition: service_healthy
+
+  seller-gemini:
+    profiles: ["agents"]
+    build:
+      context: ../..
+      dockerfile: services/seller-service/Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      PORT: "8080"
+      PROVIDER_ID: gemini
+      PROVIDER_API_KEY: ${GEMINI_API_KEY:-}
+      SELLER_PRIVATE_KEY: ${GEMINI_SELLER_PRIVATE_KEY:-}
+      SELLER_AGENT_ID: seller-gemini
+      ERC8004_AGENT_ID: ${GEMINI_ERC8004_AGENT_ID:-}
+      MODEL_ID: ${GEMINI_MODEL_ID:-gemini-2.5-flash}
+      MODEL_VERSION: ${GEMINI_MODEL_VERSION:-gemini-2.5-flash}
+      MODEL_PRICE_UNITS: ${GEMINI_MODEL_PRICE_UNITS:-100000}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:-}
+      PAY_TO_ADDRESS: ${GEMINI_PAY_TO_ADDRESS:-}
+      QUOTE_VERIFYING_CONTRACT: ${QUOTE_VERIFYING_CONTRACT:-}
+      FACILITATOR_URL: ${FACILITATOR_URL:-https://x402.org/facilitator}
+      FACILITATOR_AUTHORIZATION: ${FACILITATOR_AUTHORIZATION:-}
+      EVIDENCE_API_URL: http://api:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?run scripts/setup_keys.py first}
+
+  seller-nemotron:
+    profiles: ["agents"]
+    build:
+      context: ../..
+      dockerfile: services/seller-service/Dockerfile
+    ports:
+      - "8082:8080"
+    environment:
+      PORT: "8080"
+      PROVIDER_ID: nemotron
+      PROVIDER_API_KEY: ${NVIDIA_API_KEY:-}
+      SELLER_PRIVATE_KEY: ${NEMOTRON_SELLER_PRIVATE_KEY:-}
+      SELLER_AGENT_ID: seller-nemotron
+      ERC8004_AGENT_ID: ${NEMOTRON_ERC8004_AGENT_ID:-}
+      MODEL_ID: ${NEMOTRON_MODEL_ID:-nvidia/llama-3.3-nemotron-super-49b-v1.5}
+      MODEL_VERSION: ${NEMOTRON_MODEL_VERSION:-nvidia/llama-3.3-nemotron-super-49b-v1.5}
+      MODEL_PRICE_UNITS: ${NEMOTRON_MODEL_PRICE_UNITS:-100000}
+      TOKEN_ADDRESS: ${TOKEN_ADDRESS:-}
+      PAY_TO_ADDRESS: ${NEMOTRON_PAY_TO_ADDRESS:-}
+      QUOTE_VERIFYING_CONTRACT: ${QUOTE_VERIFYING_CONTRACT:-}
+      FACILITATOR_URL: ${FACILITATOR_URL:-https://x402.org/facilitator}
+      FACILITATOR_AUTHORIZATION: ${FACILITATOR_AUTHORIZATION:-}
+      EVIDENCE_API_URL: http://api:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?run scripts/setup_keys.py first}
+
+  commerce-gateway:
+    profiles: ["agents"]
+    build:
+      context: ../..
+      dockerfile: services/commerce-gateway/Dockerfile
+    ports:
+      - "8081:8081"
+    environment:
+      PORT: "8081"
+      EVIDENCE_API_URL: http://api:8000
+      INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:-}
+      GATEWAY_SERVICE_TOKEN: ${GATEWAY_SERVICE_TOKEN:-}
+      BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
+      BUYER_PRIVATE_KEY: ${BUYER_AGENT_PRIVATE_KEY:-}
+      DECISION_VERIFYING_CONTRACT: ${DECISION_VERIFYING_CONTRACT:-}
+      ERC8004_IDENTITY_REGISTRY: ${ERC8004_IDENTITY_REGISTRY:-}
+      ERC8004_REPUTATION_REGISTRY: ${ERC8004_REPUTATION_REGISTRY:-}
+      EVIDENCE_ANCHOR_ADDRESS: ${EVIDENCE_ANCHOR_ADDRESS:-}
+      SELLER_ROUTES_JSON: '{"seller-gemini":"http://seller-gemini:8080/v1/inference","seller-nemotron":"http://seller-nemotron:8080/v1/inference"}'
+    depends_on:
+      api:
+        condition: service_healthy
+      seller-gemini:
+        condition: service_started
+      seller-nemotron:
+        condition: service_started
+
+volumes:
+  pbl-mongo-data:
