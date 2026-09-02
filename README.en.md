@@ -35,7 +35,7 @@ Implemented locally:
 - MongoDB/API/dashboard/two sellers/Gateway Compose plus a cost-disabled AWS Terraform handoff
 - Hidden local handoff scripts for seller-wallet and external provider keys
 
-Real provider, Base Sepolia, ERC-8004, and AWS evidence remains an explicit external gate in the [handoff](docs/HANDOFF.md).
+Live Base Sepolia x402 payment, ERC-8004 feedback, and EvidenceAnchor evidence is complete. Remaining real-provider, AWS, and dashboard-capture gates plus transaction links are tracked in the [handoff](docs/HANDOFF.md).
 
 ## Architecture
 

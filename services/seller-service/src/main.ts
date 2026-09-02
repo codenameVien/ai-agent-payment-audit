@@ -36,7 +36,11 @@ function provider(env: NodeJS.ProcessEnv): ProviderAdapter {
   }
   const providerMode = (env.PROVIDER_MODE ?? "real").trim().toLowerCase();
   if (providerMode === "mock") {
-    return new MockProviderAdapter(providerId, env.MOCK_PROVIDER_PREFIX ?? "mock");
+    return new MockProviderAdapter(
+      providerId,
+      env.MOCK_PROVIDER_PREFIX ?? "mock",
+      env.MODEL_VERSION ?? required(env, "MODEL_ID"),
+    );
   }
   if (providerMode !== "real") {
     throw new Error("PROVIDER_MODE must be real or mock");

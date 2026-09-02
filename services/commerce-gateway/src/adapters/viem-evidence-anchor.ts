@@ -8,6 +8,7 @@ import {
 } from "viem";
 
 import type { EvidenceAnchorContract } from "../evidence-anchor.js";
+import { recentRpcLogFromBlock } from "./rpc-log-range.js";
 
 export const EVIDENCE_ANCHOR_ABI = parseAbi([
   "function latest(bytes32 purchaseIdHash) view returns (uint64 eventCount, bytes32 headHash, uint64 anchoredAt)",
@@ -59,6 +60,7 @@ export class ViemEvidenceAnchorContract implements EvidenceAnchorContract {
         args.previousHeadHash,
         args.headHash,
       ],
+      gas: 200_000n,
     });
     const receipt = await this.#publicClient.waitForTransactionReceipt({
       hash: transactionHash,
@@ -91,12 +93,13 @@ export class ViemEvidenceAnchorContract implements EvidenceAnchorContract {
       (item) => item.type === "event" && item.name === "EvidenceAnchored",
     );
     if (event === undefined) throw new Error("EvidenceAnchored ABI is missing");
+    const latestBlock = await this.#publicClient.getBlockNumber();
     const logs = await this.#publicClient.getLogs({
       address: this.#address,
       event,
       args: { purchaseIdHash: args.purchaseIdHash },
-      fromBlock: 0n,
-      toBlock: "latest",
+      fromBlock: recentRpcLogFromBlock(latestBlock),
+      toBlock: latestBlock,
     });
     const match = logs.find((log) =>
       log.args.eventCount === args.eventCount &&

@@ -8,6 +8,7 @@ import {
   type ReputationSummary,
   type ReputationReceiptConfirmer,
 } from "../erc8004.js";
+import { recentRpcLogFromBlock } from "./rpc-log-range.js";
 
 export class ViemErc8004Contracts implements Erc8004Contracts {
   readonly #publicClient: PublicClient;
@@ -87,6 +88,7 @@ export class ViemErc8004Contracts implements Erc8004Contracts {
         args.feedbackUri,
         args.feedbackHash,
       ],
+      gas: 300_000n,
     });
   }
 
@@ -103,12 +105,13 @@ export class ViemErc8004Contracts implements Erc8004Contracts {
       (item) => item.type === "event" && item.name === "NewFeedback",
     );
     if (event === undefined) throw new Error("NewFeedback ABI is missing");
+    const latestBlock = await this.#publicClient.getBlockNumber();
     const logs = await this.#publicClient.getLogs({
       address: this.#reputationRegistry,
       event,
       args: { agentId: args.agentId, clientAddress: args.clientAddress },
-      fromBlock: 0n,
-      toBlock: "latest",
+      fromBlock: recentRpcLogFromBlock(latestBlock),
+      toBlock: latestBlock,
     });
     const match = logs.find((log) =>
       log.args.value === args.value &&

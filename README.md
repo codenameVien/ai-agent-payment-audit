@@ -37,7 +37,7 @@
 - 지갑·거래·선택 이유·평판·감사 경고를 보여주는 Next.js 대시보드와 SSE
 - MongoDB·API·대시보드·두 Seller·Gateway Compose와 비용 기본 차단 AWS Terraform handoff
 
-실제 provider·Base Sepolia·AWS 증거가 필요한 단계는 [인계 문서](docs/HANDOFF.md)에 분리했다.
+Base Sepolia x402 결제·ERC-8004 평판·EvidenceAnchor 실거래는 완료했다. 실제 provider API·AWS·대시보드 캡처 등 남은 외부 게이트와 거래 링크는 [인계 문서](docs/HANDOFF.md)에 정리했다.
 
 ## 구조
 

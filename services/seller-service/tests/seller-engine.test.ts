@@ -124,8 +124,12 @@ test("seller rejects instead of chaining a second counteroffer", async () => {
 
 test("Gemini and Nemotron mocks follow the same provider contract", async () => {
   for (const providerId of ["gemini", "nemotron"]) {
-    const result = await new MockProviderAdapter(providerId).generate(`${providerId}-model`, "hello");
+    const result = await new MockProviderAdapter(providerId, "mock", "configured-v1").generate(
+      `${providerId}-model`,
+      "hello",
+    );
     assert.equal(result.providerId, providerId);
+    assert.equal(result.modelVersion, "configured-v1");
     assert.equal(result.text, "mock:hello");
   }
 });

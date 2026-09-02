@@ -81,6 +81,7 @@ npm run chain:status
 npm run chain:deploy
 npm run erc8004:status
 npm run erc8004:register
+npm run smoke:x402
 ```
 
 배포 거래는 성공했지만 후속 writer 등록 또는 로컬 주소 저장 전에 중단됐다면 새 계약을 중복 배포하지 않는다. 온체인 주소와 owner·초기 buyer 잔액을 검증한 뒤 다음 복구 명령을 사용한다.
@@ -114,6 +115,23 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 10. 평판 tx의 정확한 `NewFeedback(agentId,value,tags,feedbackHash)`와 EvidenceAnchor event를 receipt에서 확인한 뒤 MongoDB evidence에 기록한다.
 11. 대시보드 거래 상세에서 request→decision→tx→delivery hash→audit→reputation/anchor 링크를 캡처한다.
 
+### 2026-09-02 실거래 결과
+
+- 성공 구매 ID: `14f37c54-e26c-4ab4-83e6-cbc7c2a7c473`
+- buyer ETH 0 상태의 x402 결제: [`0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680`](https://base-sepolia.blockscout.com/tx/0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680)
+  - buyer → Gemini seller, `100000` raw units = `0.1 PBLC`
+  - buyer가 서명한 EIP-2612 permit을 x402.org Facilitator가 제출해 결제 가스를 부담했다.
+  - 독립 RPC 영수증 검증 결과 block `46292655`, Transfer log index `23`, receipt status `1`이다.
+- 감사 결과: `NORMAL`, findings `[]`, audit bundle `sha256:436eceace08c3f38d1615bc8cc9105993a558cbd342320d7f19589576c55af38`
+- ERC-8004 feedback: [`0x5702e3ca225e3d0089a14bbc0e7aad851cebe2f6aebc4d230f1dad83d717f491`](https://base-sepolia.blockscout.com/tx/0x5702e3ca225e3d0089a14bbc0e7aad851cebe2f6aebc4d230f1dad83d717f491)
+  - Gemini agent ID `9154`, value `100`, tags `pbl-audit`/`payment-outcome`, feedback hash가 위 audit bundle과 일치한다.
+- EvidenceAnchor: [`0xe2a5991639316b16dd30385551d8de02b2838618b1fd88e1a4fc8f455ec21bb0`](https://base-sepolia.blockscout.com/tx/0xe2a5991639316b16dd30385551d8de02b2838618b1fd88e1a4fc8f455ec21bb0)
+  - 온체인 checkpoint는 event count `11`, head `0xff6b...bb6a2`다.
+  - MongoDB의 12번째 `EVIDENCE_ANCHORED` 이벤트가 해당 tx를 결속하므로 앵커 자신을 앵커링하는 순환 참조가 없다.
+- 첫 실거래 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`도 실제 `0.1 PBLC`를 정산했지만 mock model version 불일치를 감지해 `AUD-DELIVERY-MISSING` 위험으로 종결됐다. 이 실패 증거는 삭제하지 않는다.
+- x402 결제 두 건 뒤 buyer 잔액은 `999,999.8 PBLC`, permit nonce는 `2`, Permit2 allowance는 `0`이었다. 그 뒤 평판·앵커 쓰기 전용으로 `0.0001 ETH`를 별도 공급했다([funding tx](https://base-sepolia.blockscout.com/tx/0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336)).
+- 재현 스크립트 `npm run smoke:x402`는 시크릿·원문 prompt·서명·provider 응답 본문을 출력하지 않는다.
+
 ## AWS 인계
 
 `infra/aws/terraform/`은 ECS Fargate task, CloudWatch, 명시적 Secrets Manager ARN 계약을 정의한다. 기본 `enable_services=false`이므로 실제 서비스와 비용은 생성하지 않는다. ALB/HTTPS/WAF, VPC ingress, ECR 이미지, MongoDB Atlas 네트워크, CloudWatch alarm은 실제 배포 계정 정보가 정해진 뒤 추가한다.
@@ -121,7 +139,8 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 ## 공개 배포 전 차단 게이트
 
 - 민감 prompt/response는 현재 MVP 정책 B에 따라 자동 삭제하지 않는다. **공개 AWS 배포 전에 TTL 또는 수동 삭제 정책과 시연 증거 보존 범위를 다시 결정해야 한다.**
-- 실제 provider response ID, Base Sepolia x402 payment tx, ERC-8004 feedback tx, EvidenceAnchor checkpoint tx가 아직 없다. ERC-8004 identity registration은 완료됐다.
-- 개인 비공개 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결했고 초기 MVP PR #1을 `main`에 병합했다.
+- Base Sepolia x402 payment, ERC-8004 feedback, EvidenceAnchor checkpoint 증거는 위 실거래 결과로 완료됐다. provider 응답은 아직 `PROVIDER_MODE=mock`이므로 실제 Gemini/Nemotron response ID 검증은 남아 있다.
+- 개인 비공개 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결되어 있다.
 - AWS 비용·외부 쓰기 권한 승인이 아직 없다.
+- 자동 브라우저 제어가 제공되지 않은 세션이라 실거래 상세 화면 캡처는 남아 있다. 대시보드 production build와 `/purchases/[purchaseId]` route 생성은 통과했다.
 - Terraform CLI가 현재 로컬에 없어 `terraform validate`는 실행하지 못했다. 설치 후 `terraform fmt -check && terraform init -backend=false && terraform validate`를 실행한다.
