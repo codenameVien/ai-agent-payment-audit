@@ -46,6 +46,7 @@
 
 - [x] **4.1 감사 대시보드·로컬 E2E·AWS handoff**
   - [x] SIWE, 체인 잔액, 거래 목록/상세, AI 선택 근거, 평판, 감사 경고
+  - [x] 구매 에이전트 지갑은 내부 관리자 API로만 사전 배정하고 로그인 화면의 수동 주소 입력 제거
   - [x] 인증 SSE, stale/degraded 표시, 민감 필드 redaction
   - [x] audit bundle→ERC-8004 100/0 feedback→tx evidence
   - [x] AI 추론 renderer와 공통 shell 분리

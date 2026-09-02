@@ -115,6 +115,12 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
                 buyer_wallet_address="0xbuyer",
                 bound_at=clock.now(),
             )
+        with pytest.raises(ValueError, match="already bound"):
+            await repository.bind_buyer_wallet(
+                owner_address="0xowner",
+                buyer_wallet_address="0xreplacement",
+                bound_at=clock.now(),
+            )
 
         race_policy = WalletPolicy(
             buyer_wallet_address="0xbuyer-race",

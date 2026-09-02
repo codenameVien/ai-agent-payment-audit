@@ -386,7 +386,13 @@ class MongoEvidenceRepository:
         normalized_buyer = buyer_wallet_address.lower()
         try:
             await self._users.update_one(
-                {"ownerAddress": normalized_owner},
+                {
+                    "ownerAddress": normalized_owner,
+                    "$or": [
+                        {"buyerWalletAddress": {"$exists": False}},
+                        {"buyerWalletAddress": normalized_buyer},
+                    ],
+                },
                 {
                     "$set": {
                         "buyerWalletAddress": normalized_buyer,
@@ -397,7 +403,7 @@ class MongoEvidenceRepository:
                 upsert=True,
             )
         except DuplicateKeyError as exc:
-            raise ValueError("buyer wallet is already bound") from exc
+            raise ValueError("owner or buyer wallet is already bound") from exc
         return WalletBinding(normalized_owner, normalized_buyer, bound_at)
 
     async def get_wallet_binding(self, owner_address: str) -> WalletBinding | None:

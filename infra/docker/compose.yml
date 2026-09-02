@@ -33,6 +33,7 @@ services:
       SESSION_SECRET_BASE64: ${SESSION_SECRET_BASE64:?run scripts/setup_keys.py first}
       PAYLOAD_MASTER_KEY_BASE64: ${PAYLOAD_MASTER_KEY_BASE64:?run scripts/setup_keys.py first}
       INTERNAL_SERVICE_TOKEN: ${INTERNAL_SERVICE_TOKEN:?run scripts/setup_keys.py first}
+      ADMIN_SERVICE_TOKEN: ${ADMIN_SERVICE_TOKEN:?run scripts/setup_keys.py first}
       GATEWAY_SERVICE_TOKEN: ${GATEWAY_SERVICE_TOKEN:?run scripts/setup_keys.py first}
       BASE_SEPOLIA_RPC_URL: ${BASE_SEPOLIA_RPC_URL:-}
       COMMERCE_GATEWAY_URL: http://commerce-gateway:8081

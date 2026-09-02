@@ -319,6 +319,14 @@ def create_app(container: AppContainer) -> FastAPI:
                 detail="invalid internal service credential",
             )
 
+    def require_admin(authorization: str | None) -> None:
+        expected = f"Bearer {container.admin_service_token}"
+        if authorization is None or not hmac.compare_digest(authorization, expected):
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="invalid admin service credential",
+            )
+
     def payment_error(exc: Exception) -> HTTPException:
         if isinstance(exc, PaymentPolicyError):
             return HTTPException(status_code=422, detail=str(exc))
@@ -1396,21 +1404,21 @@ def create_app(container: AppContainer) -> FastAPI:
             buyer_wallet_address=await container.auth_service.get_buyer_wallet(owner),
         )
 
-    @app.put("/auth/buyer-wallet", response_model=BuyerWalletResponse)
+    @app.put("/internal/auth/buyer-wallet", response_model=BuyerWalletResponse)
     async def bind_buyer_wallet(
         body: BuyerWalletRequest,
-        pbl_session: str | None = Cookie(default=None),
+        authorization: str | None = Header(default=None),
     ) -> BuyerWalletResponse:
-        owner = require_owner(pbl_session)
+        require_admin(authorization)
         try:
             buyer_wallet = await container.auth_service.bind_buyer_wallet(
-                owner_address=owner,
+                owner_address=body.owner_address,
                 buyer_wallet_address=body.buyer_wallet_address,
             )
         except (AuthenticationError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         return BuyerWalletResponse(
-            owner_address=owner,
+            owner_address=body.owner_address.lower(),
             buyer_wallet_address=buyer_wallet,
         )
 

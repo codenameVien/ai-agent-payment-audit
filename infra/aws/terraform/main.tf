@@ -41,7 +41,7 @@ resource "aws_iam_role_policy_attachment" "execution" {
 data "aws_iam_policy_document" "secrets" {
   statement {
     actions   = ["secretsmanager:GetSecretValue"]
-    resources = values(var.secret_arns)
+    resources = concat(values(var.secret_arns), values(var.api_secret_arns))
   }
 }
 
@@ -91,7 +91,10 @@ resource "aws_ecs_task_definition" "service" {
       name  = name
       value = value
     }]
-    secrets = [for name, value_from in var.secret_arns : {
+    secrets = [for name, value_from in merge(
+      var.secret_arns,
+      each.key == "api" ? var.api_secret_arns : {},
+    ) : {
       name      = name
       valueFrom = value_from
     }]

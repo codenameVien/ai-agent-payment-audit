@@ -94,6 +94,11 @@ async def test_buyer_wallet_is_unique_across_owners(container) -> None:
             owner_address=second_owner.address,
             buyer_wallet_address=buyer.address,
         )
+    with pytest.raises(ValueError, match="different buyer wallet"):
+        await container.auth_service.bind_buyer_wallet(
+            owner_address=first_owner.address,
+            buyer_wallet_address=Account.create().address,
+        )
 
 
 @pytest.mark.asyncio

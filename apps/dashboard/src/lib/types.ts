@@ -1,3 +1,8 @@
+export interface MeResponse {
+  owner_address: string;
+  buyer_wallet_address: string | null;
+}
+
 export interface WalletView {
   owner_address: string;
   buyer_wallet_address: string | null;
