@@ -8,6 +8,7 @@ import {
   createPublicClient,
   createWalletClient,
   formatEther,
+  getAddress,
   http,
   parseAbi,
 } from "viem";
@@ -23,6 +24,9 @@ const X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001";
 const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
 
 const erc20Abi = parseAbi([
+  "function name() view returns (string)",
+  "function symbol() view returns (string)",
+  "function owner() view returns (address)",
   "function balanceOf(address account) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
   "function nonces(address owner) view returns (uint256)",
@@ -169,6 +173,59 @@ async function requireSuccessfulReceipt(publicClient, hash, label) {
   return receipt;
 }
 
+async function registerBuyerWriter(context, anchorAddress, anchorAbi) {
+  const alreadyRegistered = await context.publicClient.readContract({
+    address: anchorAddress,
+    abi: anchorAbi,
+    functionName: "isWriter",
+    args: [context.buyer.address],
+  });
+  if (alreadyRegistered === true) return null;
+
+  const hash = await context.walletClient.writeContract({
+    account: context.deployer,
+    address: anchorAddress,
+    abi: anchorAbi,
+    functionName: "setWriter",
+    args: [context.buyer.address, true],
+    gas: 100_000n,
+  });
+  const receipt = await requireSuccessfulReceipt(
+    context.publicClient,
+    hash,
+    "EvidenceAnchor buyer writer registration",
+  );
+  const registered = await context.publicClient.readContract({
+    address: anchorAddress,
+    abi: anchorAbi,
+    functionName: "isWriter",
+    args: [context.buyer.address],
+    blockNumber: receipt.blockNumber,
+  });
+  if (registered !== true) {
+    throw new Error("EvidenceAnchor buyer writer registration was not persisted");
+  }
+  return hash;
+}
+
+async function persistDeploymentEnv(context, tokenAddress, anchorAddress) {
+  let nextEnv = context.envText;
+  const updates = {
+    BASE_SEPOLIA_RPC_URL: context.rpcUrl,
+    TOKEN_ADDRESS: tokenAddress,
+    QUOTE_VERIFYING_CONTRACT: tokenAddress,
+    DECISION_VERIFYING_CONTRACT: anchorAddress,
+    EVIDENCE_ANCHOR_ADDRESS: anchorAddress,
+    GEMINI_PAY_TO_ADDRESS: context.geminiSeller.address,
+    NEMOTRON_PAY_TO_ADDRESS: context.nemotronSeller.address,
+  };
+  for (const [name, value] of Object.entries(updates)) {
+    nextEnv = replaceEnvValue(nextEnv, name, value);
+  }
+  await writeFile(ENV_PATH, nextEnv, { encoding: "utf8", mode: 0o600 });
+  await chmod(ENV_PATH, 0o600);
+}
+
 async function deploy() {
   const context = await runtime();
   if (context.env.TOKEN_ADDRESS || context.env.EVIDENCE_ANCHOR_ADDRESS) {
@@ -220,43 +277,16 @@ async function deploy() {
   );
   if (!anchorReceipt.contractAddress) throw new Error("EvidenceAnchor address is missing");
 
-  const writerRegistrationHash = await context.walletClient.writeContract({
-    account: context.deployer,
-    address: anchorReceipt.contractAddress,
-    abi: anchorArtifact.abi,
-    functionName: "setWriter",
-    args: [context.buyer.address, true],
-  });
-  await requireSuccessfulReceipt(
-    context.publicClient,
-    writerRegistrationHash,
-    "EvidenceAnchor buyer writer registration",
+  const writerRegistrationHash = await registerBuyerWriter(
+    context,
+    anchorReceipt.contractAddress,
+    anchorArtifact.abi,
   );
-  const buyerIsWriter = await context.publicClient.readContract({
-    address: anchorReceipt.contractAddress,
-    abi: anchorArtifact.abi,
-    functionName: "isWriter",
-    args: [context.buyer.address],
-  });
-  if (buyerIsWriter !== true) {
-    throw new Error("EvidenceAnchor buyer writer registration was not persisted");
-  }
-
-  let nextEnv = context.envText;
-  const updates = {
-    BASE_SEPOLIA_RPC_URL: context.rpcUrl,
-    TOKEN_ADDRESS: tokenReceipt.contractAddress,
-    QUOTE_VERIFYING_CONTRACT: tokenReceipt.contractAddress,
-    DECISION_VERIFYING_CONTRACT: anchorReceipt.contractAddress,
-    EVIDENCE_ANCHOR_ADDRESS: anchorReceipt.contractAddress,
-    GEMINI_PAY_TO_ADDRESS: context.geminiSeller.address,
-    NEMOTRON_PAY_TO_ADDRESS: context.nemotronSeller.address,
-  };
-  for (const [name, value] of Object.entries(updates)) {
-    nextEnv = replaceEnvValue(nextEnv, name, value);
-  }
-  await writeFile(ENV_PATH, nextEnv, { encoding: "utf8", mode: 0o600 });
-  await chmod(ENV_PATH, 0o600);
+  await persistDeploymentEnv(
+    context,
+    tokenReceipt.contractAddress,
+    anchorReceipt.contractAddress,
+  );
 
   process.stdout.write(`${JSON.stringify({
     deployerAddress: context.deployer.address,
@@ -273,7 +303,82 @@ async function deploy() {
   }, null, 2)}\n`);
 }
 
+async function recover(tokenAddressInput, anchorAddressInput) {
+  const context = await runtime();
+  if (context.env.TOKEN_ADDRESS || context.env.EVIDENCE_ANCHOR_ADDRESS) {
+    throw new Error("deployment addresses already exist; recovery is unnecessary");
+  }
+  if (!tokenAddressInput || !anchorAddressInput) {
+    throw new Error("recover requires token and EvidenceAnchor addresses");
+  }
+  const tokenAddress = getAddress(tokenAddressInput);
+  const anchorAddress = getAddress(anchorAddressInput);
+  const anchorArtifact = await loadArtifact("EvidenceAnchor");
+  const [tokenCode, anchorCode, tokenName, tokenSymbol, tokenOwner, buyerBalance, anchorOwner] =
+    await Promise.all([
+      context.publicClient.getBytecode({ address: tokenAddress }),
+      context.publicClient.getBytecode({ address: anchorAddress }),
+      context.publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "name",
+      }),
+      context.publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "symbol",
+      }),
+      context.publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "owner",
+      }),
+      context.publicClient.readContract({
+        address: tokenAddress,
+        abi: erc20Abi,
+        functionName: "balanceOf",
+        args: [context.buyer.address],
+      }),
+      context.publicClient.readContract({
+        address: anchorAddress,
+        abi: anchorArtifact.abi,
+        functionName: "owner",
+      }),
+    ]);
+  if (!tokenCode || tokenCode === "0x" || !anchorCode || anchorCode === "0x") {
+    throw new Error("recovery addresses must contain deployed contracts");
+  }
+  if (tokenName !== "PBL Agent Credit" || tokenSymbol !== "PBLC") {
+    throw new Error("token recovery address is not PBLC");
+  }
+  if (
+    tokenOwner.toLowerCase() !== context.deployer.address.toLowerCase()
+    || anchorOwner.toLowerCase() !== context.deployer.address.toLowerCase()
+  ) {
+    throw new Error("recovery contract owner does not match deployer");
+  }
+  if (buyerBalance !== INITIAL_SUPPLY_UNITS) {
+    throw new Error("recovery PBLC buyer balance does not match initial supply");
+  }
+
+  const writerRegistrationHash = await registerBuyerWriter(
+    context,
+    anchorAddress,
+    anchorArtifact.abi,
+  );
+  await persistDeploymentEnv(context, tokenAddress, anchorAddress);
+  process.stdout.write(`${JSON.stringify({
+    recovered: true,
+    tokenAddress,
+    evidenceAnchorAddress: anchorAddress,
+    writerRegistrationHash,
+    buyerAddress: context.buyer.address,
+    initialBuyerTokenUnits: buyerBalance.toString(),
+  }, null, 2)}\n`);
+}
+
 const command = process.argv[2] ?? "status";
 if (command === "status") await status();
 else if (command === "deploy") await deploy();
-else throw new Error("usage: node scripts/base_sepolia_setup.mjs [status|deploy]");
+else if (command === "recover") await recover(process.argv[3], process.argv[4]);
+else throw new Error("usage: node scripts/base_sepolia_setup.mjs [status|deploy|recover]");

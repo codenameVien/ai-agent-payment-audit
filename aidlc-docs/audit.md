@@ -232,3 +232,12 @@
 - PBLC는 EIP-2612 `permit`을 지원하고 x402 `eip2612GasSponsoring`으로 결제액만 승인한다. buyer wallet의 native ETH와 수동 Permit2 approval은 제거한다.
 - 계약 배포 가스는 분리된 Admin/Deployer wallet 한 곳이 한 번 부담하고, 초기 PBLC는 buyer wallet에 직접 mint한다.
 - 실제 Facilitator가 자체 PBLC permit과 settlement를 처리하는지는 Base Sepolia transaction으로 확인하기 전까지 외부 미검증 게이트다.
+
+## 2026-09-02 — Base Sepolia PBLC·EvidenceAnchor 배포
+
+- PBLC `0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9` 배포 거래 `0x4c4c58711cb7d9437b118605ba7658d696af2a8543b1ee6ee89f2f8dff31f25e`가 성공했고 buyer `0xa45Cd1a41E1e548e2daB0123E7Cb4E3dB964cdaB` 잔액은 1,000,000 PBLC다.
+- EvidenceAnchor `0x31691806C02ca6921a9Bac7AF0972302F8CfA101` 배포 거래 `0xddb7cb3008b6794c29cb4aa745ca7577a09a5c6ea73dcd82013a3ce5dfe77c24`가 성공했다.
+- 최초 buyer writer 등록 거래 `0x287433e71e3903401fd8e0d1558ff50306811e81cd24d529b11aef65e5328629`는 RPC가 산정한 22,765 gas limit으로 out-of-gas 실패했다. 배포 주소는 env에 기록되지 않았고 중복 배포도 하지 않았다.
+- 100,000 gas limit으로 재시도한 `0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b`가 성공했으며 `isWriter(buyer)=true`를 별도 RPC 조회로 확인했다.
+- 복구 스크립트는 PBLC 이름·심볼·owner·buyer 초기 잔액과 EvidenceAnchor owner를 검증한 뒤에만 주소를 `.env.local`에 기록한다. 영수증 직후 공개 RPC의 latest 상태가 지연된 사례를 반영해 성공 영수증의 block number로 후속 상태를 읽는다.
+- 실제 x402 Permit2 settlement와 token Transfer는 아직 실행하지 않았으므로 별도 외부 게이트로 남긴다.

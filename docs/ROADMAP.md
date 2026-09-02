@@ -38,7 +38,7 @@
   - [x] 환경 주입형 ERC-8004 identity/reputation adapter·self-feedback 방지
   - [x] fake-domain 구매도 같은 공통 payment claim 경계를 통과
   - [x] 제출 tx hash 결속·확정 revert만 실패 처리·hash 없는 모호 상태에서 결제 재생성 금지와 seller durable journal 복구
-  - [ ] 실제 Base Sepolia deploy·Permit2 allowance·CDP Facilitator smoke (외부 게이트)
+  - [ ] 실제 Base Sepolia Permit2·x402 Facilitator 결제 smoke (계약 배포 완료, 결제 외부 게이트)
 
 - [x] **Verification boundary 2/3 독립 재리뷰** — `Approve local completion`, P0–P3 없음
   - 최종 리뷰 계약: `docs/reviews/verification-boundary-3.md`
@@ -52,7 +52,7 @@
   - [x] MongoDB/API/dashboard/Gemini Seller/Nemotron Seller/Gateway Compose와 비용 차단 Terraform handoff
   - [x] 모든 5개 애플리케이션 Docker 이미지 build
   - [x] authenticated `/run`, durable seller/payment/provider-attempt recovery, 전달-선택 무결성 감사
-  - [x] broad suite: Python 68, Seller 29, Gateway 29, Solidity 4, native Mongo 1
+  - [x] broad suite: Python 68, Seller 29, Gateway 32, Solidity 6, native Mongo 1
   - [ ] 실제 provider/Base Sepolia/ERC-8004/AWS 증거와 화면 캡처 (외부 게이트)
 
 ## 외부 게이트
@@ -62,7 +62,8 @@
 - [ ] Base Sepolia wallet·token·facilitator 실거래
   - [x] 전용 deployer/buyer/seller 지갑 생성, 공개 RPC 연결, x402.org v2 exact·EIP-2612 gas sponsorship 지원 확인
   - [x] PBLC EIP-2612 permit과 exact-amount gas-sponsored payment payload 로컬 검증
-  - [ ] deployer 지갑에 1회 계약 배포용 Base Sepolia ETH 준비
-  - [ ] DemoToken·EvidenceAnchor 배포, buyer에 1,000,000 PBLC 직접 mint, buyer ETH 없이 x402 결제 증거 확보
+  - [x] deployer 지갑에 1회 계약 배포용 Base Sepolia ETH 준비
+  - [x] DemoToken·EvidenceAnchor 배포, buyer에 1,000,000 PBLC 직접 mint, buyer writer 등록
+  - [ ] buyer ETH 없이 실제 x402 결제 및 Transfer receipt 증거 확보
 - AWS 리소스 생성·비용 발생 승인
 - 공개 배포 전 민감 원문 보존/삭제 정책 재승인
