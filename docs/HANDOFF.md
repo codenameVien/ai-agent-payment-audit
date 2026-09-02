@@ -79,6 +79,8 @@ npm audit --omit=dev
 cd /Users/vien/MyProjects/PBL
 npm run chain:status
 npm run chain:deploy
+npm run erc8004:status
+npm run erc8004:register
 ```
 
 배포 거래는 성공했지만 후속 writer 등록 또는 로컬 주소 저장 전에 중단됐다면 새 계약을 중복 배포하지 않는다. 온체인 주소와 owner·초기 buyer 잔액을 검증한 뒤 다음 복구 명령을 사용한다.
@@ -94,11 +96,17 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - EvidenceAnchor: [`0x31691806C02ca6921a9Bac7AF0972302F8CfA101`](https://base-sepolia.blockscout.com/address/0x31691806C02ca6921a9Bac7AF0972302F8CfA101)
 - buyer writer 등록: [`0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b`](https://base-sepolia.blockscout.com/tx/0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b)
 
+현재 ERC-8004 판매 에이전트 등록:
+
+- Gemini agent ID `9154`: [등록](https://base-sepolia.blockscout.com/tx/0xf8838103943775b7890becbf8d4afb8ce44a33b6ddecec99b6fd53277b83186a), [agent wallet 연결](https://base-sepolia.blockscout.com/tx/0xbd51221ea1ff82ab8d690dcf63493f8bfa58dad7799601296b9aa03a55541362)
+- Nemotron agent ID `9155`: [등록](https://base-sepolia.blockscout.com/tx/0xc3d570a4cb87d9b854df8c3a875ec8bbcd3d59b101700dce1b290e879210e212), [agent wallet 연결](https://base-sepolia.blockscout.com/tx/0xdd5aeaa8e97f62295bb3be3f9d71dca40f88d36836f4d7799767eac41e26f1e8)
+- 두 identity NFT의 owner는 deployer이고 `getAgentWallet`은 각각의 seller signer와 일치한다. `npm run erc8004:status`가 registry version과 두 결속을 RPC에서 다시 검증한다.
+
 1. `npm run chain:status`에 표시되는 전용 deployer 주소에 계약 배포용 Base Sepolia ETH만 준비한다. buyer 주소에는 x402 결제용 ETH를 넣지 않는다.
 2. `DemoToken`과 `EvidenceAnchor`를 deployer로 배포하고, buyer를 EvidenceAnchor writer로 등록한 거래와 온체인 상태를 확인한 뒤에만 주소를 `.env.local`에 주입한다.
 3. 배포 constructor가 1,000,000 PBLC를 buyer-agent wallet에 직접 발행한다. PBLC는 admin이 추가 mint할 수 있으므로 token faucet을 사용하지 않는다.
 4. buyer는 결제액과 같은 EIP-2612 permit만 오프체인 서명한다. x402.org Facilitator가 canonical Permit2 승인과 settlement 가스를 부담하며 수동 allowance 거래는 없다.
-5. buyer와 provider 판매 에이전트를 ERC-8004에 등록하고 agent ID·agent wallet을 견적 설정에 주입한다.
+5. `npm run erc8004:register`로 Gemini/Nemotron 판매 에이전트를 ERC-8004에 등록한다. deployer가 NFT owner와 가스를 담당하고 각 seller는 자기 agent wallet 지정에 오프체인 서명하며, 검증된 agent ID는 `.env.local`에 저장된다.
 6. API 키가 필요 없는 x402.org testnet Facilitator로 한 요청을 실행한다.
 7. Facilitator 응답과 별개로 RPC receipt의 status, token contract, 정확한 `Transfer(from,to,amount)`를 확인한다.
 8. provider response hash를 기록하고 감사를 실행한다.
@@ -113,7 +121,7 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 ## 공개 배포 전 차단 게이트
 
 - 민감 prompt/response는 현재 MVP 정책 B에 따라 자동 삭제하지 않는다. **공개 AWS 배포 전에 TTL 또는 수동 삭제 정책과 시연 증거 보존 범위를 다시 결정해야 한다.**
-- 실제 provider response ID, Base Sepolia x402 payment tx, ERC-8004 registration/feedback tx, EvidenceAnchor checkpoint tx가 아직 없다.
+- 실제 provider response ID, Base Sepolia x402 payment tx, ERC-8004 feedback tx, EvidenceAnchor checkpoint tx가 아직 없다. ERC-8004 identity registration은 완료됐다.
 - 개인 비공개 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결했고 초기 MVP PR #1을 `main`에 병합했다.
 - AWS 비용·외부 쓰기 권한 승인이 아직 없다.
 - Terraform CLI가 현재 로컬에 없어 `terraform validate`는 실행하지 못했다. 설치 후 `terraform fmt -check && terraform init -backend=false && terraform validate`를 실행한다.

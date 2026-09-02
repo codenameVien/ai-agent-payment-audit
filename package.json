@@ -21,7 +21,9 @@
     "test:contracts": "forge test --root infra/contracts",
     "chain:status": "node scripts/base_sepolia_setup.mjs status",
     "chain:deploy": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs deploy",
-    "chain:recover": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs recover"
+    "chain:recover": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs recover",
+    "erc8004:status": "node scripts/erc8004_setup.mjs status",
+    "erc8004:register": "node scripts/erc8004_setup.mjs register"
   },
   "engines": {
     "node": ">=20"

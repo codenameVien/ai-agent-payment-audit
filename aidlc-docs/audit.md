@@ -241,3 +241,12 @@
 - 100,000 gas limit으로 재시도한 `0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b`가 성공했으며 `isWriter(buyer)=true`를 별도 RPC 조회로 확인했다.
 - 복구 스크립트는 PBLC 이름·심볼·owner·buyer 초기 잔액과 EvidenceAnchor owner를 검증한 뒤에만 주소를 `.env.local`에 기록한다. 영수증 직후 공개 RPC의 latest 상태가 지연된 사례를 반영해 성공 영수증의 block number로 후속 상태를 읽는다.
 - 실제 x402 Permit2 settlement와 token Transfer는 아직 실행하지 않았으므로 별도 외부 게이트로 남긴다.
+
+## 2026-09-02 — ERC-8004 판매 에이전트 등록
+
+- 공식 Base Sepolia Identity Registry `0x8004A818BFB912233c491871b3d84c89A494BD9e`와 Reputation Registry `0x8004B663056A597Dffe9eCcC1965A193B7388713`가 모두 version `2.0.0`임을 확인했다.
+- Gemini 판매 에이전트는 ID `9154`로 등록됐다. 등록 거래는 `0xf8838103943775b7890becbf8d4afb8ce44a33b6ddecec99b6fd53277b83186a`, seller wallet 결속 거래는 `0xbd51221ea1ff82ab8d690dcf63493f8bfa58dad7799601296b9aa03a55541362`다.
+- Nemotron 판매 에이전트는 ID `9155`로 등록됐다. 등록 거래는 `0xc3d570a4cb87d9b854df8c3a875ec8bbcd3d59b101700dce1b290e879210e212`, seller wallet 결속 거래는 `0xdd5aeaa8e97f62295bb3be3f9d71dca40f88d36836f4d7799767eac41e26f1e8`다.
+- deployer가 두 identity NFT owner와 온체인 가스를 맡고, seller private key는 EIP-712 `AgentWalletSet`에만 서명한다. 두 seller 지갑에는 native ETH가 필요 없다.
+- 공개 RPC가 성공 receipt 직후 같은 block을 일시적으로 찾지 못한 사례가 있어, 등록 자동화는 receipt block을 최대 20초 재조회한다. agent ID는 등록 직후 `.env.local`에 먼저 보존하며 재실행 시 이미 완료된 등록과 지갑 결속을 온체인 상태로 건너뛴다.
+- `npm run erc8004:status`에서 두 ID의 owner와 `getAgentWallet` 일치가 모두 `true`임을 확인했다. 실제 ERC-8004 feedback은 성공한 구매·감사 뒤에만 제출하므로 아직 남은 외부 게이트다.
