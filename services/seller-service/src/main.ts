@@ -6,6 +6,7 @@ import type { Address, Hex } from "viem";
 
 import { GeminiProviderAdapter } from "./adapters/gemini.js";
 import { EvidenceSellerExecutionStore } from "./adapters/evidence-execution.js";
+import { MockProviderAdapter } from "./adapters/mock.js";
 import { NemotronProviderAdapter } from "./adapters/nemotron.js";
 import { SellerApplication } from "./application.js";
 import type { ModelOffer, ProviderAdapter } from "./contracts.js";
@@ -30,10 +31,19 @@ function positiveInt(env: NodeJS.ProcessEnv, name: string, fallback: number): nu
 
 function provider(env: NodeJS.ProcessEnv): ProviderAdapter {
   const providerId = required(env, "PROVIDER_ID");
+  if (providerId !== "gemini" && providerId !== "nemotron") {
+    throw new Error("PROVIDER_ID must be gemini or nemotron");
+  }
+  const providerMode = (env.PROVIDER_MODE ?? "real").trim().toLowerCase();
+  if (providerMode === "mock") {
+    return new MockProviderAdapter(providerId, env.MOCK_PROVIDER_PREFIX ?? "mock");
+  }
+  if (providerMode !== "real") {
+    throw new Error("PROVIDER_MODE must be real or mock");
+  }
   const apiKey = required(env, "PROVIDER_API_KEY");
   if (providerId === "gemini") return new GeminiProviderAdapter({ apiKey });
-  if (providerId === "nemotron") return new NemotronProviderAdapter({ apiKey });
-  throw new Error("PROVIDER_ID must be gemini or nemotron");
+  return new NemotronProviderAdapter({ apiKey });
 }
 
 export class EvidenceQuoteTermsReader implements QuoteTermsReader {

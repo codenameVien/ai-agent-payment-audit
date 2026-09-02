@@ -1,0 +1,246 @@
+#!/usr/bin/env node
+
+import { chmod, readFile, writeFile } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+import {
+  createPublicClient,
+  createWalletClient,
+  formatEther,
+  http,
+  parseAbi,
+} from "viem";
+import { privateKeyToAccount } from "viem/accounts";
+import { baseSepolia } from "viem/chains";
+
+const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const ENV_PATH = resolve(REPO_ROOT, ".env.local");
+const DEFAULT_RPC_URL = "https://sepolia.base.org";
+const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
+const CANONICAL_PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
+const X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001";
+const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
+const PERMIT2_ALLOWANCE_UNITS = 10n * 1_000_000n;
+
+const erc20Abi = parseAbi([
+  "function approve(address spender, uint256 value) returns (bool)",
+  "function balanceOf(address account) view returns (uint256)",
+  "function allowance(address owner, address spender) view returns (uint256)",
+]);
+
+function parseEnv(text) {
+  const values = {};
+  for (const line of text.split(/\r?\n/)) {
+    if (!line || line.trimStart().startsWith("#") || !line.includes("=")) continue;
+    const separator = line.indexOf("=");
+    values[line.slice(0, separator)] = line.slice(separator + 1);
+  }
+  return values;
+}
+
+function required(values, name) {
+  const value = values[name]?.trim();
+  if (!value) throw new Error(`${name} is required; run scripts/setup_keys.py first`);
+  return value;
+}
+
+function replaceEnvValue(text, name, value) {
+  const lines = text.split(/\r?\n/);
+  const index = lines.findIndex((line) => line.startsWith(`${name}=`));
+  if (index === -1) lines.push(`${name}=${value}`);
+  else lines[index] = `${name}=${value}`;
+  return `${lines.join("\n").trimEnd()}\n`;
+}
+
+async function loadArtifact(contractName) {
+  const path = resolve(
+    REPO_ROOT,
+    "infra/contracts/out",
+    `${contractName}.sol`,
+    `${contractName}.json`,
+  );
+  const artifact = JSON.parse(await readFile(path, "utf8"));
+  if (!Array.isArray(artifact.abi) || !artifact.bytecode?.object?.startsWith("0x")) {
+    throw new Error(`invalid Foundry artifact: ${path}`);
+  }
+  return { abi: artifact.abi, bytecode: artifact.bytecode.object };
+}
+
+async function facilitatorSupportsBaseSepolia(url) {
+  const response = await fetch(`${url.replace(/\/$/, "")}/supported`);
+  if (!response.ok) return false;
+  const body = await response.json();
+  return Array.isArray(body.kinds) && body.kinds.some(
+    (kind) => kind?.x402Version === 2
+      && kind?.scheme === "exact"
+      && kind?.network === "eip155:84532",
+  );
+}
+
+async function runtime() {
+  const envText = await readFile(ENV_PATH, "utf8");
+  const env = parseEnv(envText);
+  const rpcUrl = env.BASE_SEPOLIA_RPC_URL?.trim() || DEFAULT_RPC_URL;
+  const facilitatorUrl = env.FACILITATOR_URL?.trim() || DEFAULT_FACILITATOR_URL;
+  const buyer = privateKeyToAccount(required(env, "BUYER_AGENT_PRIVATE_KEY"));
+  const geminiSeller = privateKeyToAccount(required(env, "GEMINI_SELLER_PRIVATE_KEY"));
+  const nemotronSeller = privateKeyToAccount(required(env, "NEMOTRON_SELLER_PRIVATE_KEY"));
+  const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpcUrl) });
+  const walletClient = createWalletClient({
+    account: buyer,
+    chain: baseSepolia,
+    transport: http(rpcUrl),
+  });
+  const chainId = await publicClient.getChainId();
+  if (chainId !== baseSepolia.id) throw new Error(`wrong chain id: ${chainId}`);
+  return {
+    env,
+    envText,
+    rpcUrl,
+    facilitatorUrl,
+    buyer,
+    geminiSeller,
+    nemotronSeller,
+    publicClient,
+    walletClient,
+  };
+}
+
+async function status() {
+  const context = await runtime();
+  const [balance, permit2Code, exactProxyCode] = await Promise.all([
+    context.publicClient.getBalance({ address: context.buyer.address }),
+    context.publicClient.getBytecode({ address: CANONICAL_PERMIT2 }),
+    context.publicClient.getBytecode({ address: X402_EXACT_PERMIT2_PROXY }),
+  ]);
+  const result = {
+    network: "Base Sepolia",
+    chainId: baseSepolia.id,
+    rpcUrl: context.rpcUrl,
+    facilitatorUrl: context.facilitatorUrl,
+    facilitatorSupportsExactV2: await facilitatorSupportsBaseSepolia(
+      context.facilitatorUrl,
+    ),
+    canonicalPermit2Deployed: Boolean(permit2Code && permit2Code !== "0x"),
+    x402ExactPermit2ProxyDeployed: Boolean(exactProxyCode && exactProxyCode !== "0x"),
+    buyerAddress: context.buyer.address,
+    buyerEth: formatEther(balance),
+    geminiSellerAddress: context.geminiSeller.address,
+    nemotronSellerAddress: context.nemotronSeller.address,
+    tokenAddress: context.env.TOKEN_ADDRESS || null,
+    evidenceAnchorAddress: context.env.EVIDENCE_ANCHOR_ADDRESS || null,
+  };
+  if (context.env.TOKEN_ADDRESS) {
+    result.buyerTokenUnits = String(await context.publicClient.readContract({
+      address: context.env.TOKEN_ADDRESS,
+      abi: erc20Abi,
+      functionName: "balanceOf",
+      args: [context.buyer.address],
+    }));
+    result.permit2AllowanceUnits = String(await context.publicClient.readContract({
+      address: context.env.TOKEN_ADDRESS,
+      abi: erc20Abi,
+      functionName: "allowance",
+      args: [context.buyer.address, CANONICAL_PERMIT2],
+    }));
+  }
+  process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+}
+
+async function requireSuccessfulReceipt(publicClient, hash, label) {
+  const receipt = await publicClient.waitForTransactionReceipt({ hash });
+  if (receipt.status !== "success") throw new Error(`${label} transaction reverted: ${hash}`);
+  return receipt;
+}
+
+async function deploy() {
+  const context = await runtime();
+  if (context.env.TOKEN_ADDRESS || context.env.EVIDENCE_ANCHOR_ADDRESS) {
+    throw new Error("deployment addresses already exist; refusing duplicate deployment");
+  }
+  if (!await facilitatorSupportsBaseSepolia(context.facilitatorUrl)) {
+    throw new Error("facilitator does not advertise x402 v2 exact on Base Sepolia");
+  }
+  const [permit2Code, exactProxyCode] = await Promise.all([
+    context.publicClient.getBytecode({ address: CANONICAL_PERMIT2 }),
+    context.publicClient.getBytecode({ address: X402_EXACT_PERMIT2_PROXY }),
+  ]);
+  if (!permit2Code || permit2Code === "0x" || !exactProxyCode || exactProxyCode === "0x") {
+    throw new Error("canonical Permit2 or x402 exact Permit2 proxy is not deployed");
+  }
+  const balance = await context.publicClient.getBalance({ address: context.buyer.address });
+  if (balance === 0n) {
+    throw new Error(`buyer wallet needs Base Sepolia ETH: ${context.buyer.address}`);
+  }
+
+  const tokenArtifact = await loadArtifact("DemoToken");
+  const tokenDeploymentHash = await context.walletClient.deployContract({
+    account: context.buyer,
+    abi: tokenArtifact.abi,
+    bytecode: tokenArtifact.bytecode,
+    args: [context.buyer.address, INITIAL_SUPPLY_UNITS],
+  });
+  const tokenReceipt = await requireSuccessfulReceipt(
+    context.publicClient,
+    tokenDeploymentHash,
+    "DemoToken deployment",
+  );
+  if (!tokenReceipt.contractAddress) throw new Error("DemoToken address is missing");
+
+  const anchorArtifact = await loadArtifact("EvidenceAnchor");
+  const anchorDeploymentHash = await context.walletClient.deployContract({
+    account: context.buyer,
+    abi: anchorArtifact.abi,
+    bytecode: anchorArtifact.bytecode,
+    args: [context.buyer.address],
+  });
+  const anchorReceipt = await requireSuccessfulReceipt(
+    context.publicClient,
+    anchorDeploymentHash,
+    "EvidenceAnchor deployment",
+  );
+  if (!anchorReceipt.contractAddress) throw new Error("EvidenceAnchor address is missing");
+
+  const approvalHash = await context.walletClient.writeContract({
+    account: context.buyer,
+    address: tokenReceipt.contractAddress,
+    abi: erc20Abi,
+    functionName: "approve",
+    args: [CANONICAL_PERMIT2, PERMIT2_ALLOWANCE_UNITS],
+  });
+  await requireSuccessfulReceipt(context.publicClient, approvalHash, "Permit2 approval");
+
+  let nextEnv = context.envText;
+  const updates = {
+    BASE_SEPOLIA_RPC_URL: context.rpcUrl,
+    TOKEN_ADDRESS: tokenReceipt.contractAddress,
+    QUOTE_VERIFYING_CONTRACT: tokenReceipt.contractAddress,
+    DECISION_VERIFYING_CONTRACT: anchorReceipt.contractAddress,
+    EVIDENCE_ANCHOR_ADDRESS: anchorReceipt.contractAddress,
+    GEMINI_PAY_TO_ADDRESS: context.geminiSeller.address,
+    NEMOTRON_PAY_TO_ADDRESS: context.nemotronSeller.address,
+  };
+  for (const [name, value] of Object.entries(updates)) {
+    nextEnv = replaceEnvValue(nextEnv, name, value);
+  }
+  await writeFile(ENV_PATH, nextEnv, { encoding: "utf8", mode: 0o600 });
+  await chmod(ENV_PATH, 0o600);
+
+  process.stdout.write(`${JSON.stringify({
+    buyerAddress: context.buyer.address,
+    tokenAddress: tokenReceipt.contractAddress,
+    tokenDeploymentHash,
+    evidenceAnchorAddress: anchorReceipt.contractAddress,
+    anchorDeploymentHash,
+    permit2Address: CANONICAL_PERMIT2,
+    x402ExactPermit2Proxy: X402_EXACT_PERMIT2_PROXY,
+    permit2AllowanceUnits: PERMIT2_ALLOWANCE_UNITS.toString(),
+    approvalHash,
+  }, null, 2)}\n`);
+}
+
+const command = process.argv[2] ?? "status";
+if (command === "status") await status();
+else if (command === "deploy") await deploy();
+else throw new Error("usage: node scripts/base_sepolia_setup.mjs [status|deploy]");

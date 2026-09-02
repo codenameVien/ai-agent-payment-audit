@@ -75,6 +75,8 @@ services:
     environment:
       PORT: "8080"
       PROVIDER_ID: gemini
+      PROVIDER_MODE: ${PROVIDER_MODE:-mock}
+      MOCK_PROVIDER_PREFIX: ${MOCK_PROVIDER_PREFIX:-mock}
       PROVIDER_API_KEY: ${GEMINI_API_KEY:-}
       SELLER_PRIVATE_KEY: ${GEMINI_SELLER_PRIVATE_KEY:-}
       SELLER_AGENT_ID: seller-gemini
@@ -100,6 +102,8 @@ services:
     environment:
       PORT: "8080"
       PROVIDER_ID: nemotron
+      PROVIDER_MODE: ${PROVIDER_MODE:-mock}
+      MOCK_PROVIDER_PREFIX: ${MOCK_PROVIDER_PREFIX:-mock}
       PROVIDER_API_KEY: ${NVIDIA_API_KEY:-}
       SELLER_PRIVATE_KEY: ${NEMOTRON_SELLER_PRIVATE_KEY:-}
       SELLER_AGENT_ID: seller-nemotron

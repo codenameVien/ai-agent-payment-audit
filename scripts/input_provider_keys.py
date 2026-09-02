@@ -6,7 +6,7 @@ from __future__ import annotations
 import getpass
 import os
 import shutil
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -33,7 +33,7 @@ def main() -> None:
     if not EXAMPLE_FILE.exists():
         raise SystemExit(f"missing template: {EXAMPLE_FILE}")
     if ENV_FILE.exists():
-        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         backup = ENV_FILE.with_name(f"{ENV_FILE.name}.bak-{stamp}")
         shutil.copy2(ENV_FILE, backup)
         text = ENV_FILE.read_text(encoding="utf-8")

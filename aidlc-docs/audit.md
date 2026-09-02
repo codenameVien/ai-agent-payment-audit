@@ -218,3 +218,10 @@
 - 비공개 저장소 `codenameVien/ai-agent-payment-audit`를 생성하고 SSH remote를 연결했다.
 - 검증 완료된 초기 구현은 최소 `main` bootstrap 위의 `feature/initial-mvp` PR로 전달한다.
 - 실제 provider key, provider 호출, Base Sepolia/ERC-8004/EvidenceAnchor write, AWS apply는 계속 별도 외부 게이트로 유지한다.
+
+## 2026-09-02 — Provider API key 게이트 연기
+
+- 사용자는 현재 단계의 목적이 모델 품질이 아니라 결제·감사 흐름 검증이라는 점을 확인했다.
+- Gemini/Nemotron은 `PROVIDER_MODE=mock`으로 실행하고 API key 입력과 실제 provider 호출은 최종 provider smoke까지 연기한다.
+- 가짜 API key는 만들지 않으며 `GEMINI_API_KEY`와 `NVIDIA_API_KEY`는 빈 값으로 유지한다.
+- 다음 외부 증거는 Base Sepolia 자체 ERC-20·Permit2·x402 testnet Facilitator 경로다.
