@@ -9,6 +9,7 @@ import { privateKeyToAccount } from "viem/accounts";
 import type {
   DecisionAuthorization,
   DecisionSigner,
+  Eip2612GasSponsoringInfo,
   Permit2Authorization,
   Permit2Signer,
 } from "./contracts.js";
@@ -87,10 +88,16 @@ export class LocalDecisionSigner implements DecisionSigner {
 export class LocalPermit2Signer implements Permit2Signer {
   readonly #account;
   readonly #chainId: number;
+  readonly #readNonce?: (token: Address, owner: Address) => Promise<bigint>;
 
-  constructor(privateKey: Hex, chainId = 84532) {
+  constructor(
+    privateKey: Hex,
+    chainId = 84532,
+    readNonce?: (token: Address, owner: Address) => Promise<bigint>,
+  ) {
     this.#account = privateKeyToAccount(privateKey);
     this.#chainId = chainId;
+    this.#readNonce = readNonce;
   }
 
   sign(authorization: Permit2Authorization): Promise<Hex> {
@@ -119,5 +126,55 @@ export class LocalPermit2Signer implements Permit2Signer {
         },
       },
     });
+  }
+
+  async signEip2612Permit(args: {
+    authorization: Permit2Authorization;
+    tokenName: string;
+    tokenVersion: string;
+  }): Promise<Eip2612GasSponsoringInfo> {
+    if (this.#readNonce === undefined) {
+      throw new Error("EIP-2612 nonce reader is not configured");
+    }
+    if (args.authorization.from.toLowerCase() !== this.#account.address.toLowerCase()) {
+      throw new Error("EIP-2612 permit owner does not match signer");
+    }
+    const token = args.authorization.permitted.token;
+    const nonce = await this.#readNonce(token, this.#account.address);
+    const signature = await this.#account.signTypedData({
+      domain: {
+        name: args.tokenName,
+        version: args.tokenVersion,
+        chainId: this.#chainId,
+        verifyingContract: token,
+      },
+      types: {
+        Permit: [
+          { name: "owner", type: "address" },
+          { name: "spender", type: "address" },
+          { name: "value", type: "uint256" },
+          { name: "nonce", type: "uint256" },
+          { name: "deadline", type: "uint256" },
+        ],
+      },
+      primaryType: "Permit",
+      message: {
+        owner: this.#account.address,
+        spender: CANONICAL_PERMIT2,
+        value: BigInt(args.authorization.permitted.amount),
+        nonce,
+        deadline: BigInt(args.authorization.deadline),
+      },
+    });
+    return {
+      from: this.#account.address,
+      asset: token,
+      spender: CANONICAL_PERMIT2,
+      amount: args.authorization.permitted.amount,
+      nonce: nonce.toString(),
+      deadline: args.authorization.deadline,
+      signature,
+      version: "1",
+    };
   }
 }

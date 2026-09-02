@@ -29,7 +29,7 @@
 - 인증된 `/purchases/{id}/run`으로 요청→선택→결제→전달→감사를 한 번에 실행하는 E2E
 - 판매자 `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` durable journal과 응답 유실·재시작 복구
 - 전달 결과의 seller/provider/model/version을 선택된 서명 견적과 결속하는 무결성 감사
-- x402 v2 Facilitator verify/settle, 실패 포함 PAYMENT-RESPONSE 보존, 고정 Permit2 nonce와 안전한 중단 후 재개
+- 자체 PBLC의 EIP-2612 서명으로 buyer ETH·수동 승인을 없앤 x402 v2 Permit2 결제와 안전한 중단 후 재개
 - 원자적 예산 예약과 독립 Base Sepolia receipt·정확한 ERC-20 Transfer 검증
 - 결정적 normal/caution/risk 감사와 semantic advisor 권한 제한
 - audit bundle hash에 결합된 ERC-8004 객관 100/0 평판 및 tx evidence
@@ -115,7 +115,7 @@ SIWE 인증 후 fake domain purchase를 만들면 공개 이벤트에는 정규�
 - RFC 8785 + SHA-256: 동일한 JSON 증거가 동일한 hash를 갖게 함
 - AES-256-GCM envelope encryption: 원문별 data key와 이후 AWS KMS 교체 경계 제공
 - SIWE: MetaMask 소유권과 자율 결제 buyer wallet을 분리
-- x402 v2 + Permit2: seller 결제 요구와 고정 구매 결정을 서명·정산
+- 자체 PBLC + EIP-2612 + x402 Permit2: token faucet 없이 발행하고 buyer의 결제 승인을 Facilitator가 가스 대납
 - ERC-8004: provider 단위 판매 에이전트 신원과 객관적 결제 결과 평판
 - Next.js: 공통 감사 shell과 도메인별 renderer를 분리한 대시보드
 

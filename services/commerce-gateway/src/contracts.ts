@@ -189,6 +189,22 @@ export interface DecisionSigner {
 
 export interface Permit2Signer {
   sign(authorization: Permit2Authorization): Promise<Hex>;
+  signEip2612Permit?(args: {
+    authorization: Permit2Authorization;
+    tokenName: string;
+    tokenVersion: string;
+  }): Promise<Eip2612GasSponsoringInfo>;
+}
+
+export interface Eip2612GasSponsoringInfo {
+  from: Address;
+  asset: Address;
+  spender: Address;
+  amount: string;
+  nonce: string;
+  deadline: string;
+  signature: Hex;
+  version: "1";
 }
 
 export interface SellerResponse {

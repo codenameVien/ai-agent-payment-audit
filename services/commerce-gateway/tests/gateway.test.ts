@@ -222,6 +222,18 @@ class CapturingPermitSigner implements Permit2Signer {
     this.authorization = authorization;
     return "0xpermit";
   }
+  async signEip2612Permit(args: { authorization: Permit2Authorization }) {
+    return {
+      from: args.authorization.from,
+      asset: args.authorization.permitted.token,
+      spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
+      amount: args.authorization.permitted.amount,
+      nonce: "0",
+      deadline: args.authorization.deadline,
+      signature: `0x${"ab".repeat(65)}` as Hex,
+      version: "1" as const,
+    };
+  }
 }
 
 class FakeSeller implements SellerClient {
@@ -322,6 +334,29 @@ test("one purchase binds decision, x402 Permit2 payload and exact Transfer", asy
     seller.paymentPayload?.payload.permit2Authorization.permitted.amount,
     "100000",
   );
+});
+
+test("declared EIP-2612 sponsorship binds an exact PBLC permit into the payload", async () => {
+  const { gateway, seller } = harness({
+    mutateRequirement(required) {
+      required.accepts[0]!.extra = {
+        assetTransferMethod: "permit2",
+        name: "PBL Agent Credit",
+        version: "1",
+      };
+      required.extensions = {
+        eip2612GasSponsoring: { info: { version: "1" }, schema: {} },
+      };
+    },
+  });
+  await gateway.execute("purchase-1");
+  const extension = seller.paymentPayload?.extensions.eip2612GasSponsoring as {
+    info: { amount: string; asset: Address; spender: Address };
+  };
+  assert.equal(extension.info.amount, "100000");
+  assert.equal(extension.info.asset, TOKEN);
+  assert.equal(extension.info.spender.toLowerCase(),
+    "0x000000000022d473030f116ddee9f6b43ac78ba3");
 });
 
 for (const [label, mutate] of [

@@ -81,16 +81,17 @@ npm run chain:status
 npm run chain:deploy
 ```
 
-1. `DemoToken`과 `EvidenceAnchor`를 Base Sepolia에 배포하고 주소를 `.env.local`에만 주입한다.
-2. buyer와 provider 판매 에이전트를 ERC-8004에 등록하고 agent ID·agent wallet을 견적 설정에 주입한다.
-3. 배포 시 초기 demo token 공급량을 buyer-agent wallet에 직접 발행한다.
-4. buyer wallet은 canonical Permit2에 10 PBLC만 allowance하고, 결제 서명의 spender는 x402 exact Permit2 proxy로 제한한다.
-5. API 키가 필요 없는 x402.org testnet Facilitator로 한 요청을 실행한다.
-6. Facilitator 응답과 별개로 RPC receipt의 status, token contract, 정확한 `Transfer(from,to,amount)`를 확인한다.
-7. provider response hash를 기록하고 감사를 실행한다.
-8. 감사 서버가 선택 agent ID·객관적 성공 100 또는 확정 실패 0·audit bundle hash를 먼저 확정한 뒤 ERC-8004 feedback을 제출한다.
-9. 평판 tx의 정확한 `NewFeedback(agentId,value,tags,feedbackHash)`와 EvidenceAnchor event를 receipt에서 확인한 뒤 MongoDB evidence에 기록한다.
-10. 대시보드 거래 상세에서 request→decision→tx→delivery hash→audit→reputation/anchor 링크를 캡처한다.
+1. `npm run chain:status`에 표시되는 전용 deployer 주소에 계약 배포용 Base Sepolia ETH만 준비한다. buyer 주소에는 x402 결제용 ETH를 넣지 않는다.
+2. `DemoToken`과 `EvidenceAnchor`를 deployer로 배포하고, buyer를 EvidenceAnchor writer로 등록한 거래와 온체인 상태를 확인한 뒤에만 주소를 `.env.local`에 주입한다.
+3. 배포 constructor가 1,000,000 PBLC를 buyer-agent wallet에 직접 발행한다. PBLC는 admin이 추가 mint할 수 있으므로 token faucet을 사용하지 않는다.
+4. buyer는 결제액과 같은 EIP-2612 permit만 오프체인 서명한다. x402.org Facilitator가 canonical Permit2 승인과 settlement 가스를 부담하며 수동 allowance 거래는 없다.
+5. buyer와 provider 판매 에이전트를 ERC-8004에 등록하고 agent ID·agent wallet을 견적 설정에 주입한다.
+6. API 키가 필요 없는 x402.org testnet Facilitator로 한 요청을 실행한다.
+7. Facilitator 응답과 별개로 RPC receipt의 status, token contract, 정확한 `Transfer(from,to,amount)`를 확인한다.
+8. provider response hash를 기록하고 감사를 실행한다.
+9. 감사 서버가 선택 agent ID·객관적 성공 100 또는 확정 실패 0·audit bundle hash를 먼저 확정한 뒤 ERC-8004 feedback을 제출한다.
+10. 평판 tx의 정확한 `NewFeedback(agentId,value,tags,feedbackHash)`와 EvidenceAnchor event를 receipt에서 확인한 뒤 MongoDB evidence에 기록한다.
+11. 대시보드 거래 상세에서 request→decision→tx→delivery hash→audit→reputation/anchor 링크를 캡처한다.
 
 ## AWS 인계
 

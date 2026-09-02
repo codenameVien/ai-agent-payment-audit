@@ -21,12 +21,11 @@ const DEFAULT_FACILITATOR_URL = "https://x402.org/facilitator";
 const CANONICAL_PERMIT2 = "0x000000000022D473030F116dDEE9F6B43aC78BA3";
 const X402_EXACT_PERMIT2_PROXY = "0x402085c248EeA27D92E8b30b2C58ed07f9E20001";
 const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
-const PERMIT2_ALLOWANCE_UNITS = 10n * 1_000_000n;
 
 const erc20Abi = parseAbi([
-  "function approve(address spender, uint256 value) returns (bool)",
   "function balanceOf(address account) view returns (uint256)",
   "function allowance(address owner, address spender) view returns (uint256)",
+  "function nonces(address owner) view returns (uint256)",
 ]);
 
 function parseEnv(text) {
@@ -67,15 +66,19 @@ async function loadArtifact(contractName) {
   return { abi: artifact.abi, bytecode: artifact.bytecode.object };
 }
 
-async function facilitatorSupportsBaseSepolia(url) {
+async function facilitatorCapabilities(url) {
   const response = await fetch(`${url.replace(/\/$/, "")}/supported`);
-  if (!response.ok) return false;
+  if (!response.ok) return { exactV2: false, eip2612GasSponsoring: false };
   const body = await response.json();
-  return Array.isArray(body.kinds) && body.kinds.some(
-    (kind) => kind?.x402Version === 2
-      && kind?.scheme === "exact"
-      && kind?.network === "eip155:84532",
-  );
+  return {
+    exactV2: Array.isArray(body.kinds) && body.kinds.some(
+      (kind) => kind?.x402Version === 2
+        && kind?.scheme === "exact"
+        && kind?.network === "eip155:84532",
+    ),
+    eip2612GasSponsoring:
+      Array.isArray(body.extensions) && body.extensions.includes("eip2612GasSponsoring"),
+  };
 }
 
 async function runtime() {
@@ -83,12 +86,13 @@ async function runtime() {
   const env = parseEnv(envText);
   const rpcUrl = env.BASE_SEPOLIA_RPC_URL?.trim() || DEFAULT_RPC_URL;
   const facilitatorUrl = env.FACILITATOR_URL?.trim() || DEFAULT_FACILITATOR_URL;
+  const deployer = privateKeyToAccount(required(env, "DEPLOYER_PRIVATE_KEY"));
   const buyer = privateKeyToAccount(required(env, "BUYER_AGENT_PRIVATE_KEY"));
   const geminiSeller = privateKeyToAccount(required(env, "GEMINI_SELLER_PRIVATE_KEY"));
   const nemotronSeller = privateKeyToAccount(required(env, "NEMOTRON_SELLER_PRIVATE_KEY"));
   const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpcUrl) });
   const walletClient = createWalletClient({
-    account: buyer,
+    account: deployer,
     chain: baseSepolia,
     transport: http(rpcUrl),
   });
@@ -99,6 +103,7 @@ async function runtime() {
     envText,
     rpcUrl,
     facilitatorUrl,
+    deployer,
     buyer,
     geminiSeller,
     nemotronSeller,
@@ -109,23 +114,27 @@ async function runtime() {
 
 async function status() {
   const context = await runtime();
-  const [balance, permit2Code, exactProxyCode] = await Promise.all([
-    context.publicClient.getBalance({ address: context.buyer.address }),
-    context.publicClient.getBytecode({ address: CANONICAL_PERMIT2 }),
-    context.publicClient.getBytecode({ address: X402_EXACT_PERMIT2_PROXY }),
-  ]);
+  const [buyerBalance, deployerBalance, permit2Code, exactProxyCode, capabilities] =
+    await Promise.all([
+      context.publicClient.getBalance({ address: context.buyer.address }),
+      context.publicClient.getBalance({ address: context.deployer.address }),
+      context.publicClient.getBytecode({ address: CANONICAL_PERMIT2 }),
+      context.publicClient.getBytecode({ address: X402_EXACT_PERMIT2_PROXY }),
+      facilitatorCapabilities(context.facilitatorUrl),
+    ]);
   const result = {
     network: "Base Sepolia",
     chainId: baseSepolia.id,
     rpcUrl: context.rpcUrl,
     facilitatorUrl: context.facilitatorUrl,
-    facilitatorSupportsExactV2: await facilitatorSupportsBaseSepolia(
-      context.facilitatorUrl,
-    ),
+    facilitatorSupportsExactV2: capabilities.exactV2,
+    facilitatorSupportsEip2612GasSponsoring: capabilities.eip2612GasSponsoring,
     canonicalPermit2Deployed: Boolean(permit2Code && permit2Code !== "0x"),
     x402ExactPermit2ProxyDeployed: Boolean(exactProxyCode && exactProxyCode !== "0x"),
+    deployerAddress: context.deployer.address,
+    deployerEth: formatEther(deployerBalance),
     buyerAddress: context.buyer.address,
-    buyerEth: formatEther(balance),
+    buyerEth: formatEther(buyerBalance),
     geminiSellerAddress: context.geminiSeller.address,
     nemotronSellerAddress: context.nemotronSeller.address,
     tokenAddress: context.env.TOKEN_ADDRESS || null,
@@ -144,6 +153,12 @@ async function status() {
       functionName: "allowance",
       args: [context.buyer.address, CANONICAL_PERMIT2],
     }));
+    result.buyerPermitNonce = String(await context.publicClient.readContract({
+      address: context.env.TOKEN_ADDRESS,
+      abi: erc20Abi,
+      functionName: "nonces",
+      args: [context.buyer.address],
+    }));
   }
   process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
 }
@@ -159,8 +174,11 @@ async function deploy() {
   if (context.env.TOKEN_ADDRESS || context.env.EVIDENCE_ANCHOR_ADDRESS) {
     throw new Error("deployment addresses already exist; refusing duplicate deployment");
   }
-  if (!await facilitatorSupportsBaseSepolia(context.facilitatorUrl)) {
-    throw new Error("facilitator does not advertise x402 v2 exact on Base Sepolia");
+  const capabilities = await facilitatorCapabilities(context.facilitatorUrl);
+  if (!capabilities.exactV2 || !capabilities.eip2612GasSponsoring) {
+    throw new Error(
+      "facilitator does not advertise Base Sepolia exact v2 with EIP-2612 gas sponsorship",
+    );
   }
   const [permit2Code, exactProxyCode] = await Promise.all([
     context.publicClient.getBytecode({ address: CANONICAL_PERMIT2 }),
@@ -169,17 +187,17 @@ async function deploy() {
   if (!permit2Code || permit2Code === "0x" || !exactProxyCode || exactProxyCode === "0x") {
     throw new Error("canonical Permit2 or x402 exact Permit2 proxy is not deployed");
   }
-  const balance = await context.publicClient.getBalance({ address: context.buyer.address });
+  const balance = await context.publicClient.getBalance({ address: context.deployer.address });
   if (balance === 0n) {
-    throw new Error(`buyer wallet needs Base Sepolia ETH: ${context.buyer.address}`);
+    throw new Error(`deployer wallet needs Base Sepolia ETH: ${context.deployer.address}`);
   }
 
   const tokenArtifact = await loadArtifact("DemoToken");
   const tokenDeploymentHash = await context.walletClient.deployContract({
-    account: context.buyer,
+    account: context.deployer,
     abi: tokenArtifact.abi,
     bytecode: tokenArtifact.bytecode,
-    args: [context.buyer.address, INITIAL_SUPPLY_UNITS],
+    args: [context.deployer.address, context.buyer.address, INITIAL_SUPPLY_UNITS],
   });
   const tokenReceipt = await requireSuccessfulReceipt(
     context.publicClient,
@@ -190,10 +208,10 @@ async function deploy() {
 
   const anchorArtifact = await loadArtifact("EvidenceAnchor");
   const anchorDeploymentHash = await context.walletClient.deployContract({
-    account: context.buyer,
+    account: context.deployer,
     abi: anchorArtifact.abi,
     bytecode: anchorArtifact.bytecode,
-    args: [context.buyer.address],
+    args: [context.deployer.address],
   });
   const anchorReceipt = await requireSuccessfulReceipt(
     context.publicClient,
@@ -202,14 +220,27 @@ async function deploy() {
   );
   if (!anchorReceipt.contractAddress) throw new Error("EvidenceAnchor address is missing");
 
-  const approvalHash = await context.walletClient.writeContract({
-    account: context.buyer,
-    address: tokenReceipt.contractAddress,
-    abi: erc20Abi,
-    functionName: "approve",
-    args: [CANONICAL_PERMIT2, PERMIT2_ALLOWANCE_UNITS],
+  const writerRegistrationHash = await context.walletClient.writeContract({
+    account: context.deployer,
+    address: anchorReceipt.contractAddress,
+    abi: anchorArtifact.abi,
+    functionName: "setWriter",
+    args: [context.buyer.address, true],
   });
-  await requireSuccessfulReceipt(context.publicClient, approvalHash, "Permit2 approval");
+  await requireSuccessfulReceipt(
+    context.publicClient,
+    writerRegistrationHash,
+    "EvidenceAnchor buyer writer registration",
+  );
+  const buyerIsWriter = await context.publicClient.readContract({
+    address: anchorReceipt.contractAddress,
+    abi: anchorArtifact.abi,
+    functionName: "isWriter",
+    args: [context.buyer.address],
+  });
+  if (buyerIsWriter !== true) {
+    throw new Error("EvidenceAnchor buyer writer registration was not persisted");
+  }
 
   let nextEnv = context.envText;
   const updates = {
@@ -228,15 +259,17 @@ async function deploy() {
   await chmod(ENV_PATH, 0o600);
 
   process.stdout.write(`${JSON.stringify({
+    deployerAddress: context.deployer.address,
     buyerAddress: context.buyer.address,
     tokenAddress: tokenReceipt.contractAddress,
     tokenDeploymentHash,
     evidenceAnchorAddress: anchorReceipt.contractAddress,
     anchorDeploymentHash,
+    writerRegistrationHash,
     permit2Address: CANONICAL_PERMIT2,
     x402ExactPermit2Proxy: X402_EXACT_PERMIT2_PROXY,
-    permit2AllowanceUnits: PERMIT2_ALLOWANCE_UNITS.toString(),
-    approvalHash,
+    initialBuyerTokenUnits: INITIAL_SUPPLY_UNITS.toString(),
+    buyerNeedsNativeEth: false,
   }, null, 2)}\n`);
 }
 

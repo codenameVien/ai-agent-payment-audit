@@ -225,3 +225,10 @@
 - Gemini/Nemotron은 `PROVIDER_MODE=mock`으로 실행하고 API key 입력과 실제 provider 호출은 최종 provider smoke까지 연기한다.
 - 가짜 API key는 만들지 않으며 `GEMINI_API_KEY`와 `NVIDIA_API_KEY`는 빈 값으로 유지한다.
 - 다음 외부 증거는 Base Sepolia 자체 ERC-20·Permit2·x402 testnet Facilitator 경로다.
+
+## 2026-09-02 — 자체 토큰의 구매자 무가스 경로로 수정
+
+- 사용자는 자체 ERC-20을 선택한 이유가 faucet 토큰 부족을 피하기 위한 것인데 buyer wallet에 다시 faucet funding을 요구하는 계획은 목적과 맞지 않는다고 지적했다.
+- PBLC는 EIP-2612 `permit`을 지원하고 x402 `eip2612GasSponsoring`으로 결제액만 승인한다. buyer wallet의 native ETH와 수동 Permit2 approval은 제거한다.
+- 계약 배포 가스는 분리된 Admin/Deployer wallet 한 곳이 한 번 부담하고, 초기 PBLC는 buyer wallet에 직접 mint한다.
+- 실제 Facilitator가 자체 PBLC permit과 settlement를 처리하는지는 Base Sepolia transaction으로 확인하기 전까지 외부 미검증 게이트다.

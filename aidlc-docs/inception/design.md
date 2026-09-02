@@ -174,21 +174,21 @@ FastAPI는 Gateway에 금액·수신자를 신뢰 입력으로 보내지 않고 
 6. MongoDB 원자적 예산 예약과 `PAYMENT_INTENT_CLAIMED` 이벤트 생성
 7. seller endpoint의 402 요구사항이 저장된 견적과 완전히 같은지 확인
 8. Gateway가 `DecisionAuthorization` EIP-712 서명을 만들고 `PAYMENT_AUTHORIZED` 이벤트로 저장
-9. 같은 `purchaseId`용 Permit2 nonce로 서명 후 재요청
+9. 같은 `purchaseId`용 Permit2 nonce와 PBLC EIP-2612 permit을 서명해 재요청
 10. facilitator 응답만 믿지 않고 독립 Base RPC에서 receipt와 ERC-20 `Transfer` 이벤트 확인
 11. 예약 금액을 settled로 전환하고 `PAYMENT_SETTLED` 이벤트 생성
 
 감사가 끝나면 FastAPI는 `purchaseId`만 Gateway에 보내 객관적 ERC-8004 feedback 제출을 요청한다. Gateway는 Evidence API에서 감사 결과와 bundle hash를 다시 읽고, 허용된 100/0 결과만 buyer agent wallet로 서명한다.
 
-#### Permit2 사전 승인
+#### 구매자 무가스 Permit2 승인
 
-일반 ERC-20은 x402에서 Permit2를 사용하기 전에 Permit2 컨트랙트에 대한 토큰 allowance가 필요하다.
+PBLC는 자체 6-decimal ERC-20을 유지하되 EIP-2612 `permit`을 구현한다. buyer wallet은 native ETH나 수동 `approve` 거래 없이 결제액과 같은 allowance만 오프체인 서명한다. x402 Facilitator가 permit과 Permit2 settlement를 한 거래로 제출하고 가스를 부담한다.
 
-- 프로그램형 buyer wallet이 Base Sepolia ETH와 Demo Credit을 받는다.
-- 초기 설정에서 `approve(Permit2, 20 * 10^6)`처럼 제한된 allowance를 한 번 설정한다.
-- `uint256.max` 무제한 승인은 사용하지 않는다.
-- allowance가 부족하면 자동 증액하지 않고 관리 화면/명령에서 재승인한다.
-- CDP의 EIP-2612 gas sponsorship은 토큰 구현과 실제 facilitator 지원을 확인한 뒤 선택적으로 추가한다.
+- Base Sepolia 배포 가스는 온라인 buyer와 분리된 Admin/Deployer wallet이 한 번 부담한다.
+- 초기 PBLC 공급량은 배포 시 buyer wallet에 직접 mint한다. 이후 admin이 필요한 만큼 추가 mint할 수 있어 token faucet은 사용하지 않는다.
+- EIP-2612 permit의 spender는 canonical Permit2, value는 해당 결제액, deadline은 견적/402 만료보다 길 수 없다.
+- 결제 후 allowance가 남지 않도록 `uint256.max` 승인을 사용하지 않는다.
+- Facilitator가 `eip2612GasSponsoring`을 실제로 지원하고 자체 PBLC settlement를 처리하는지는 Base Sepolia tx로 입증한다.
 
 #### 중복·동시 결제 방지
 
@@ -559,7 +559,7 @@ DomainResultPresenter
 
 ### 실제 연동 증거
 
-1. 자체 ERC-20 배포와 제한 Permit2 allowance tx
+1. 자체 ERC-20 배포, buyer 직접 mint, EIP-2612 permit 기반 무가스 승인
 2. Coinbase Facilitator를 통한 Base Sepolia x402 결제 tx
 3. Gemini와 Nemotron 실제 응답 ID·model version·hash
 4. MongoDB 저장 레코드 재조회
@@ -570,7 +570,7 @@ DomainResultPresenter
 
 | 선택 | 채택 이유 | 포기한 것 |
 |---|---|---|
-| 자체 ERC-20 + Permit2 | 파우셋 의존 없이 반복 시연 | EIP-3009보다 초기 allowance 단계가 추가됨 |
+| 자체 ERC-20 + EIP-2612 + Permit2 | token faucet 없이 반복 시연하고 buyer의 native ETH·수동 승인 제거 | 계약에 permit 검증 로직과 실제 Facilitator 호환성 검증이 추가됨 |
 | MetaMask owner + programmatic buyer wallet | 로그인 소유권과 자율 결제 분리 | 서버 key 관리 책임 |
 | 제공자별 seller agent | 회사별 가격·정책 표현, 모델 증설 용이 | 모델별 완전 독립 에이전트 |
 | Mongo append-only evidence | 판단 과정을 풍부하게 저장·검색 | 모든 근거를 온체인에 쓰는 단순성 |
@@ -600,7 +600,7 @@ DomainResultPresenter
 다음 항목은 설계상 가능하다는 것과 실제 성공했다는 것을 구분한다.
 
 - [ ] CDP `/supported`에서 Base Sepolia exact/Permit2 지원 확인
-- [ ] 자체 토큰 제한 allowance 후 실제 x402 settlement 성공
+- [ ] buyer native ETH 없이 자체 토큰 EIP-2612 permit 후 실제 x402 settlement 성공
 - [ ] Permit2·token·recipient·amount Transfer event 독립 RPC 검증
 - [ ] 공식 ERC-8004 Base Sepolia 주소/ABI 재확인
 - [ ] buyer feedback 주소가 seller owner/operator가 아님을 확인

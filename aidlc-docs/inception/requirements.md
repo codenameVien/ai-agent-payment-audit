@@ -151,6 +151,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 
 - **AC-10.1:** GIVEN a fresh Base Sepolia setup WHEN deployment scripts run THEN they deploy or configure the 6-decimal project ERC-20 whose unit represents one USD-equivalent demo credit.
 - **AC-10.2:** GIVEN the admin wallet WHEN demo funding is performed THEN only the admin can mint credits and transfer them to the bound buyer-agent wallet; no public faucet is required.
+- **AC-10.2a:** GIVEN a buyer-agent wallet with project credits but no native ETH WHEN its first x402 Permit2 payment is authorized THEN an EIP-2612 permit lets the Facilitator sponsor the approval and settlement gas without a buyer-funded approval transaction.
 - **AC-10.3:** GIVEN buyer and seller agents WHEN registration runs THEN each has an ERC-8004 identity and the application stores the resulting chain identifiers.
 - **AC-10.4:** GIVEN missing credentials or private keys WHEN local or AWS services start THEN they fail safely with actionable configuration errors and never print secret values.
 

@@ -94,7 +94,22 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
       chainId: baseSepolia.id,
       verifyingContract: required(env, "DECISION_VERIFYING_CONTRACT") as Address,
     }),
-    permit2Signer: new LocalPermit2Signer(privateKey, baseSepolia.id),
+    permit2Signer: new LocalPermit2Signer(
+      privateKey,
+      baseSepolia.id,
+      async (token, owner) => publicClient.readContract({
+        address: token,
+        abi: [{
+          type: "function",
+          name: "nonces",
+          stateMutability: "view",
+          inputs: [{ name: "owner", type: "address" }],
+          outputs: [{ name: "nonce", type: "uint256" }],
+        }],
+        functionName: "nonces",
+        args: [owner],
+      }),
+    ),
     receipts: new ViemReceiptReader(publicClient as PublicClient),
     identityVerifier: erc8004,
     clock: { nowSeconds: () => BigInt(Math.floor(Date.now() / 1000)) },
