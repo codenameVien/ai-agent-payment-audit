@@ -1,0 +1,30 @@
+{
+  "quote": {
+    "quoteId": "quote-ts-fixture",
+    "purchaseId": "purchase-fixture",
+    "sellerAgentId": "gemini-agent",
+    "erc8004AgentId": "1",
+    "providerId": "gemini",
+    "modelId": "gemini-test",
+    "modelVersion": "v1",
+    "amount": "100000",
+    "token": "0x0000000000000000000000000000000000000002",
+    "payTo": "0x0000000000000000000000000000000000000003",
+    "expectedLatencyMs": "700",
+    "inputLimit": "8000",
+    "outputLimit": "2000",
+    "expiresAt": "1800000120",
+    "quoteNonce": "41",
+    "counterofferOf": "",
+    "available": true,
+    "counterofferReason": ""
+  },
+  "signature": "0xaa7da23af642a4664240cff2f2b420cc98f182f2438de629b6ce1294a56201475c474d2113153b41f12aa8cf885fd049a40bd7a25f4913fc34d25e867fe521461c",
+  "signer": "0xFCAd0B19bB29D4674531d6f115237E16AfCE377c",
+  "fixtureMeta": {
+    "producer": "services/seller-service/src/eip712.ts",
+    "testOnlyKey": true,
+    "chainId": 84532,
+    "verifyingContract": "0x0000000000000000000000000000000000000001"
+  }
+}

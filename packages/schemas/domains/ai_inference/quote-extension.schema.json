@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pbl.local/schemas/domains/ai_inference/quote-extension.schema.json",
+  "title": "AI inference seller quote extension",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "providerId", "modelId", "modelVersion", "expectedLatencyMs", "inputLimit", "outputLimit",
+    "available", "counterofferReason"
+  ],
+  "properties": {
+    "providerId": { "type": "string", "minLength": 1 },
+    "modelId": { "type": "string", "minLength": 1 },
+    "modelVersion": { "type": "string", "minLength": 1 },
+    "expectedLatencyMs": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "inputLimit": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "outputLimit": { "type": "string", "pattern": "^[1-9][0-9]*$" },
+    "available": { "type": "boolean" },
+    "counterofferReason": { "type": "string" }
+  }
+}

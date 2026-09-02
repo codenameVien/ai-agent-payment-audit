@@ -1,0 +1,26 @@
+{
+  "name": "pbl-agent-payment-audit",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "services/commerce-gateway",
+    "services/seller-service",
+    "packages/*"
+  ],
+  "scripts": {
+    "setup:python": "uv sync --project services/buyer-audit-api --all-groups",
+    "lint": "uv run --project services/buyer-audit-api ruff check scripts services/buyer-audit-api && uv run --project services/buyer-audit-api mypy services/buyer-audit-api/src && npm run lint --workspace @pbl/seller-service && npm run lint --workspace @pbl/commerce-gateway && npm run lint --workspace @pbl/dashboard",
+    "test": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests && npm test --workspace @pbl/seller-service && npm test --workspace @pbl/commerce-gateway && npm run test:schemas && npm run test:contracts",
+    "test:unit": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests -m 'not mongo'",
+    "test:mongo": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests -m mongo",
+    "test:mongo:local": "bash scripts/test_mongo_local.sh",
+    "api": "uv run --project services/buyer-audit-api uvicorn buyer_audit_api.main:app --app-dir services/buyer-audit-api/src --env-file .env.local --reload",
+    "dashboard": "npm run dev --workspace @pbl/dashboard",
+    "test:schemas": "node scripts/validate_schemas.mjs",
+    "test:contracts": "forge test --root infra/contracts"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

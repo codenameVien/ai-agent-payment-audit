@@ -1,0 +1,1 @@
+"""Replaceable purchase-domain implementations."""
