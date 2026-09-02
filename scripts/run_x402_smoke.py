@@ -61,6 +61,9 @@ def main() -> None:
     internal_headers = {
         "Authorization": f"Bearer {required(env, 'INTERNAL_SERVICE_TOKEN')}"
     }
+    admin_headers = {
+        "Authorization": f"Bearer {required(env, 'ADMIN_SERVICE_TOKEN')}"
+    }
 
     with httpx.Client(base_url="http://127.0.0.1:8000", timeout=180) as client:
         challenge = checked(
@@ -78,8 +81,12 @@ def main() -> None:
         )
         checked(
             client.put(
-                "/auth/buyer-wallet",
-                json={"buyer_wallet_address": buyer.address},
+                "/internal/auth/buyer-wallet",
+                headers=admin_headers,
+                json={
+                    "owner_address": owner.address,
+                    "buyer_wallet_address": buyer.address,
+                },
             ),
             "buyer wallet binding",
         )

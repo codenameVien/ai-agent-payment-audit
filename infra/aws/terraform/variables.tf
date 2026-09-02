@@ -22,9 +22,16 @@ variable "service_images" {
 }
 
 variable "secret_arns" {
-  description = "Secrets Manager ARNs keyed by MONGODB_URI, SESSION_SECRET_BASE64, PAYLOAD_MASTER_KEY_BASE64, INTERNAL_SERVICE_TOKEN, and optional provider/wallet keys."
+  description = "Shared Secrets Manager ARNs. Do not include ADMIN_SERVICE_TOKEN; place it in api_secret_arns."
   type        = map(string)
   sensitive   = true
+}
+
+variable "api_secret_arns" {
+  description = "Secrets Manager ARNs injected only into the API task, including ADMIN_SERVICE_TOKEN."
+  type        = map(string)
+  sensitive   = true
+  default     = {}
 }
 
 variable "plain_environment" {

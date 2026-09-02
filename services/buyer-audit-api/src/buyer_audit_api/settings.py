@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     session_secret_base64: str
     payload_master_key_base64: str
     internal_service_token: str
+    admin_service_token: str
     commerce_gateway_url: str = "http://localhost:8081"
     gateway_service_token: str
     base_sepolia_rpc_url: str | None = None

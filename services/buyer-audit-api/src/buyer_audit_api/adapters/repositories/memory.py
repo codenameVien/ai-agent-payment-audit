@@ -112,14 +112,24 @@ class InMemoryEvidenceRepository:
         async with self._lock:
             normalized_owner = owner_address.lower()
             normalized_buyer = buyer_wallet_address.lower()
+            owner = self._users.get(normalized_owner)
+            if owner is not None and "buyerWalletAddress" in owner:
+                existing_buyer = str(owner["buyerWalletAddress"])
+                if existing_buyer != normalized_buyer:
+                    raise ValueError("owner already has a different buyer wallet")
+                return WalletBinding(
+                    normalized_owner,
+                    existing_buyer,
+                    owner["buyerWalletBoundAt"],  # type: ignore[arg-type]
+                )
             for existing_owner, user in self._users.items():
                 if (
                     existing_owner != normalized_owner
                     and user.get("buyerWalletAddress") == normalized_buyer
                 ):
                     raise ValueError("buyer wallet is already bound")
-            user = self._users.setdefault(normalized_owner, {})
-            user.update(
+            owner = self._users.setdefault(normalized_owner, {})
+            owner.update(
                 {
                     "buyerWalletAddress": normalized_buyer,
                     "buyerWalletBoundAt": bound_at,

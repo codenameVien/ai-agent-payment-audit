@@ -18,6 +18,7 @@ TOKEN = "0x0000000000000000000000000000000000000003"
 SELLER = "0x0000000000000000000000000000000000000004"
 CONTRACT = "0x0000000000000000000000000000000000000005"
 INTERNAL_HEADERS = {"Authorization": "Bearer test-internal-token"}
+ADMIN_HEADERS = {"Authorization": "Bearer test-admin-token"}
 
 
 def sign(account, message: str) -> str:
@@ -52,9 +53,23 @@ def test_authenticated_fake_domain_purchase_round_trip(container) -> None:
             "buyer_wallet_address": None,
         }
         buyer = Account.create()
-        binding = client.put(
+        assert client.put(
             "/auth/buyer-wallet",
             json={"buyer_wallet_address": buyer.address},
+        ).status_code == 404
+        assert client.put(
+            "/internal/auth/buyer-wallet",
+            json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
+        ).status_code == 401
+        assert client.put(
+            "/internal/auth/buyer-wallet",
+            headers=INTERNAL_HEADERS,
+            json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
+        ).status_code == 401
+        binding = client.put(
+            "/internal/auth/buyer-wallet",
+            headers=ADMIN_HEADERS,
+            json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
         )
         assert binding.status_code == 200
         assert client.get("/auth/me").json()["buyer_wallet_address"] == buyer.address.lower()
@@ -252,8 +267,9 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
 
         authenticate(client, owner)
         binding = client.put(
-            "/auth/buyer-wallet",
-            json={"buyer_wallet_address": buyer.address},
+            "/internal/auth/buyer-wallet",
+            headers=ADMIN_HEADERS,
+            json={"owner_address": owner.address, "buyer_wallet_address": buyer.address},
         )
         assert binding.status_code == 200
         created = client.post(

@@ -97,10 +97,12 @@ class AuthService:
         owner_address: str,
         buyer_wallet_address: str,
     ) -> str:
+        if not is_address(owner_address):
+            raise AuthenticationError("invalid owner wallet address")
         if not is_address(buyer_wallet_address):
             raise AuthenticationError("invalid buyer wallet address")
         binding = await self._repository.bind_buyer_wallet(
-            owner_address=owner_address,
+            owner_address=to_checksum_address(owner_address).lower(),
             buyer_wallet_address=to_checksum_address(buyer_wallet_address).lower(),
             bound_at=self._clock.now(),
         )

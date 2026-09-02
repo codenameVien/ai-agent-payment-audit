@@ -28,6 +28,9 @@ class MeResponse(BaseModel):
 
 
 class BuyerWalletRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    owner_address: str
     buyer_wallet_address: str
 
 

@@ -6,7 +6,7 @@ command -v mongod >/dev/null || { echo "mongod가 필요합니다." >&2; exit 1;
 command -v mongosh >/dev/null || { echo "mongosh가 필요합니다." >&2; exit 1; }
 command -v uv >/dev/null || { echo "uv가 필요합니다." >&2; exit 1; }
 
-TEST_PORT="${TEST_MONGO_PORT:-27018}"
+TEST_PORT="${TEST_MONGO_PORT:-27019}"
 TEST_DIR="$(mktemp -d /private/tmp/pbl-mongo-test.XXXXXX)"
 MONGO_PID=""
 

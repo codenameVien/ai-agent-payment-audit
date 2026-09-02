@@ -54,6 +54,7 @@ class AppContainer:
     purchase_service: PurchaseService
     cookie_secure: bool
     internal_service_token: str = "test-internal-token"
+    admin_service_token: str = "test-admin-token"
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     commerce_gateway: HttpCommerceGatewayClient | None = None
@@ -152,6 +153,7 @@ def build_container(settings: Settings) -> AppContainer:
         purchase_service=purchase_service,
         cookie_secure=settings.cookie_secure,
         internal_service_token=settings.internal_service_token,
+        admin_service_token=settings.admin_service_token,
         token_balance_reader=(
             JsonRpcTokenBalanceReader(settings.base_sepolia_rpc_url)
             if settings.base_sepolia_rpc_url
