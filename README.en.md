@@ -66,6 +66,13 @@ npm run test:mongo:local
 
 To run the API, generate local internal keys in a separate terminal. Never paste them into chat.
 
+Public Base Sepolia addresses, balances, and x402 testnet Facilitator support can be checked without exposing keys.
+
+```bash
+cd /Users/vien/MyProjects/PBL
+npm run chain:status
+```
+
 ```bash
 cd /Users/vien/MyProjects/PBL
 python3 scripts/setup_keys.py
@@ -74,9 +81,10 @@ npm run api
 
 Variable names are documented in `.env.example`; real values are excluded from Git.
 
-When Gemini/NVIDIA keys are ready, enter them invisibly in a separate terminal rather than sending them in chat.
+The default `PROVIDER_MODE=mock` needs no Gemini/NVIDIA keys. Only when validating real provider calls, enter them invisibly in a separate terminal and switch to `PROVIDER_MODE=real`.
 
 ```bash
+cd /Users/vien/MyProjects/PBL
 python3 scripts/input_provider_keys.py
 ```
 

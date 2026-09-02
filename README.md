@@ -69,6 +69,13 @@ npm run test:mongo:local
 
 Compose 실행과 실제 체인 smoke 순서는 [docs/HANDOFF.md](docs/HANDOFF.md)에 있다.
 
+Base Sepolia 공개 주소·잔액과 x402 testnet Facilitator 지원 상태는 키를 노출하지 않고 확인할 수 있다.
+
+```bash
+cd /Users/vien/MyProjects/PBL
+npm run chain:status
+```
+
 API를 직접 실행하려면 시크릿을 채팅에 붙이지 말고 별도 터미널에서 한 번 생성한다.
 
 ```bash
@@ -79,9 +86,10 @@ npm run api
 
 환경 변수 이름은 `.env.example`에 있으며 실제 값은 Git에서 제외된다.
 
-실제 Gemini/NVIDIA 키가 준비된 뒤에는 값을 채팅에 보내지 말고 별도 터미널에서 숨김 입력한다.
+기본 `PROVIDER_MODE=mock`에서는 Gemini/NVIDIA 키가 필요 없다. 실제 provider 호출을 검증할 때만 값을 채팅에 보내지 말고 별도 터미널에서 숨김 입력한 뒤 `PROVIDER_MODE=real`로 바꾼다.
 
 ```bash
+cd /Users/vien/MyProjects/PBL
 python3 scripts/input_provider_keys.py
 ```
 

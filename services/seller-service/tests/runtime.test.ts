@@ -6,10 +6,10 @@ import { createSellerTransport, EvidenceQuoteTermsReader } from "../src/main.js"
 const ADDRESS = "0x0000000000000000000000000000000000000001";
 const PRIVATE_KEY = `0x${"11".repeat(32)}`;
 
-test("runtime assembly exposes signed quotes and a Facilitator-backed 402 challenge", async () => {
+test("mock runtime starts without an API key and exposes a Facilitator-backed 402 challenge", async () => {
   const transport = createSellerTransport({
     PROVIDER_ID: "gemini",
-    PROVIDER_API_KEY: "local-test-key",
+    PROVIDER_MODE: "mock",
     SELLER_PRIVATE_KEY: PRIVATE_KEY,
     SELLER_AGENT_ID: "seller-gemini",
     ERC8004_AGENT_ID: "7",

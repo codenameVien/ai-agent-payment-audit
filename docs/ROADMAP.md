@@ -58,7 +58,10 @@
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결
-- 실제 provider/API key 입력
-- Base Sepolia wallet·token·facilitator 실거래
+- [x] MVP 결제·감사 검증은 `PROVIDER_MODE=mock`으로 확정; 실제 provider/API key 입력은 최종 provider smoke까지 연기
+- [ ] Base Sepolia wallet·token·facilitator 실거래
+  - [x] 전용 buyer/seller 지갑 생성, 공개 RPC 연결, x402.org v2 exact 지원 확인
+  - [ ] buyer 지갑에 Base Sepolia ETH faucet 충전
+  - [ ] DemoToken·EvidenceAnchor 배포, 10 PBLC Permit2 allowance, x402 결제 증거 확보
 - AWS 리소스 생성·비용 발생 승인
 - 공개 배포 전 민감 원문 보존/삭제 정책 재승인

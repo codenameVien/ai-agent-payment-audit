@@ -18,7 +18,9 @@
     "api": "uv run --project services/buyer-audit-api uvicorn buyer_audit_api.main:app --app-dir services/buyer-audit-api/src --env-file .env.local --reload",
     "dashboard": "npm run dev --workspace @pbl/dashboard",
     "test:schemas": "node scripts/validate_schemas.mjs",
-    "test:contracts": "forge test --root infra/contracts"
+    "test:contracts": "forge test --root infra/contracts",
+    "chain:status": "node scripts/base_sepolia_setup.mjs status",
+    "chain:deploy": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs deploy"
   },
   "engines": {
     "node": ">=20"
