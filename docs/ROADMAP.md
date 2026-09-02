@@ -64,6 +64,7 @@
   - [x] PBLC EIP-2612 permit과 exact-amount gas-sponsored payment payload 로컬 검증
   - [x] deployer 지갑에 1회 계약 배포용 Base Sepolia ETH 준비
   - [x] DemoToken·EvidenceAnchor 배포, buyer에 1,000,000 PBLC 직접 mint, buyer writer 등록
+  - [x] Gemini/Nemotron 판매 에이전트 ERC-8004 identity 등록과 seller wallet 결속
   - [ ] buyer ETH 없이 실제 x402 결제 및 Transfer receipt 증거 확보
 - AWS 리소스 생성·비용 발생 승인
 - 공개 배포 전 민감 원문 보존/삭제 정책 재승인
