@@ -85,12 +85,12 @@ npm audit --omit=dev
 
 ## AWS 인계
 
-`infra/aws/terraform/`은 ECS Fargate task, CloudWatch, 명시적 Secrets Manager ARN 계약을 정의한다. 기본 `enable_services=false`이므로 실제 서비스와 비용은 생성하지 않는다. ALB/HTTPS/WAF, VPC ingress, ECR 이미지, MongoDB Atlas 네트워크, CloudWatch alarm은 팀 계정 정보가 정해진 뒤 추가한다.
+`infra/aws/terraform/`은 ECS Fargate task, CloudWatch, 명시적 Secrets Manager ARN 계약을 정의한다. 기본 `enable_services=false`이므로 실제 서비스와 비용은 생성하지 않는다. ALB/HTTPS/WAF, VPC ingress, ECR 이미지, MongoDB Atlas 네트워크, CloudWatch alarm은 실제 배포 계정 정보가 정해진 뒤 추가한다.
 
 ## 공개 배포 전 차단 게이트
 
 - 민감 prompt/response는 현재 MVP 정책 B에 따라 자동 삭제하지 않는다. **공개 AWS 배포 전에 TTL 또는 수동 삭제 정책과 시연 증거 보존 범위를 다시 결정해야 한다.**
 - 실제 provider response ID, Base Sepolia payment tx, ERC-8004 registration/feedback tx, EvidenceAnchor tx가 아직 없다.
-- 팀 GitHub 저장소 URL과 기본 브랜치가 아직 없다.
+- 개인 비공개 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결했다. 초기 MVP는 `feature/initial-mvp` PR을 통해 `main`에 전달한다.
 - AWS 비용·외부 쓰기 권한 승인이 아직 없다.
 - Terraform CLI가 현재 로컬에 없어 `terraform validate`는 실행하지 못했다. 설치 후 `terraform fmt -check && terraform init -backend=false && terraform validate`를 실행한다.

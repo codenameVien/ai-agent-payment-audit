@@ -57,7 +57,7 @@
 
 ## 외부 게이트
 
-- 팀 GitHub 저장소 URL 확정 및 SSH remote 연결
+- [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결
 - 실제 provider/API key 입력
 - Base Sepolia wallet·token·facilitator 실거래
 - AWS 리소스 생성·비용 발생 승인

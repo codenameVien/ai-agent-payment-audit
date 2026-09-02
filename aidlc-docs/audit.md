@@ -211,3 +211,10 @@
 - Reviewer evidence: lint passed; Python 68 passed/1 skipped; Seller 29 passed; Commerce Gateway 29 passed; Solidity 4 passed; native Mongo 1 passed; dashboard production build, Compose config, and `git diff --check` passed.
 - Result: `docs/reviews/verification-boundary-3-result.md`.
 - Local implementation is complete. External keys, real provider calls, Base Sepolia/ERC-8004/EvidenceAnchor writes, AWS apply, dashboard transaction screenshot, and team GitHub publication remain explicit handoff gates.
+
+## 2026-09-02 — 개인 GitHub 전달 시작
+
+- 사용자가 팀 저장소 대신 개인 저장소 사용을 확정했다.
+- 비공개 저장소 `codenameVien/ai-agent-payment-audit`를 생성하고 SSH remote를 연결했다.
+- 검증 완료된 초기 구현은 최소 `main` bootstrap 위의 `feature/initial-mvp` PR로 전달한다.
+- 실제 provider key, provider 호출, Base Sepolia/ERC-8004/EvidenceAnchor write, AWS apply는 계속 별도 외부 게이트로 유지한다.
