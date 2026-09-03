@@ -31,7 +31,8 @@ Implemented locally:
 - Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
 - Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
 - Objective ERC-8004 reputation and confirmed external evidence anchors
-- Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
+- Read-only Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
+- `/experiments` operator runner outside the user-dashboard navigation and shell, with a fixed `0.1 PBLC` cap, explicit acknowledgement, and cross-tab duplicate-run protection
 - MongoDB/API/dashboard/two sellers/Gateway Compose plus a cost-disabled AWS Terraform handoff
 - Hidden local handoff scripts for seller-wallet and external provider keys
 
@@ -67,6 +68,11 @@ npm run test:mongo:local
 
 To run the API, generate local internal keys in a separate terminal. Never paste them into chat.
 
+After sign-in, the overview only reads evidence. Start a real normal-path transaction from
+`/experiments` after acknowledging the Base Sepolia payment. With the default
+`PROVIDER_MODE=mock`, payment, chain verification, and audit evidence are real while the AI
+response body comes from the mock provider.
+
 Public Base Sepolia addresses, balances, and x402 testnet Facilitator support can be checked without exposing keys.
 
 ```bash
@@ -94,10 +100,11 @@ python3 scripts/input_provider_keys.py
 Evidence from the current build:
 
 ```text
-68 passed, 1 skipped  # Python; native Mongo is isolated by default
+71 passed, 1 skipped  # Python; native Mongo is isolated by default
 29 passed             # Seller Service
-29 passed             # Commerce Gateway
-4 passed              # Solidity Foundry
+33 passed             # Commerce Gateway
+6 passed              # Solidity Foundry
+3 passed              # Dashboard runner safety
 1 passed              # Native MongoDB replica-set integration
 Success: no issues found in 43 source files  # strict mypy
 ```

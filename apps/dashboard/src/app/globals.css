@@ -75,6 +75,26 @@ button, input, textarea, select { font: inherit; }
   white-space: nowrap;
 }
 .topbar nav a:hover, .topbar nav a:focus { color: white; }
+.operatorBar {
+  min-height: 70px;
+  padding: 0 max(24px, calc((100vw - 1280px) / 2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #4a3b70;
+  background: #171321;
+}
+.operatorBar div { display: flex; flex-direction: column; gap: 4px; }
+.operatorBar span {
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.operatorBar strong { font-size: 16px; }
+.operatorBar a { font-size: 12px; text-decoration: none; }
 .live {
   font-size: 12px;
   display: flex;
@@ -457,6 +477,70 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 }
 .bindBox label { display: flex; flex-direction: column; gap: 7px; }
 
+.experimentLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(300px, 0.65fr);
+  gap: 20px;
+}
+.experimentForm { display: flex; flex-direction: column; gap: 19px; }
+.experimentForm label { display: flex; flex-direction: column; gap: 8px; }
+.experimentForm label > span { font-weight: 760; font-size: 13px; }
+.experimentTerms {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 1px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--line);
+}
+.experimentTerms div { padding: 15px; background: #121117; }
+.experimentTerms span, .experimentTerms strong { display: block; }
+.experimentTerms span { color: var(--muted); font-size: 11px; margin-bottom: 7px; }
+.experimentTerms strong { font-size: 14px; }
+.paymentConsent {
+  display: grid !important;
+  grid-template-columns: auto 1fr;
+  gap: 12px !important;
+  align-items: start;
+  padding: 15px;
+  border: 1px solid #58467e;
+  border-radius: 12px;
+  background: rgba(44, 36, 72, 0.7);
+  color: #d8d0ef;
+  line-height: 1.55;
+}
+.paymentConsent input { width: 18px; height: 18px; margin: 2px 0 0; }
+.experimentActions { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
+.experimentActions .primary { min-height: 45px; padding-inline: 20px; }
+.experimentActions a { font-size: 12px; }
+.experimentSteps { list-style: none; padding: 0; margin: 4px 0 0; counter-reset: experiment-step; }
+.experimentSteps li {
+  counter-increment: experiment-step;
+  display: grid;
+  grid-template-columns: 29px 1fr;
+  gap: 11px;
+  align-items: start;
+  padding: 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+.experimentSteps li:last-child { border-bottom: 0; }
+.experimentSteps li::before {
+  content: counter(experiment-step);
+  display: grid;
+  place-items: center;
+  width: 27px;
+  height: 27px;
+  border-radius: 50%;
+  background: var(--violet-soft);
+  color: var(--violet);
+  font-size: 11px;
+  font-weight: 850;
+}
+.experimentSteps strong, .experimentSteps small { display: block; }
+.experimentSteps small { margin-top: 5px; line-height: 1.5; }
+.modeNotice { border-color: #3f3b49; }
+
 footer {
   max-width: 1280px;
   margin: 0 auto;
@@ -483,12 +567,14 @@ footer {
     padding: 16px 20px;
     gap: 14px;
   }
+  .operatorBar { padding: 16px 20px; align-items: flex-start; }
   .topbar nav { order: 3; width: 100%; overflow: auto; gap: 18px; }
   .live { margin-left: auto; }
   .auditIntro { align-items: start; flex-direction: column; }
   .scopePill { width: 100%; }
   .walletList { grid-template-columns: 1fr; }
   .twoCol { grid-template-columns: 1fr; }
+  .experimentLayout { grid-template-columns: 1fr; }
   .cardGrid { grid-template-columns: 1fr; }
   .alert { grid-template-columns: 1fr; }
   main { padding: 28px 16px 54px; }
