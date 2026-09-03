@@ -57,6 +57,11 @@
   - [x] Base Sepolia 결제·ERC-8004 feedback·EvidenceAnchor 실거래 증거
   - [ ] 실제 provider/AWS 증거와 대시보드 화면 캡처 (외부 게이트)
 
+- [x] **4.2 읽기 전용 감사 모니터 개편**
+  - [x] 개요의 구매 실행 폼과 가짜 시뮬레이터 없이 PBLC·거래·감사·경고를 실제 API 데이터로 요약
+  - [x] 제공 시안의 고밀도 감사 콘솔 구조를 현재 상세 화면과 반응형 UI에 적용
+  - [x] production build와 실행 중인 로컬 HTTP 응답 검증 (인증 계정 거래 화면 캡처는 외부 게이트 유지)
+
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결
