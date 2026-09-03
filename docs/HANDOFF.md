@@ -128,7 +128,7 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - EvidenceAnchor: [`0xe2a5991639316b16dd30385551d8de02b2838618b1fd88e1a4fc8f455ec21bb0`](https://base-sepolia.blockscout.com/tx/0xe2a5991639316b16dd30385551d8de02b2838618b1fd88e1a4fc8f455ec21bb0)
   - 온체인 checkpoint는 event count `11`, head `0xff6b...bb6a2`다.
   - MongoDB의 12번째 `EVIDENCE_ANCHORED` 이벤트가 해당 tx를 결속하므로 앵커 자신을 앵커링하는 순환 참조가 없다.
-- 첫 실거래 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`도 실제 `0.1 PBLC`를 정산했지만 mock model version 불일치를 감지해 `AUD-DELIVERY-MISSING` 위험으로 종결됐다. 이 실패 증거는 삭제하지 않는다.
+- 첫 실거래 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`도 실제 `0.1 PBLC`를 정산했지만 mock model version 불일치로 전달 전에 중단됐다. `AUD-DELIVERY-MISSING` 규칙 대상이지만 해당 smoke DB에는 최종 `AUDITED` 이벤트가 없어, 완결된 이상 감사 사례가 아닌 정산 후 전달 실패 증거로 구분한다.
 - x402 결제 두 건 뒤 buyer 잔액은 `999,999.8 PBLC`, permit nonce는 `2`, Permit2 allowance는 `0`이었다. 그 뒤 평판·앵커 쓰기 전용으로 `0.0001 ETH`를 별도 공급했다([funding tx](https://base-sepolia.blockscout.com/tx/0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336)).
 - 재현 스크립트 `npm run smoke:x402`는 시크릿·원문 prompt·서명·provider 응답 본문을 출력하지 않는다.
 

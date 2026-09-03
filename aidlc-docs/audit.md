@@ -254,7 +254,7 @@
 ## 2026-09-02 — Base Sepolia x402·ERC-8004·EvidenceAnchor 실거래 완료
 
 - 구매자 `0xa45Cd1a41E1e548e2daB0123E7Cb4E3dB964cdaB`의 native ETH가 0인 상태에서 자체 EIP-2612 토큰 PBLC를 x402.org Facilitator로 두 번 정산했다. 각 결제는 `100000` raw units, 즉 `0.1 PBLC`였고 buyer의 수동 Permit2 allowance 거래는 없었다.
-- 첫 결제 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`는 온체인 정산은 성공했지만 mock adapter가 서명된 `gemini-2.5-flash` 대신 `mock-v1`을 반환했다. 시스템은 전달-선택 불일치를 허용하지 않고 `RISK`/`AUD-DELIVERY-MISSING`으로 기록했다. 이 실패는 실제 감사 탐지 증거로 보존한다.
+- 첫 결제 `0xdcc3c9781e7ca5a38eadfd8d2a641110b4e2f70f013052a95a072e6c81f1d9c1`는 온체인 정산은 성공했지만 mock adapter가 서명된 `gemini-2.5-flash` 대신 `mock-v1`을 반환해 전달 전에 중단됐다. 규칙상 `AUD-DELIVERY-MISSING` 위험 대상이지만 해당 smoke DB에는 최종 `AUDITED` 이벤트가 저장되지 않았으므로, 완결된 이상 감사 사례가 아니라 정산 후 전달 실패의 미완결 증거로 보존한다.
 - 두 번째 구매 `14f37c54-e26c-4ab4-83e6-cbc7c2a7c473`의 결제 `0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680`는 block `46292655`, Transfer log index `23`에서 buyer → Gemini seller의 정확한 `0.1 PBLC`를 독립 검증했다. 전달은 선택된 provider/model/version과 일치했고 감사 결과는 `NORMAL`, findings 없음이었다.
 - 정상 감사 bundle `sha256:436eceace08c3f38d1615bc8cc9105993a558cbd342320d7f19589576c55af38`을 Gemini ERC-8004 agent ID `9154`의 value `100` feedback에 결속했다. tx `0x5702e3ca225e3d0089a14bbc0e7aad851cebe2f6aebc4d230f1dad83d717f491`의 `NewFeedback` event에서 agent ID, buyer client address, value, tags, feedback hash를 Blockscout API로 재확인했다.
 - 평판과 EvidenceAnchor 쓰기는 구매자의 x402 무가스 결제 증거를 보존한 뒤 별도로 공급한 `0.0001 ETH`만 사용했다. funding tx는 `0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336`이다.
@@ -262,3 +262,11 @@
 - 실환경 smoke에서 네 가지 경계 오류를 발견하고 회귀 테스트를 추가했다: BSON millisecond timestamp hash 정규화, nullable latency 필드 생략, `sha256:` → bytes32 변환, 공개 RPC의 10,000-block log 조회 제한. mock adapter도 설정된 model version을 반환하도록 수정했다.
 - 최종 검증: Ruff/mypy/TypeScript lint 통과; Python `71 passed, 1 skipped`; Seller `29 passed`; Gateway `33 passed`; Solidity `6 passed`; native replica-set Mongo `1 passed`; dashboard production build 통과; production dependency audit `0 vulnerabilities`; `git diff --check` 통과.
 - 아직 외부 게이트인 항목은 실제 Gemini/Nemotron API 응답, AWS 비용 발생 배포, 공개 배포 전 민감 원문 보존/삭제 정책 재승인, 인증된 대시보드 거래 상세 화면 캡처다.
+
+
+## 2026-09-03 — 감사 대시보드 역할 수정 승인
+
+- 사용자는 개요 화면이 새 구매를 실행하는 곳이 아니라 정상·비정상 거래 결과를 관찰하는 감사 화면이어야 한다고 수정했다.
+- 사용자가 제공한 정적 HTML 시안의 정보 밀도와 어두운 감사 콘솔 구조를 채택하되, 가짜 USDC·거래·보안 점검·이상거래 시뮬레이터는 사용하지 않는다.
+- 개요에서 구매 폼을 제거하고 실제 계정 범위의 PBLC 잔액, 거래, 온체인 해시, 감사 등급, 경고, 연결 상태만 표시한다.
+- 거래 생성 실험은 추후 별도 demonstration runner로 분리한다. 사용자의 “추천 방향으로 진행”을 이 범위 변경과 구현의 승인으로 기록한다.

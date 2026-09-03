@@ -160,8 +160,8 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 | Surface | User stories | Responsibility | User outcome |
 |---|---|---|---|
 | Sign-in | US-01 | SIWE challenge and wallet binding | User enters only records associated with the signed wallet |
-| Overview | US-01, US-09 | Balance, recent purchases, alert summary | User immediately sees account and system health |
-| New request | US-02–US-05 | Prompt, budget, priority, purchase start | User delegates one bounded inference purchase |
+| Overview | US-01, US-09 | Read-only balance, payment, audit, and alert summary | User immediately sees account and evidence health without starting a purchase |
+| Demonstration runner (future) | US-02–US-05 | Prompt, budget, priority, and controlled purchase start | Presenter runs normal and abnormal experiments away from the monitoring dashboard |
 | Transaction list | US-09 | Filterable request/payment/audit summaries | User finds a prior decision quickly |
 | Transaction detail | US-03–US-09 | Evidence comparison and end-to-end timeline | User understands what was chosen, why, paid, delivered, and flagged |
 | Seller reputation | US-03, US-08, US-09 | ERC-8004 identities and objective feedback | User compares seller trust evidence |
@@ -194,7 +194,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 ## 7. Applicable UI States
 
 - **Sign-in:** initial, wallet unavailable, signature pending, authenticated, rejected/expired challenge.
-- **New request:** empty, validation failure, discovery/quote/decision/payment in progress, limit exceeded, recoverable external failure.
+- **Demonstration runner (future):** empty, validation failure, discovery/quote/decision/payment in progress, limit exceeded, recoverable external failure. It is not part of the overview surface.
 - **Transaction list:** loading, empty, populated, stale/degraded, failed with retry.
 - **Transaction detail:** requested, discovered, quoted, decided, payment pending, settled, delivered, audited, and explicit failure states at each boundary.
 - **Seller reputation:** loading, registered with feedback, registered without feedback, identity mismatch, chain unavailable.

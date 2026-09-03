@@ -105,11 +105,13 @@ FastAPI는 에이전트 자체가 아니라 기존 구매·감사 함수를 HTTP
 | Route | 화면 | 주요 API |
 |---|---|---|
 | `/login` | MetaMask SIWE | `POST /auth/siwe/nonce`, `POST /auth/siwe/verify` |
-| `/` | 개요·새 요청 | `GET /wallet`, `POST /purchases`, SSE |
+| `/` | 읽기 전용 감사 개요 | `GET /wallet`, `GET /purchases`, `GET /audit-alerts`, SSE |
 | `/purchases` | 거래 목록 | `GET /purchases` |
 | `/purchases/[purchaseId]` | 판단·결제·응답·감사 상세 | `GET /purchases/{purchaseId}` |
 | `/agents` | ERC-8004 판매자 평판 | `GET /agents` |
 | `/alerts` | 주의·위험 목록 | `GET /audit-alerts` |
+
+개요 화면은 구매를 실행하지 않는다. PBLC 잔액, 실제 계정 범위의 거래·결제 해시, 감사 등급, 경고, RPC/SSE 상태를 모니터링한다. 정상·비정상 거래를 생성하는 시연 도구는 추후 별도 demonstration runner 화면으로 분리하며, 가짜 거래나 가짜 경고를 개요 데이터에 섞지 않는다.
 
 ### 3.2 Buyer Orchestrator
 
