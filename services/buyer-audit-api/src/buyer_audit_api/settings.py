@@ -1,3 +1,5 @@
+from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -15,6 +17,7 @@ class Settings(BaseSettings):
     internal_service_token: str
     admin_service_token: str
     commerce_gateway_url: str = "http://localhost:8081"
+    payment_transfer_method: Literal["permit2", "eip3009"] = "permit2"
     gateway_service_token: str
     base_sepolia_rpc_url: str | None = None
     seller_routes_json: str = (

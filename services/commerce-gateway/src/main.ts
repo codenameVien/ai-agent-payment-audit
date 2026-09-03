@@ -25,7 +25,7 @@ import {
 } from "./adapters/viem-erc8004.js";
 import { ViemEvidenceAnchorContract } from "./adapters/viem-evidence-anchor.js";
 import { ViemReceiptReader } from "./adapters/viem-receipts.js";
-import { LocalDecisionSigner, LocalPermit2Signer } from "./eip712.js";
+import { LocalDecisionSigner, LocalErc3009Signer, LocalPermit2Signer } from "./eip712.js";
 import {
   BASE_SEPOLIA_ERC8004_IDENTITY,
   BASE_SEPOLIA_ERC8004_REPUTATION,
@@ -110,6 +110,7 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
         args: [owner],
       }),
     ),
+    erc3009Signer: new LocalErc3009Signer(privateKey, baseSepolia.id),
     receipts: new ViemReceiptReader(publicClient as PublicClient),
     identityVerifier: erc8004,
     clock: { nowSeconds: () => BigInt(Math.floor(Date.now() / 1000)) },
@@ -146,6 +147,9 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
 export function createCommerceGateway(env: NodeJS.ProcessEnv = process.env): CommerceGateway {
   return createRuntime(env).gateway;
 }
+
+/** User-facing name: Payment Executor. Kept as an alias for API compatibility. */
+export const createPaymentExecutor = createCommerceGateway;
 
 export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env) {
   const runtime = createRuntime(env);
@@ -221,6 +225,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const port = Number(process.env.PORT ?? "8081");
   if (!Number.isSafeInteger(port) || port <= 0) throw new Error("PORT must be positive");
   createCommerceGatewayServer().listen(port, "0.0.0.0", () => {
-    process.stdout.write(`commerce gateway listening on ${port}\n`);
+    process.stdout.write(`payment executor listening on ${port}\n`);
   });
 }

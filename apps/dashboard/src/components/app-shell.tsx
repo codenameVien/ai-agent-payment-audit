@@ -8,18 +8,18 @@ import { Nav } from "./Nav";
 export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) {
   const pathname = usePathname();
 
-  if (pathname.startsWith("/experiments")) {
+  if (pathname.startsWith("/request")) {
     return (
       <>
         <header className="operatorBar">
           <div>
-            <span>Operator tool</span>
-            <strong>Payment Experiment Runner</strong>
+            <span>Purchase surface</span>
+            <strong>Buyer Agent Request</strong>
           </div>
           <Link href="/">감사 대시보드로 돌아가기 →</Link>
         </header>
         {children}
-        <footer>발표·개발용 로컬 실행 도구 · 사용자 감사 대시보드 메뉴에는 노출되지 않습니다.</footer>
+        <footer>구매 요청 전용 화면 · 감사 대시보드와 실행 책임을 분리했습니다.</footer>
       </>
     );
   }

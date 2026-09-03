@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import secrets
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -105,6 +106,8 @@ class PaymentIntent:
     permit2_nonce: str
     state: PaymentIntentState
     claimed_at: datetime
+    transfer_method: Literal["permit2", "eip3009"] = "permit2"
+    authorization_nonce: str | None = None
     decision_authorization_hash: str | None = None
     decision_authorization_signature: str | None = None
     authorized_at: datetime | None = None
@@ -196,9 +199,16 @@ def _required_datetime(value: object, *, field: str) -> datetime:
 
 
 class PaymentService:
-    def __init__(self, *, repository: PaymentRepository, clock: Clock) -> None:
+    def __init__(
+        self,
+        *,
+        repository: PaymentRepository,
+        clock: Clock,
+        transfer_method: Literal["permit2", "eip3009"] = "permit2",
+    ) -> None:
         self._repository = repository
         self._clock = clock
+        self._transfer_method = transfer_method
 
     async def configure_wallet_policy(self, policy: WalletPolicy) -> None:
         await self._repository.put_wallet_policy(policy)
@@ -264,7 +274,7 @@ class PaymentService:
             expected_states=(PaymentIntentState.CLAIMED,),
             event_type=EventType.PAYMENT_AUTHORIZED,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "authorizationHash": authorization_hash,
                 "decisionEventHash": intent.decision_event_hash,
@@ -314,7 +324,7 @@ class PaymentService:
             expected_states=(PaymentIntentState.AUTHORIZED,),
             event_type=EventType.PAYMENT_RECONCILIATION_REQUIRED,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "authorizationHash": intent.decision_authorization_hash,
                 "reason": normalized_reason,
@@ -725,17 +735,25 @@ class PaymentService:
             permit2_nonce=permit2_nonce,
             state=PaymentIntentState.CLAIMED,
             claimed_at=now,
+            transfer_method=self._transfer_method,
+            authorization_nonce=(
+                "0x" + secrets.token_hex(32)
+                if self._transfer_method == "eip3009"
+                else None
+            ),
         )
         return await self._repository.claim_payment_intent(
             intent=intent,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "amountUnits": intent.amount_units,
                 "buyerWalletAddress": intent.buyer_wallet_address,
                 "decisionEventHash": intent.decision_event_hash,
                 "payTo": intent.pay_to,
                 "permit2Nonce": intent.permit2_nonce,
+                "transferMethod": intent.transfer_method,
+                "authorizationNonce": intent.authorization_nonce,
                 "quoteId": intent.quote_id,
                 "token": intent.token,
             },

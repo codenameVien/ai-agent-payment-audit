@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from buyer_audit_api.api.app import create_app
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import EventType
+from buyer_audit_api.core.payment import WalletPolicy
 from buyer_audit_api.core.purchase_service import PurchaseService
 from buyer_audit_api.domains.ai_inference.module import AiInferenceDomainModule
 
@@ -53,19 +54,28 @@ def test_authenticated_fake_domain_purchase_round_trip(container) -> None:
             "buyer_wallet_address": None,
         }
         buyer = Account.create()
-        assert client.put(
-            "/auth/buyer-wallet",
-            json={"buyer_wallet_address": buyer.address},
-        ).status_code == 404
-        assert client.put(
-            "/internal/auth/buyer-wallet",
-            json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
-        ).status_code == 401
-        assert client.put(
-            "/internal/auth/buyer-wallet",
-            headers=INTERNAL_HEADERS,
-            json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
-        ).status_code == 401
+        assert (
+            client.put(
+                "/auth/buyer-wallet",
+                json={"buyer_wallet_address": buyer.address},
+            ).status_code
+            == 404
+        )
+        assert (
+            client.put(
+                "/internal/auth/buyer-wallet",
+                json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
+            ).status_code
+            == 401
+        )
+        assert (
+            client.put(
+                "/internal/auth/buyer-wallet",
+                headers=INTERNAL_HEADERS,
+                json={"owner_address": account.address, "buyer_wallet_address": buyer.address},
+            ).status_code
+            == 401
+        )
         binding = client.put(
             "/internal/auth/buyer-wallet",
             headers=ADMIN_HEADERS,
@@ -128,6 +138,40 @@ def test_unauthenticated_and_unknown_domain_are_rejected(container) -> None:
         assert response.status_code == 422
 
 
+def test_purchase_without_budget_uses_bound_wallet_transaction_limit(container) -> None:
+    app = create_app(container)
+    owner = Account.create()
+    buyer = Account.create()
+    with TestClient(app) as client:
+        authenticate(client, owner)
+        assert (
+            client.put(
+                "/internal/auth/buyer-wallet",
+                headers=ADMIN_HEADERS,
+                json={"owner_address": owner.address, "buyer_wallet_address": buyer.address},
+            ).status_code
+            == 200
+        )
+        asyncio.run(
+            container.repository.put_wallet_policy(
+                WalletPolicy(
+                    buyer_wallet_address=buyer.address.lower(),
+                    policy_date=container.clock.now().date().isoformat(),
+                    token=TOKEN,
+                    per_transaction_limit_units=321_000,
+                    daily_limit_units=1_000_000,
+                )
+            )
+        )
+        created = client.post(
+            "/purchases",
+            json={"domain": "fake", "request": {"value": "optional budget"}},
+        )
+        assert created.status_code == 201
+        events = client.get(f"/purchases/{created.json()['purchase_id']}/events").json()
+        assert events[0]["payload"]["budgetUnits"] == 321_000
+
+
 def test_run_purchase_keeps_gateway_credential_server_side_and_forwards_private_prompt(
     container,
 ) -> None:
@@ -153,9 +197,7 @@ def test_run_purchase_keeps_gateway_credential_server_side_and_forwards_private_
                             "token": TOKEN,
                             "pay_to": SELLER,
                             "available": True,
-                            "expires_at": (
-                                container.clock.now() + timedelta(hours=1)
-                            ).isoformat(),
+                            "expires_at": (container.clock.now() + timedelta(hours=1)).isoformat(),
                             "signer_address": SELLER,
                             "chain_id": 84532,
                             "verifying_contract": CONTRACT,
@@ -546,8 +588,7 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
             json={
                 "erc8004_agent_id": "1",
                 "objective_value": 100,
-                "feedback_hash": "0x"
-                + report.json()["audit_bundle_hash"].split(":")[-1],
+                "feedback_hash": "0x" + report.json()["audit_bundle_hash"].split(":")[-1],
                 "transaction_hash": reputation_tx,
                 "chain_id": 84532,
                 "registry_address": CONTRACT,

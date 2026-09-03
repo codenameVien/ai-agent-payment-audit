@@ -3,6 +3,7 @@ import type {
   PaymentPayload,
   PaymentRequired,
   PaymentRequirements,
+  Erc3009Authorization,
   Permit2Signer,
   Permit2Authorization,
   ResourceInfo,
@@ -17,6 +18,7 @@ export const CANONICAL_PERMIT2 =
 export const EIP2612_GAS_SPONSORING = "eip2612GasSponsoring";
 export const PBLC_TOKEN_NAME = "PBL Agent Credit";
 export const PBLC_TOKEN_VERSION = "1";
+export const PBLC_V2_TOKEN_VERSION = "2";
 
 export class X402BindingError extends Error {
   constructor(message: string) {
@@ -75,7 +77,7 @@ export function selectBoundRequirement(
       item.amount === String(intent.amount_units) &&
       item.asset.toLowerCase() === intent.token.toLowerCase() &&
       item.payTo.toLowerCase() === intent.pay_to.toLowerCase() &&
-      item.extra?.assetTransferMethod === "permit2" &&
+      item.extra?.assetTransferMethod === (intent.transfer_method ?? "permit2") &&
       Number.isSafeInteger(item.maxTimeoutSeconds) &&
       item.maxTimeoutSeconds > 0,
   );
@@ -85,6 +87,45 @@ export function selectBoundRequirement(
     );
   }
   return matches[0]!;
+}
+
+export function createErc3009Authorization(args: {
+  intent: PaymentIntent;
+  validAfter: bigint;
+  validBefore: bigint;
+}): Erc3009Authorization {
+  if (args.intent.transfer_method !== "eip3009") {
+    throw new X402BindingError("payment intent is not ERC-3009");
+  }
+  if (!args.intent.authorization_nonce || !/^0x[0-9a-fA-F]{64}$/.test(args.intent.authorization_nonce)) {
+    throw new X402BindingError("ERC-3009 authorization nonce is missing or malformed");
+  }
+  if (args.validBefore <= args.validAfter) {
+    throw new X402BindingError("ERC-3009 validBefore must be after validAfter");
+  }
+  return {
+    from: args.intent.buyer_wallet_address,
+    to: args.intent.pay_to,
+    value: String(args.intent.amount_units),
+    validAfter: args.validAfter.toString(),
+    validBefore: args.validBefore.toString(),
+    nonce: args.intent.authorization_nonce,
+  };
+}
+
+export function createErc3009PaymentPayload(args: {
+  resource: ResourceInfo;
+  requirement: PaymentRequirements;
+  authorization: Erc3009Authorization;
+  signature: `0x${string}`;
+}): PaymentPayload {
+  return {
+    x402Version: 2,
+    resource: args.resource,
+    accepted: args.requirement,
+    payload: { signature: args.signature, authorization: args.authorization },
+    extensions: {},
+  };
 }
 
 export function createPermit2Authorization(args: {

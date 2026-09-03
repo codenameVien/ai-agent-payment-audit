@@ -36,6 +36,8 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         left.token.lower(),
         left.pay_to.lower(),
         left.permit2_nonce,
+        left.transfer_method,
+        left.authorization_nonce,
     ) == (
         right.purchase_id,
         right.buyer_wallet_address.lower(),
@@ -46,6 +48,8 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         right.token.lower(),
         right.pay_to.lower(),
         right.permit2_nonce,
+        right.transfer_method,
+        right.authorization_nonce,
     )
 
 
@@ -415,6 +419,8 @@ class InMemoryEvidenceRepository:
                 "token",
                 "pay_to",
                 "permit2_nonce",
+                "transfer_method",
+                "authorization_nonce",
                 "claimed_at",
             )
             if any(

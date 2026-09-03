@@ -1,5 +1,14 @@
 # AI-DLC Audit Log
 
+## 2026-09-04 — ERC-3009 local implementation reached deployment approval gate
+
+- Preserved PBLC V1, Permit2 runtime default, successful transaction `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`, and incomplete purchase `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b` without mutation.
+- Added `/request`, read-only `/` and `/dashboard`, and a data-neutral `/experiments` redirect. The pending legacy localStorage key remains readable.
+- Added user-facing Buyer Agent/Payment Executor/Audit Evidence API and Buyer/Seller SDK Wrapper boundaries while preserving internal compatibility names.
+- Added PBLC V2 ERC-3009 contract and exact EVM payload path behind `PAYMENT_TRANSFER_METHOD`; default remains `permit2`.
+- Local plan only: predicted PBLC V2 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`; deployer `0x5B2BC76a3e4DeA700309FD9D746180162bcAbec8`; holder/buyer `0xa45Cd1a41E1e548e2daB0123E7Cb4E3dB964cdaB`; estimated gas `848512`; estimated max fee `0.000005939584 ETH`; smoke `0.1 PBLC`. No transaction was sent.
+- Deployment and real x402 verify/settle remain blocked until the user explicitly approves these values.
+
 ## 2026-09-04 — Request boundary and ERC-3009 migration revision approved
 
 - User explicitly directed a material revision and ordered design → impact → implementation → tests → architecture update.

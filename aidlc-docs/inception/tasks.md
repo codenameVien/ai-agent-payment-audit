@@ -116,7 +116,7 @@ flowchart LR
 
 ## Phase 5 — 승인된 요청 경계와 PBLC V2 ERC-3009 병렬 전환
 
-- [ ] **5.1 `/request`와 읽기 전용 감사 대시보드, Buyer/Wrapper/Evidence 용어를 일치시킨다**
+- [x] **5.1 `/request`와 읽기 전용 감사 대시보드, Buyer/Wrapper/Evidence 용어를 일치시킨다**
   - `/request`에 prompt, optional PBLC budget, priority, explicit testnet acknowledgement, pending `purchaseId` 재개를 구현한다.
   - `/`, `/dashboard`에는 조회만 남기고 `/experiments`는 데이터 변경 없이 `/request`로 리다이렉트한다.
   - 사용자 문서·화면·구조도는 `Audit Evidence API`, `Payment Executor`, Buyer/Seller SDK Wrapper를 사용한다. 내부 클래스/패키지 호환 이름은 유지한다.
@@ -124,7 +124,7 @@ flowchart LR
   - 선택 감사가 priority/weights, 재계산한 hard filter, 최고 eligible score, winner, generated explanation을 검증하게 한다.
   - **Done when:** route/static tests와 audit adversarial tests가 통과하고 dashboard route에서 구매/실험 action이 검출되지 않는다.
 
-- [ ] **5.2 PBLC V2 ERC-3009와 x402 exact 병렬 경로를 배포 직전까지 구현한다**
+- [x] **5.2 PBLC V2 ERC-3009와 x402 exact 병렬 경로를 배포 직전까지 구현한다**
   - 기존 `DemoToken.sol`과 Permit2 runtime/default를 보존하고 별도 `DemoTokenV2.sol`을 추가한다.
   - EIP-712 `transferWithAuthorization`, random bytes32 nonce, `authorizationState`, time window, low-s/v, `AuthorizationUsed`를 구현한다.
   - 정상/오서명/만료/not-yet-valid/replay/잔액 부족 계약 테스트를 작성한다.

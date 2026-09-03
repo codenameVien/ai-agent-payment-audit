@@ -4,6 +4,7 @@ import type {
   Clock,
   DecisionAuthorization,
   DecisionSigner,
+  Erc3009Signer,
   EvidenceApi,
   PaymentIntent,
   PaymentExecutionResult,
@@ -17,6 +18,10 @@ import type {
 import { digestToBytes32 } from "./digest.js";
 import {
   BASE_SEPOLIA_NETWORK,
+  PBLC_TOKEN_NAME,
+  PBLC_V2_TOKEN_VERSION,
+  createErc3009Authorization,
+  createErc3009PaymentPayload,
   createEip2612GasSponsoringPayloadExtension,
   createPaymentPayload,
   createPermit2Authorization,
@@ -47,6 +52,7 @@ export class CommerceGateway {
   readonly #seller: SellerClient;
   readonly #decisionSigner: DecisionSigner;
   readonly #permit2Signer: Permit2Signer;
+  readonly #erc3009Signer?: Erc3009Signer;
   readonly #receipts: ReceiptReader;
   readonly #identityVerifier: QuoteIdentityVerifier;
   readonly #clock: Clock;
@@ -56,6 +62,7 @@ export class CommerceGateway {
     seller: SellerClient;
     decisionSigner: DecisionSigner;
     permit2Signer: Permit2Signer;
+    erc3009Signer?: Erc3009Signer;
     receipts: ReceiptReader;
     identityVerifier: QuoteIdentityVerifier;
     clock: Clock;
@@ -64,6 +71,7 @@ export class CommerceGateway {
     this.#seller = args.seller;
     this.#decisionSigner = args.decisionSigner;
     this.#permit2Signer = args.permit2Signer;
+    this.#erc3009Signer = args.erc3009Signer;
     this.#receipts = args.receipts;
     this.#identityVerifier = args.identityVerifier;
     this.#clock = args.clock;
@@ -115,16 +123,34 @@ export class CommerceGateway {
     const required = decodePaymentRequired(challenge.paymentRequired);
     const requirement = selectBoundRequirement(required, intent);
 
-    const decision: DecisionAuthorization = {
+    const commonDecision = {
       purchaseId,
       decisionEventHash: evidenceHashToBytes32(intent.decision_event_hash),
       quoteId: intent.quote_id,
       amount: BigInt(intent.amount_units),
       token: intent.token,
       payTo: intent.pay_to,
-      permit2Nonce: BigInt(intent.permit2_nonce),
     };
-    const signedDecision = await this.#decisionSigner.sign(decision);
+    let signedDecision;
+    if (intent.transfer_method === "eip3009") {
+      if (
+        this.#decisionSigner.signErc3009 === undefined ||
+        intent.authorization_nonce === undefined ||
+        intent.authorization_nonce === null
+      ) {
+        throw new CommerceGatewayError("ERC-3009 decision signer or nonce is unavailable");
+      }
+      signedDecision = await this.#decisionSigner.signErc3009({
+        ...commonDecision,
+        authorizationNonce: intent.authorization_nonce,
+      });
+    } else {
+      const decision: DecisionAuthorization = {
+        ...commonDecision,
+        permit2Nonce: BigInt(intent.permit2_nonce),
+      };
+      signedDecision = await this.#decisionSigner.sign(decision);
+    }
     if (intent.state === "CLAIMED") {
       await this.#evidence.authorize({
         purchaseId,
@@ -142,25 +168,45 @@ export class CommerceGateway {
     const quoteDeadline = BigInt(Math.floor(Date.parse(view.quote.expires_at) / 1000));
     const timeoutDeadline = validAfter + BigInt(requirement.maxTimeoutSeconds);
     const deadline = quoteDeadline < timeoutDeadline ? quoteDeadline : timeoutDeadline;
-    const permit2Authorization = createPermit2Authorization({
-      intent,
-      validAfter,
-      deadline,
-    });
-    const permitSignature = await this.#permit2Signer.sign(permit2Authorization);
-    const paymentExtensions = await createEip2612GasSponsoringPayloadExtension({
-      declaredExtensions: required.extensions,
-      requirement,
-      authorization: permit2Authorization,
-      signer: this.#permit2Signer,
-    });
-    const payload = createPaymentPayload({
-      resource: required.resource,
-      requirement,
-      authorization: permit2Authorization,
-      signature: permitSignature,
-      extensions: paymentExtensions,
-    });
+    let payload;
+    if (intent.transfer_method === "eip3009") {
+      if (this.#erc3009Signer === undefined) {
+        throw new CommerceGatewayError("ERC-3009 signer is unavailable");
+      }
+      const authorization = createErc3009Authorization({
+        intent,
+        validAfter,
+        validBefore: deadline,
+      });
+      const signature = await this.#erc3009Signer.sign({
+        token: intent.token,
+        tokenName: String(requirement.extra?.name ?? PBLC_TOKEN_NAME),
+        tokenVersion: String(requirement.extra?.version ?? PBLC_V2_TOKEN_VERSION),
+        authorization,
+      });
+      payload = createErc3009PaymentPayload({
+        resource: required.resource,
+        requirement,
+        authorization,
+        signature,
+      });
+    } else {
+      const permit2Authorization = createPermit2Authorization({ intent, validAfter, deadline });
+      const permitSignature = await this.#permit2Signer.sign(permit2Authorization);
+      const paymentExtensions = await createEip2612GasSponsoringPayloadExtension({
+        declaredExtensions: required.extensions,
+        requirement,
+        authorization: permit2Authorization,
+        signer: this.#permit2Signer,
+      });
+      payload = createPaymentPayload({
+        resource: required.resource,
+        requirement,
+        authorization: permit2Authorization,
+        signature: permitSignature,
+        extensions: paymentExtensions,
+      });
+    }
     const paid = await this.#seller.request({
       purchaseId,
       quoteId: intent.quote_id,
@@ -370,6 +416,22 @@ export class CommerceGateway {
         "independent receipt lacks one exact ERC-20 Transfer",
         transactionHash,
       );
+    }
+    if (intent.transfer_method === "eip3009") {
+      const authorizations = (receipt.authorizations ?? []).filter(
+        (authorization) =>
+          authorization.token.toLowerCase() === intent.token.toLowerCase() &&
+          authorization.authorizer.toLowerCase() ===
+            intent.buyer_wallet_address.toLowerCase() &&
+          authorization.nonce.toLowerCase() === intent.authorization_nonce?.toLowerCase(),
+      );
+      if (authorizations.length !== 1) {
+        return this.#evidence.reconciliation(
+          purchaseId,
+          "independent receipt lacks one matching AuthorizationUsed event",
+          transactionHash,
+        );
+      }
     }
     const transfer = matches[0]!;
     return this.#evidence.settle({

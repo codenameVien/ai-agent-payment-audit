@@ -332,7 +332,7 @@ test("one purchase binds decision, x402 Permit2 payload and exact Transfer", asy
   assert.equal(permitSigner.authorization?.nonce, "123456789");
   assert.equal(seller.paymentPayload?.x402Version, 2);
   assert.equal(
-    seller.paymentPayload?.payload.permit2Authorization.permitted.amount,
+    seller.paymentPayload?.payload.permit2Authorization?.permitted.amount,
     "100000",
   );
 });

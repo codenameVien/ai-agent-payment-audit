@@ -47,6 +47,8 @@ export interface PaymentIntent {
   token: Address;
   pay_to: Address;
   permit2_nonce: string;
+  transfer_method?: "permit2" | "eip3009";
+  authorization_nonce?: Hex | null;
   state: PaymentIntentState;
   claimed_at: string;
   decision_authorization_hash?: Hex | null;
@@ -86,13 +88,23 @@ export interface Permit2Authorization {
   witness: { to: Address; validAfter: string };
 }
 
+export interface Erc3009Authorization {
+  from: Address;
+  to: Address;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: Hex;
+}
+
 export interface PaymentPayload {
   x402Version: 2;
   resource: ResourceInfo;
   accepted: PaymentRequirements;
   payload: {
     signature: Hex;
-    permit2Authorization: Permit2Authorization;
+    permit2Authorization?: Permit2Authorization;
+    authorization?: Erc3009Authorization;
   };
   extensions: Record<string, unknown>;
 }
@@ -114,6 +126,16 @@ export interface DecisionAuthorization {
   token: Address;
   payTo: Address;
   permit2Nonce: bigint;
+}
+
+export interface Erc3009DecisionAuthorization {
+  purchaseId: string;
+  decisionEventHash: Hex;
+  quoteId: string;
+  amount: bigint;
+  token: Address;
+  payTo: Address;
+  authorizationNonce: Hex;
 }
 
 export interface EvidenceApi {
@@ -187,6 +209,9 @@ export interface StagedDelivery {
 
 export interface DecisionSigner {
   sign(message: DecisionAuthorization): Promise<{ hash: Hex; signature: Hex }>;
+  signErc3009?(
+    message: Erc3009DecisionAuthorization,
+  ): Promise<{ hash: Hex; signature: Hex }>;
 }
 
 export interface Permit2Signer {
@@ -196,6 +221,15 @@ export interface Permit2Signer {
     tokenName: string;
     tokenVersion: string;
   }): Promise<Eip2612GasSponsoringInfo>;
+}
+
+export interface Erc3009Signer {
+  sign(args: {
+    token: Address;
+    tokenName: string;
+    tokenVersion: string;
+    authorization: Erc3009Authorization;
+  }): Promise<Hex>;
 }
 
 export interface Eip2612GasSponsoringInfo {
@@ -240,6 +274,12 @@ export interface ReceiptProof {
     from: Address;
     to: Address;
     amount: bigint;
+    logIndex: number;
+  }>;
+  authorizations?: Array<{
+    token: Address;
+    authorizer: Address;
+    nonce: Hex;
     logIndex: number;
   }>;
 }

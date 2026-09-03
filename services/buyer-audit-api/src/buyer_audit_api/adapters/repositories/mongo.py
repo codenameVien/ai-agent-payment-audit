@@ -129,6 +129,8 @@ def _payment_intent_document(intent: PaymentIntent) -> dict[str, Any]:
         "token": intent.token,
         "payTo": intent.pay_to,
         "permit2Nonce": intent.permit2_nonce,
+        "transferMethod": intent.transfer_method,
+        "authorizationNonce": intent.authorization_nonce,
         "state": intent.state.value,
         "claimedAt": intent.claimed_at,
         "decisionAuthorizationHash": intent.decision_authorization_hash,
@@ -157,6 +159,10 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         permit2_nonce=str(document["permit2Nonce"]),
         state=PaymentIntentState(str(document["state"])),
         claimed_at=cast(datetime, document["claimedAt"]),
+        transfer_method=cast(
+            Literal["permit2", "eip3009"], document.get("transferMethod", "permit2")
+        ),
+        authorization_nonce=cast(str | None, document.get("authorizationNonce")),
         decision_authorization_hash=cast(
             str | None, document.get("decisionAuthorizationHash")
         ),
@@ -227,6 +233,8 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         and left.token == right.token
         and left.pay_to == right.pay_to
         and left.permit2_nonce == right.permit2_nonce
+        and left.transfer_method == right.transfer_method
+        and left.authorization_nonce == right.authorization_nonce
     )
 
 
@@ -791,6 +799,8 @@ class MongoEvidenceRepository:
             "token",
             "pay_to",
             "permit2_nonce",
+            "transfer_method",
+            "authorization_nonce",
             "claimed_at",
         )
         async with self._client.start_session() as session:

@@ -68,6 +68,19 @@
   - [x] canonical `pbl_audit`에 결제·전달·감사 증거를 연결하고 읽기 전용 개요·상세에 자동 반영
   - [x] Base Sepolia receipt/Transfer, PBLC 잔액 변화, MongoDB 10-event hash chain 교차 검증
 
+- [x] **5.1 구매 요청·감사 조회 경계 개편**
+  - [x] `/request`에 요청·선택 예산·우선순위·명시적 결제 확인·동일 purchase 재개 구현
+  - [x] `/`와 `/dashboard`를 읽기 전용으로 유지하고 `/experiments`를 `/request`로 리다이렉트
+  - [x] Buyer Agent, Buyer/Seller SDK Wrapper, Payment Executor, Audit Evidence API 용어와 책임 갱신
+  - [x] priority/weights/최고 점수/설명 일치 감사 규칙 추가
+
+- [x] **5.2 PBLC V2 ERC-3009 로컬 병렬 경로**
+  - [x] 별도 비업그레이드 `DemoTokenV2`와 정상·오서명·시간·replay·잔액 부족 테스트
+  - [x] seller 402, Payment Executor 서명/payload, Mongo nonce, Transfer+AuthorizationUsed 검증
+  - [x] 기존 Permit2 기본값·실거래·미완결 기록 보존
+  - [x] 배포 전 예상 주소·가스만 계산하는 승인 차단 스크립트
+  - [ ] 사용자 승인 후 PBLC V2 배포와 0.1 PBLC verify/settle/replay 실거래
+
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결

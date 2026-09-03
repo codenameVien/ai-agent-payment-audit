@@ -6,7 +6,8 @@
 - **UI mockup checkpoint:** Approved on 2026-09-02
 - **Design:** Approved on 2026-09-02; revised 2026-09-04 for `/request`, Buyer Agent ownership, SDK Wrappers, Audit Evidence API, and PBLC V2 ERC-3009
 - **Tasks:** Original phases approved on 2026-09-02; migration packet added by explicit user direction on 2026-09-04
-- **Construction:** Existing Permit2 path and canonical real/incomplete records preserved; migration implementation pending
+- **Construction:** Local `/request`, audit boundary, PBLC V2, x402 ERC-3009 strategy and tests complete; Permit2 remains active
+- **External gate:** PBLC V2 deployment and 0.1 PBLC smoke require explicit user approval
 - **Integration:** working branch `feature/erc3009-request-boundary` from `2e79ba0`
 - **Remote:** `git@github.com:codenameVien/ai-agent-payment-audit.git` (private personal repository)
 - **Last updated:** 2026-09-04

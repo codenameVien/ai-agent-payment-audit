@@ -27,12 +27,12 @@ Implemented locally:
 - `/health`, `/internal/quotes`, and x402-gated `/v1/inference` transport shell
 - Authenticated `/purchases/{id}/run` orchestration across decision, payment, delivery, and audit
 - Durable seller `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` journal with restart recovery and at-most-once provider attempts
-- Gas-sponsored x402 Permit2 payments using exact-amount EIP-2612 permits on the project-issued PBLC token, without buyer-funded approvals
+- A parallel PBLC V2 x402 v2 `exact + eip3009` path while preserving the proven PBLC EIP-2612/Permit2 route and records
 - Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
 - Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
 - Objective ERC-8004 reputation and confirmed external evidence anchors
 - Read-only Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
-- `/experiments` operator runner outside the user-dashboard navigation and shell, with a fixed `0.1 PBLC` cap, explicit acknowledgement, and cross-tab duplicate-run protection
+- A separate `/request` purchase surface and read-only `/`/`/dashboard`; legacy `/experiments` redirects without mutating records
 - MongoDB/API/dashboard/two sellers/Gateway Compose plus a cost-disabled AWS Terraform handoff
 - Hidden local handoff scripts for seller-wallet and external provider keys
 
@@ -42,16 +42,21 @@ Live Base Sepolia x402 payment, ERC-8004 feedback, and EvidenceAnchor evidence i
 
 ```mermaid
 flowchart LR
-  UI[Next.js dashboard] --> API[FastAPI Buyer/Audit API]
-  BUYER[Buyer Agent] --> API
-  API <--> MONGO[(MongoDB evidence + encrypted payload)]
-  BUYER --> GATEWAY[Commerce Gateway]
-  GATEWAY --> SELLER[Provider Seller Agent]
-  SELLER --> FACILITATOR[x402 Facilitator]
-  GATEWAY --> CHAIN[Base Sepolia ERC-20 / Permit2]
-  GATEWAY --> ERC8004[ERC-8004 identity / reputation]
-  GATEWAY --> ANCHOR[EvidenceAnchor]
-  DOMAIN[domains/features/ai-inference] -. adapter .-> API
+  U[User] --> R[Purchase request /request]
+  U --> D[Read-only audit dashboard]
+  R --> B[Buyer Agent]
+  B --> BW[Buyer SDK Wrapper]
+  BW --> P[Payment Executor - isolated process]
+  BW --> S[Seller Agent]
+  S --> SW[Seller SDK Wrapper]
+  BW --> E[Audit Evidence API]
+  P --> E
+  S --> E
+  E --> M[(MongoDB)]
+  P --> F[x402 Facilitator]
+  F --> C[Base Sepolia PBLC V2 ERC-3009 target]
+  P -. independent RPC .-> C
+  D --> E
 ```
 
 `core/` cannot import `domains/ai_inference/`, Gemini, or Nemotron. A future purchase domain connects through domain ports, schemas, a seller adapter, and a UI renderer without changing the core.
@@ -68,8 +73,8 @@ npm run test:mongo:local
 
 To run the API, generate local internal keys in a separate terminal. Never paste them into chat.
 
-After sign-in, the overview only reads evidence. Start a real normal-path transaction from
-`/experiments` after acknowledging the Base Sepolia payment. With the default
+After sign-in, `/` and `/dashboard` only read evidence. Start a purchase from
+`/request` after acknowledging the Base Sepolia payment; `/experiments` redirects there. With the default
 `PROVIDER_MODE=mock`, payment, chain verification, and audit evidence are real while the AI
 response body comes from the mock provider.
 
@@ -100,11 +105,11 @@ python3 scripts/input_provider_keys.py
 Evidence from the current build:
 
 ```text
-71 passed, 1 skipped  # Python; native Mongo is isolated by default
-29 passed             # Seller Service
-33 passed             # Commerce Gateway
-6 passed              # Solidity Foundry
-3 passed              # Dashboard runner safety
+74 passed, 1 skipped  # Python; native Mongo is isolated by default
+30 passed             # Seller Service
+35 passed             # Payment Executor (internal package: commerce-gateway)
+11 passed             # Solidity Foundry
+3 passed              # Dashboard request/read-only boundary
 1 passed              # Native MongoDB replica-set integration
 Success: no issues found in 43 source files  # strict mypy
 ```
@@ -118,7 +123,7 @@ After SIWE authentication, a fake-domain purchase stores only normalized data an
 - RFC 8785 plus SHA-256 provides deterministic JSON evidence hashes.
 - AES-256-GCM envelope encryption provides per-payload data keys and an AWS KMS seam.
 - SIWE separates user ownership via MetaMask from the autonomous buyer wallet.
-- Project-issued PBLC plus EIP-2612 and x402 Permit2 avoids token faucets and lets the Facilitator sponsor buyer payment approval gas.
+- PBLC V2 plus ERC-3009 is the target exact gasless path; the proven Permit2 route remains active until the real smoke succeeds.
 - ERC-8004 provides provider-level seller-agent identity and objective payment reputation.
 - Next.js separates the reusable audit shell from domain-specific renderers.
 

@@ -146,6 +146,128 @@ async def test_concurrent_claim_is_atomic_idempotent_and_domain_neutral(clock) -
 
 
 @pytest.mark.asyncio
+async def test_erc3009_claim_uses_one_random_bytes32_nonce_and_preserves_idempotency(clock) -> None:
+    repository = InMemoryEvidenceRepository()
+    await seed_payment_ready(repository, clock, purchase_id="purchase-erc3009")
+    await configure_policy(repository, clock)
+    service = PaymentService(repository=repository, clock=clock, transfer_method="eip3009")
+
+    first, second = await asyncio.gather(
+        service.claim("purchase-erc3009"), service.claim("purchase-erc3009")
+    )
+
+    assert first == second
+    assert first.transfer_method == "eip3009"
+    assert first.authorization_nonce is not None
+    assert len(first.authorization_nonce) == 66
+    assert first.authorization_nonce.startswith("0x")
+    int(first.authorization_nonce[2:], 16)
+    events = await repository.list_events("purchase-erc3009")
+    assert events[-1].payload["transferMethod"] == "eip3009"
+    assert events[-1].payload["authorizationNonce"] == first.authorization_nonce
+
+
+@pytest.mark.asyncio
+async def test_ai_selection_audit_detects_filter_score_and_explanation_mismatch(clock) -> None:
+    repository = InMemoryEvidenceRepository()
+    await repository.append_event(
+        purchase_id="purchase-bad-selection",
+        event_type=EventType.REQUESTED,
+        occurred_at=clock.now(),
+        actor={"id": OWNER, "type": "user"},
+        payload={
+            "domain": "ai_inference",
+            "budgetUnits": 100_000,
+            "policy": {},
+            "normalizedRequest": {
+                "priority": "price",
+                "allowed_sellers": [],
+                "required_capabilities": [],
+                "min_input_limit": 1,
+                "min_output_limit": 1,
+                "max_latency_ms": None,
+            },
+        },
+    )
+    quoted = await repository.append_event(
+        purchase_id="purchase-bad-selection",
+        event_type=EventType.QUOTED,
+        occurred_at=clock.now(),
+        actor={"id": "buyer-agent", "type": "agent"},
+        payload={
+            "signedQuotes": [
+                {
+                    "quote_id": "over-budget",
+                    "provider_id": "gemini",
+                    "model_id": "m",
+                    "model_version": "v1",
+                    "amount_units": 200_000,
+                    "available": True,
+                    "expires_at": (clock.now() + timedelta(hours=1)).isoformat(),
+                    "input_limit": 1,
+                    "output_limit": 1,
+                    "expected_latency_ms": 1,
+                }
+            ],
+            "benchmarkSnapshots": [
+                {
+                    "snapshot_id": "snapshot-1",
+                    "provider_id": "gemini",
+                    "model_id": "m",
+                    "model_version": "v1",
+                    "observed_at": clock.now().isoformat(),
+                    "capabilities": [],
+                }
+            ],
+            "quoteIdentityEvidence": [
+                {
+                    "quoteId": "over-budget",
+                    "identityVerified": True,
+                }
+            ],
+        },
+    )
+    await repository.append_event(
+        purchase_id="purchase-bad-selection",
+        event_type=EventType.DECIDED,
+        occurred_at=clock.now(),
+        actor={"id": "buyer-agent", "type": "agent"},
+        payload={
+            "preset": "quality",
+            "winner": {
+                "quote_id": "over-budget",
+                "provider_id": "gemini",
+                "model_id": "m",
+                "total_score": 1,
+            },
+            "eligible": [
+                {
+                    "quote_id": "over-budget",
+                    "provider_id": "gemini",
+                    "model_id": "m",
+                    "total_score": 99,
+                    "weights": {"quality": 100},
+                }
+            ],
+            "rejected": [],
+            "generatedExplanation": "unrelated",
+        },
+        expected_event_count=quoted.sequence,
+        expected_head_event_hash=quoted.event_hash,
+    )
+
+    report = await AuditService(repository=repository, clock=clock).audit("purchase-bad-selection")
+    codes = {finding.code for finding in report.findings}
+    assert {
+        "AUD-PRIORITY-PRESET-MISMATCH",
+        "AUD-SELECTION-WEIGHTS-MISMATCH",
+        "AUD-INFERIOR-CANDIDATE-SELECTED",
+        "AUD-EXPLANATION-SELECTION-MISMATCH",
+        "AUD-HARD-FILTER-MISMATCH",
+    }.issubset(codes)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("budget_units", "request_limit", "wallet_limit", "match"),
     [

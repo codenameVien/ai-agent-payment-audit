@@ -23,6 +23,8 @@
     "chain:deploy": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs deploy",
     "chain:recover": "forge build --root infra/contracts && node scripts/base_sepolia_setup.mjs recover",
     "chain:fund-buyer-gas": "node scripts/base_sepolia_setup.mjs fund-buyer-gas",
+    "chain:v2:plan": "forge build --root infra/contracts && node scripts/pblc_v2_setup.mjs plan",
+    "chain:v2:deploy": "forge build --root infra/contracts && node scripts/pblc_v2_setup.mjs deploy",
     "erc8004:status": "node scripts/erc8004_setup.mjs status",
     "erc8004:register": "node scripts/erc8004_setup.mjs register",
     "smoke:x402": "uv run --project services/buyer-audit-api python scripts/run_x402_smoke.py"
