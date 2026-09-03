@@ -62,6 +62,12 @@
   - [x] 제공 시안의 고밀도 감사 콘솔 구조를 현재 상세 화면과 반응형 UI에 적용
   - [x] production build와 실행 중인 로컬 HTTP 응답 검증 (인증 계정 거래 화면 캡처는 외부 게이트 유지)
 
+- [ ] **4.3 분리된 정상 거래 실험 실행기**
+  - [ ] `/experiments`에서 실제 결제 고지·확인 후 고정 `0.1 PBLC` 정상 거래 한 건만 실행
+  - [ ] 요청 생성 뒤 `purchaseId`를 유지하고 실행 중 중복 제출 차단
+  - [ ] canonical `pbl_audit`에 결제·전달·감사 증거를 연결하고 읽기 전용 개요·상세에 자동 반영
+  - [ ] Base Sepolia receipt/Transfer, PBLC 잔액 변화, MongoDB hash chain을 교차 검증
+
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결

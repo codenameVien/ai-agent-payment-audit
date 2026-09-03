@@ -31,7 +31,8 @@ Implemented locally:
 - Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
 - Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
 - Objective ERC-8004 reputation and confirmed external evidence anchors
-- Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
+- Read-only Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
+- Separate `/experiments` normal-transaction runner with a fixed `0.1 PBLC` cap, explicit acknowledgement, and duplicate-run protection
 - MongoDB/API/dashboard/two sellers/Gateway Compose plus a cost-disabled AWS Terraform handoff
 - Hidden local handoff scripts for seller-wallet and external provider keys
 
@@ -66,6 +67,11 @@ npm run test:mongo:local
 ```
 
 To run the API, generate local internal keys in a separate terminal. Never paste them into chat.
+
+After sign-in, the overview only reads evidence. Start a real normal-path transaction from
+`/experiments` after acknowledging the Base Sepolia payment. With the default
+`PROVIDER_MODE=mock`, payment, chain verification, and audit evidence are real while the AI
+response body comes from the mock provider.
 
 Public Base Sepolia addresses, balances, and x402 testnet Facilitator support can be checked without exposing keys.
 
