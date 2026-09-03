@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import hashlib
+import secrets
 from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum
@@ -102,9 +102,11 @@ class PaymentIntent:
     amount_units: int
     token: str
     pay_to: str
-    permit2_nonce: str
+    permit2_nonce: str | None
     state: PaymentIntentState
     claimed_at: datetime
+    transfer_method: Literal["permit2", "eip3009"] = "eip3009"
+    authorization_nonce: str | None = None
     decision_authorization_hash: str | None = None
     decision_authorization_signature: str | None = None
     authorized_at: datetime | None = None
@@ -127,10 +129,12 @@ class PaymentRepository(Protocol):
     async def put_wallet_policy(self, policy: WalletPolicy) -> None: ...
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None: ...
 
-    async def get_latest_wallet_policy(self, buyer_wallet_address: str) -> WalletPolicy | None: ...
+    async def get_latest_wallet_policy(
+        self, buyer_wallet_address: str, *, max_policy_date: str | None = None
+    ) -> WalletPolicy | None: ...
 
     async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None: ...
 
@@ -196,7 +200,12 @@ def _required_datetime(value: object, *, field: str) -> datetime:
 
 
 class PaymentService:
-    def __init__(self, *, repository: PaymentRepository, clock: Clock) -> None:
+    def __init__(
+        self,
+        *,
+        repository: PaymentRepository,
+        clock: Clock,
+    ) -> None:
         self._repository = repository
         self._clock = clock
 
@@ -204,18 +213,22 @@ class PaymentService:
         await self._repository.put_wallet_policy(policy)
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None:
         return await self._repository.get_wallet_policy(
             buyer_wallet_address=buyer_wallet_address,
             policy_date=policy_date,
+            token=token,
         )
 
     async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None:
         return await self._repository.get_payment_intent(purchase_id)
 
     async def get_latest_wallet_policy(self, buyer_wallet_address: str) -> WalletPolicy | None:
-        return await self._repository.get_latest_wallet_policy(buyer_wallet_address)
+        return await self._repository.get_latest_wallet_policy(
+            buyer_wallet_address,
+            max_policy_date=self._clock.now().date().isoformat(),
+        )
 
     async def _transition_context(self, purchase_id: str) -> tuple[PaymentIntent, int, str]:
         intent = await self._repository.get_payment_intent(purchase_id)
@@ -264,11 +277,11 @@ class PaymentService:
             expected_states=(PaymentIntentState.CLAIMED,),
             event_type=EventType.PAYMENT_AUTHORIZED,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "authorizationHash": authorization_hash,
+                "authorizationNonce": intent.authorization_nonce,
                 "decisionEventHash": intent.decision_event_hash,
-                "permit2Nonce": intent.permit2_nonce,
                 "quoteId": intent.quote_id,
                 "signatureHash": sha256_bytes(signature.encode("utf-8")),
             },
@@ -314,7 +327,7 @@ class PaymentService:
             expected_states=(PaymentIntentState.AUTHORIZED,),
             event_type=EventType.PAYMENT_RECONCILIATION_REQUIRED,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "authorizationHash": intent.decision_authorization_hash,
                 "reason": normalized_reason,
@@ -676,8 +689,6 @@ class PaymentService:
 
     async def claim(self, purchase_id: str) -> PaymentIntent:
         view = await self.load_payment_view(purchase_id)
-        nonce_material = f"{purchase_id}:{view.quote.quote_id}".encode()
-        permit2_nonce = str(int.from_bytes(hashlib.sha256(nonce_material).digest(), "big"))
         existing = await self._repository.get_payment_intent(purchase_id)
         if existing is not None:
             immutable_binding = (
@@ -688,7 +699,6 @@ class PaymentService:
                 existing.amount_units,
                 existing.token,
                 existing.pay_to,
-                existing.permit2_nonce,
             )
             current_binding = (
                 purchase_id,
@@ -698,7 +708,6 @@ class PaymentService:
                 view.quote.amount_units,
                 view.quote.token,
                 view.quote.pay_to,
-                permit2_nonce,
             )
             if immutable_binding != current_binding:
                 raise PaymentConflictError("payment intent immutable binding changed")
@@ -722,20 +731,23 @@ class PaymentService:
             amount_units=view.quote.amount_units,
             token=view.quote.token,
             pay_to=view.quote.pay_to,
-            permit2_nonce=permit2_nonce,
+            permit2_nonce=None,
             state=PaymentIntentState.CLAIMED,
             claimed_at=now,
+            transfer_method="eip3009",
+            authorization_nonce="0x" + secrets.token_hex(32),
         )
         return await self._repository.claim_payment_intent(
             intent=intent,
             occurred_at=now,
-            actor={"id": "commerce-gateway", "type": "service"},
+            actor={"id": "payment-executor", "type": "service"},
             payload={
                 "amountUnits": intent.amount_units,
                 "buyerWalletAddress": intent.buyer_wallet_address,
                 "decisionEventHash": intent.decision_event_hash,
                 "payTo": intent.pay_to,
-                "permit2Nonce": intent.permit2_nonce,
+                "transferMethod": intent.transfer_method,
+                "authorizationNonce": intent.authorization_nonce,
                 "quoteId": intent.quote_id,
                 "token": intent.token,
             },

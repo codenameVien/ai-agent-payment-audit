@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { QuoteRequest, SignedSellerQuote } from "../src/contracts.js";
 import { SellerHttpTransport } from "../src/http.js";
-import { FacilitatorPaymentGate, Permit2ChallengeProvider } from "../src/x402.js";
+import { ExactEvmChallengeProvider, FacilitatorPaymentGate } from "../src/x402.js";
 
 const fakeApplication = {
   async quote(request: QuoteRequest): Promise<SignedSellerQuote> {
@@ -137,7 +137,7 @@ test("internal quote rejects unknown and malformed optional fields", async () =>
 });
 
 test("inference remains behind an x402 payment gate", async () => {
-  const challenge = new Permit2ChallengeProvider(
+  const challenge = new ExactEvmChallengeProvider(
     {
       async read() {
         return {
@@ -173,10 +173,10 @@ test("inference remains behind an x402 payment gate", async () => {
   assert.equal(required.x402Version, 2);
   assert.equal(required.accepts[0].network, "eip155:84532");
   assert.equal(required.accepts[0].amount, "100000");
-  assert.equal(required.accepts[0].extra.assetTransferMethod, "permit2");
+  assert.equal(required.accepts[0].extra.assetTransferMethod, "eip3009");
   assert.equal(required.accepts[0].extra.name, "PBL Agent Credit");
-  assert.equal(required.accepts[0].extra.version, "1");
-  assert.equal(required.extensions.eip2612GasSponsoring.info.version, "1");
+  assert.equal(required.accepts[0].extra.version, "2");
+  assert.deepEqual(required.extensions, {});
 });
 
 test("facilitator verifies before delivery, settles after it, and returns PAYMENT-RESPONSE", async () => {
@@ -199,16 +199,26 @@ test("facilitator verifies before delivery, settles after it, and returns PAYMEN
     payTo: "0x0000000000000000000000000000000000000003",
     maxTimeoutSeconds: 30,
     extra: {
-      assetTransferMethod: "permit2",
+      assetTransferMethod: "eip3009",
       name: "PBL Agent Credit",
-      version: "1",
+      version: "2",
     },
   };
   const paymentSignature = Buffer.from(JSON.stringify({
     x402Version: 2,
     resource: { url: "http://seller.local/v1/inference" },
     accepted,
-    payload: { signature: "0xpermit", permit2Authorization: {} },
+    payload: {
+      signature: "0xauthorization",
+      authorization: {
+        from: "0x0000000000000000000000000000000000000004",
+        to: "0x0000000000000000000000000000000000000003",
+        value: "100000",
+        validAfter: "0",
+        validBefore: "1800000060",
+        nonce: `0x${"ab".repeat(32)}`,
+      },
+    },
     extensions: {},
   })).toString("base64");
   const calls: string[] = [];

@@ -5,21 +5,20 @@ import type { Address, Hex } from "viem";
 
 import {
   CommerceGateway,
-  type DecisionAuthorization,
   type DecisionSigner,
+  type Erc3009Authorization,
+  type Erc3009DecisionAuthorization,
+  type Erc3009Signer,
   type EvidenceApi,
   type PaymentIntent,
   type PaymentPayload,
   type PaymentRequired,
   type PaymentView,
-  type Permit2Authorization,
-  type Permit2Signer,
   type ReceiptProof,
   type SellerClient,
   type SellerResponse,
   type StagedDelivery,
   X402BindingError,
-  X402_EXACT_PERMIT2_PROXY,
   encodeHeader,
 } from "../src/index.js";
 
@@ -66,7 +65,8 @@ function fixtures() {
     amount_units: view.quote.amount_units,
     token: TOKEN,
     pay_to: SELLER,
-    permit2_nonce: "123456789",
+    transfer_method: "eip3009",
+    authorization_nonce: `0x${"44".repeat(32)}`,
     state: "CLAIMED",
     claimed_at: "2026-09-02T00:00:00Z",
   };
@@ -85,7 +85,11 @@ function fixtures() {
         asset: TOKEN,
         payTo: SELLER,
         maxTimeoutSeconds: 60,
-        extra: { assetTransferMethod: "permit2" },
+        extra: {
+          assetTransferMethod: "eip3009",
+          name: "PBL Agent Credit",
+          version: "2",
+        },
       },
     ],
     extensions: {},
@@ -101,6 +105,14 @@ function fixtures() {
         to: SELLER,
         amount: 100_000n,
         logIndex: 3,
+      },
+    ],
+    authorizations: [
+      {
+        token: TOKEN,
+        authorizer: BUYER,
+        nonce: intent.authorization_nonce!,
+        logIndex: 2,
       },
     ],
   };
@@ -207,8 +219,8 @@ class FakeEvidence implements EvidenceApi {
 }
 
 class CapturingDecisionSigner implements DecisionSigner {
-  message?: DecisionAuthorization;
-  async sign(message: DecisionAuthorization) {
+  message?: Erc3009DecisionAuthorization;
+  async signErc3009(message: Erc3009DecisionAuthorization) {
     this.message = message;
     return {
       hash: `0x${"22".repeat(32)}` as Hex,
@@ -217,23 +229,11 @@ class CapturingDecisionSigner implements DecisionSigner {
   }
 }
 
-class CapturingPermitSigner implements Permit2Signer {
-  authorization?: Permit2Authorization;
-  async sign(authorization: Permit2Authorization): Promise<Hex> {
-    this.authorization = authorization;
-    return "0xpermit";
-  }
-  async signEip2612Permit(args: { authorization: Permit2Authorization }) {
-    return {
-      from: args.authorization.from,
-      asset: args.authorization.permitted.token,
-      spender: "0x000000000022D473030F116dDEE9F6B43aC78BA3" as Address,
-      amount: args.authorization.permitted.amount,
-      nonce: "0",
-      deadline: args.authorization.deadline,
-      signature: `0x${"ab".repeat(65)}` as Hex,
-      version: "1" as const,
-    };
+class CapturingErc3009Signer implements Erc3009Signer {
+  authorization?: Erc3009Authorization;
+  async sign(args: { authorization: Erc3009Authorization }): Promise<Hex> {
+    this.authorization = args.authorization;
+    return "0xauthorization";
   }
 }
 
@@ -283,7 +283,7 @@ function harness(args?: {
   recoveryResponse?: SellerResponse;
   receipt?: ReceiptProof | null;
   mutateIntent?: (intent: PaymentIntent) => void;
-  permitSigner?: Permit2Signer;
+  erc3009Signer?: Erc3009Signer;
   identityVerifier?: { verifyQuoteSigner(agentId: bigint, signer: Address): Promise<unknown> };
 }) {
   const { view, intent, required, receipt } = fixtures();
@@ -292,12 +292,12 @@ function harness(args?: {
   const evidence = new FakeEvidence(view, intent);
   const seller = new FakeSeller(required, args?.paidResponse, args?.recoveryResponse);
   const decisionSigner = new CapturingDecisionSigner();
-  const permitSigner = new CapturingPermitSigner();
+  const erc3009Signer = new CapturingErc3009Signer();
   const gateway = new CommerceGateway({
     evidence,
     seller,
     decisionSigner,
-    permit2Signer: args?.permitSigner ?? permitSigner,
+    erc3009Signer: args?.erc3009Signer ?? erc3009Signer,
     receipts: { async read() { return args?.receipt === undefined ? receipt : args.receipt; } },
     identityVerifier: args?.identityVerifier ?? {
       async verifyQuoteSigner(agentId, signer) {
@@ -307,11 +307,11 @@ function harness(args?: {
     },
     clock: { nowSeconds() { return 1_800_000_000n; } },
   });
-  return { gateway, evidence, seller, decisionSigner, permitSigner };
+  return { gateway, evidence, seller, decisionSigner, erc3009Signer };
 }
 
-test("one purchase binds decision, x402 Permit2 payload and exact Transfer", async () => {
-  const { gateway, evidence, seller, decisionSigner, permitSigner } = harness();
+test("one purchase binds decision, x402 ERC-3009 payload and exact Transfer", async () => {
+  const { gateway, evidence, seller, decisionSigner, erc3009Signer } = harness();
   const result = await gateway.execute("purchase-1");
 
   assert.equal(result.state, "SETTLED");
@@ -326,38 +326,11 @@ test("one purchase binds decision, x402 Permit2 payload and exact Transfer", asy
   ]);
   assert.equal(seller.calls, 2);
   assert.equal(decisionSigner.message?.decisionEventHash, DECISION_HASH);
-  assert.equal(decisionSigner.message?.permit2Nonce, 123456789n);
-  assert.equal(permitSigner.authorization?.spender, X402_EXACT_PERMIT2_PROXY);
-  assert.equal(permitSigner.authorization?.witness.to, SELLER);
-  assert.equal(permitSigner.authorization?.nonce, "123456789");
+  assert.equal(decisionSigner.message?.authorizationNonce, `0x${"44".repeat(32)}`);
+  assert.equal(erc3009Signer.authorization?.to, SELLER);
+  assert.equal(erc3009Signer.authorization?.nonce, `0x${"44".repeat(32)}`);
   assert.equal(seller.paymentPayload?.x402Version, 2);
-  assert.equal(
-    seller.paymentPayload?.payload.permit2Authorization.permitted.amount,
-    "100000",
-  );
-});
-
-test("declared EIP-2612 sponsorship binds an exact PBLC permit into the payload", async () => {
-  const { gateway, seller } = harness({
-    mutateRequirement(required) {
-      required.accepts[0]!.extra = {
-        assetTransferMethod: "permit2",
-        name: "PBL Agent Credit",
-        version: "1",
-      };
-      required.extensions = {
-        eip2612GasSponsoring: { info: { version: "1" }, schema: {} },
-      };
-    },
-  });
-  await gateway.execute("purchase-1");
-  const extension = seller.paymentPayload?.extensions.eip2612GasSponsoring as {
-    info: { amount: string; asset: Address; spender: Address };
-  };
-  assert.equal(extension.info.amount, "100000");
-  assert.equal(extension.info.asset, TOKEN);
-  assert.equal(extension.info.spender.toLowerCase(),
-    "0x000000000022d473030f116ddee9f6b43ac78ba3");
+  assert.equal(seller.paymentPayload?.payload.authorization.value, "100000");
 });
 
 for (const [label, mutate] of [
@@ -366,7 +339,7 @@ for (const [label, mutate] of [
   ["recipient", (required: PaymentRequired) => { required.accepts[0]!.payTo = CONTRACT; }],
   ["network", (required: PaymentRequired) => { required.accepts[0]!.network = "eip155:1"; }],
   ["transfer method", (required: PaymentRequired) => {
-    required.accepts[0]!.extra = { assetTransferMethod: "eip3009" };
+    required.accepts[0]!.extra = { assetTransferMethod: "permit2" };
   }],
 ] as const) {
   test(`substituted 402 ${label} is rejected before signing`, async () => {
@@ -469,6 +442,19 @@ test("decision and claimed intent mismatch stops before contacting seller", asyn
   assert.equal(seller.calls, 0);
 });
 
+test("legacy Permit2 intent remains readable but cannot execute", async () => {
+  const { gateway, evidence, seller } = harness({
+    mutateIntent(intent) {
+      intent.transfer_method = "permit2";
+      intent.authorization_nonce = null;
+      intent.permit2_nonce = "123456789";
+    },
+  });
+  await assert.rejects(() => gateway.execute("purchase-1"), /read-only/);
+  assert.deepEqual(evidence.calls, ["view", "claim"]);
+  assert.equal(seller.calls, 0);
+});
+
 test("post-authorization missing PAYMENT-RESPONSE never resubmits", async () => {
   const { gateway, evidence, seller } = harness({
     paidResponse: { status: 504 },
@@ -525,17 +511,17 @@ test("manual reconciliation rejects an unrelated reverted transaction hash", asy
   assert.ok(!evidence.calls.includes("fail"));
 });
 
-test("crash after authorization resumes with the same nonce and one authorization", async () => {
-  class FailOncePermitSigner implements Permit2Signer {
-    calls: Permit2Authorization[] = [];
-    async sign(authorization: Permit2Authorization): Promise<Hex> {
-      this.calls.push(authorization);
+test("crash after authorization resumes with the same ERC-3009 nonce", async () => {
+  class FailOnceErc3009Signer implements Erc3009Signer {
+    calls: Erc3009Authorization[] = [];
+    async sign(args: { authorization: Erc3009Authorization }): Promise<Hex> {
+      this.calls.push(args.authorization);
       if (this.calls.length === 1) throw new Error("injected process crash");
-      return "0xpermit";
+      return "0xauthorization";
     }
   }
-  const signer = new FailOncePermitSigner();
-  const { gateway, evidence, seller } = harness({ permitSigner: signer });
+  const signer = new FailOnceErc3009Signer();
+  const { gateway, evidence, seller } = harness({ erc3009Signer: signer });
   await assert.rejects(() => gateway.execute("purchase-1"), /injected process crash/);
   assert.equal(evidence.state.state, "AUTHORIZED");
   const result = await gateway.execute("purchase-1");

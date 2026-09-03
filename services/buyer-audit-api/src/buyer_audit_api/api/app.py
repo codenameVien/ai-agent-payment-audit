@@ -244,6 +244,8 @@ def _payment_intent_response(intent: PaymentIntent) -> PaymentIntentResponse:
         token=intent.token,
         pay_to=intent.pay_to,
         permit2_nonce=intent.permit2_nonce,
+        transfer_method=intent.transfer_method,
+        authorization_nonce=intent.authorization_nonce,
         state=intent.state.value,
         claimed_at=intent.claimed_at,
         decision_authorization_hash=intent.decision_authorization_hash,
@@ -275,7 +277,7 @@ def create_app(container: AppContainer) -> FastAPI:
         yield
         await container.repository.close()
 
-    app = FastAPI(title="Buyer & Audit API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Buyer Agent & Audit Evidence API", version="0.1.0", lifespan=lifespan)
 
     async def verified_events(purchase_id: str) -> list[EvidenceEvent]:
         events = await container.repository.list_events(purchase_id)
@@ -592,6 +594,7 @@ def create_app(container: AppContainer) -> FastAPI:
             stored = await payment_service.get_wallet_policy(
                 buyer_wallet_address=policy.buyer_wallet_address,
                 policy_date=policy.policy_date,
+                token=policy.token,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -1429,15 +1432,26 @@ def create_app(container: AppContainer) -> FastAPI:
     ) -> PurchaseResponse:
         owner = require_owner(pbl_session)
         try:
+            budget_units = body.budget_units
+            if budget_units is None:
+                buyer_wallet = await container.auth_service.get_buyer_wallet(owner)
+                if buyer_wallet is None:
+                    raise PaymentPolicyError("buyer wallet is not bound")
+                wallet_policy = await payment_service.get_latest_wallet_policy(buyer_wallet)
+                if wallet_policy is None:
+                    raise PaymentPolicyError("wallet policy is not configured")
+                budget_units = wallet_policy.per_transaction_limit_units
             created = await container.purchase_service.create(
                 owner_address=owner,
                 domain_id=body.domain,
                 raw_request=body.request,
-                budget_units=body.budget_units,
+                budget_units=budget_units,
                 policy=body.policy,
             )
         except DomainNotRegisteredError as exc:
             raise HTTPException(status_code=422, detail=f"unknown domain: {exc}") from exc
+        except PaymentPolicyError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return PurchaseResponse(
             purchase_id=created.purchase_id,
             event_hash=created.event.event_hash,
@@ -1492,7 +1506,7 @@ def create_app(container: AppContainer) -> FastAPI:
         if not events or events[0].actor.get("id") != owner.lower():
             raise HTTPException(status_code=404)
         if container.commerce_gateway is None:
-            raise HTTPException(status_code=503, detail="commerce gateway unavailable")
+            raise HTTPException(status_code=503, detail="payment executor unavailable")
         await decide_purchase(purchase_id, pbl_session)
         events = await verified_events(purchase_id)
         requested = events[0]

@@ -214,7 +214,10 @@ export class SellerHttpTransport {
                 },
           );
         }
-        return json({ error: "inference failed" }, 502);
+        const safeError = error instanceof Error && error.message.startsWith("facilitator ")
+          ? error.message
+          : "inference failed";
+        return json({ error: safeError }, 502);
       }
     }
     return json({ error: "not found" }, 404);

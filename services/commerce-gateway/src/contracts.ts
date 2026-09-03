@@ -46,7 +46,9 @@ export interface PaymentIntent {
   amount_units: number;
   token: Address;
   pay_to: Address;
-  permit2_nonce: string;
+  permit2_nonce?: string | null;
+  transfer_method: "permit2" | "eip3009";
+  authorization_nonce?: Hex | null;
   state: PaymentIntentState;
   claimed_at: string;
   decision_authorization_hash?: Hex | null;
@@ -77,13 +79,13 @@ export interface PaymentRequired {
   extensions?: Record<string, unknown>;
 }
 
-export interface Permit2Authorization {
-  permitted: { token: Address; amount: string };
+export interface Erc3009Authorization {
   from: Address;
-  spender: Address;
-  nonce: string;
-  deadline: string;
-  witness: { to: Address; validAfter: string };
+  to: Address;
+  value: string;
+  validAfter: string;
+  validBefore: string;
+  nonce: Hex;
 }
 
 export interface PaymentPayload {
@@ -92,7 +94,7 @@ export interface PaymentPayload {
   accepted: PaymentRequirements;
   payload: {
     signature: Hex;
-    permit2Authorization: Permit2Authorization;
+    authorization: Erc3009Authorization;
   };
   extensions: Record<string, unknown>;
 }
@@ -106,14 +108,14 @@ export interface SettlementResponse {
   errorReason?: string;
 }
 
-export interface DecisionAuthorization {
+export interface Erc3009DecisionAuthorization {
   purchaseId: string;
   decisionEventHash: Hex;
   quoteId: string;
   amount: bigint;
   token: Address;
   payTo: Address;
-  permit2Nonce: bigint;
+  authorizationNonce: Hex;
 }
 
 export interface EvidenceApi {
@@ -186,27 +188,18 @@ export interface StagedDelivery {
 }
 
 export interface DecisionSigner {
-  sign(message: DecisionAuthorization): Promise<{ hash: Hex; signature: Hex }>;
+  signErc3009(
+    message: Erc3009DecisionAuthorization,
+  ): Promise<{ hash: Hex; signature: Hex }>;
 }
 
-export interface Permit2Signer {
-  sign(authorization: Permit2Authorization): Promise<Hex>;
-  signEip2612Permit?(args: {
-    authorization: Permit2Authorization;
+export interface Erc3009Signer {
+  sign(args: {
+    token: Address;
     tokenName: string;
     tokenVersion: string;
-  }): Promise<Eip2612GasSponsoringInfo>;
-}
-
-export interface Eip2612GasSponsoringInfo {
-  from: Address;
-  asset: Address;
-  spender: Address;
-  amount: string;
-  nonce: string;
-  deadline: string;
-  signature: Hex;
-  version: "1";
+    authorization: Erc3009Authorization;
+  }): Promise<Hex>;
 }
 
 export interface SellerResponse {
@@ -240,6 +233,12 @@ export interface ReceiptProof {
     from: Address;
     to: Address;
     amount: bigint;
+    logIndex: number;
+  }>;
+  authorizations?: Array<{
+    token: Address;
+    authorizer: Address;
+    nonce: Hex;
     logIndex: number;
   }>;
 }

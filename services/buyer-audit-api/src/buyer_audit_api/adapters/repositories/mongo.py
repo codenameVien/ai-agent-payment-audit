@@ -129,6 +129,8 @@ def _payment_intent_document(intent: PaymentIntent) -> dict[str, Any]:
         "token": intent.token,
         "payTo": intent.pay_to,
         "permit2Nonce": intent.permit2_nonce,
+        "transferMethod": intent.transfer_method,
+        "authorizationNonce": intent.authorization_nonce,
         "state": intent.state.value,
         "claimedAt": intent.claimed_at,
         "decisionAuthorizationHash": intent.decision_authorization_hash,
@@ -154,9 +156,13 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         amount_units=int(document["amountUnits"]),
         token=str(document["token"]),
         pay_to=str(document["payTo"]),
-        permit2_nonce=str(document["permit2Nonce"]),
+        permit2_nonce=cast(str | None, document.get("permit2Nonce")),
         state=PaymentIntentState(str(document["state"])),
         claimed_at=cast(datetime, document["claimedAt"]),
+        transfer_method=cast(
+            Literal["permit2", "eip3009"], document.get("transferMethod", "permit2")
+        ),
+        authorization_nonce=cast(str | None, document.get("authorizationNonce")),
         decision_authorization_hash=cast(
             str | None, document.get("decisionAuthorizationHash")
         ),
@@ -216,7 +222,7 @@ def _seller_execution_from_document(document: dict[str, Any]) -> SellerExecution
     )
 
 
-def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
+def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
     return (
         left.purchase_id == right.purchase_id
         and left.buyer_wallet_address == right.buyer_wallet_address
@@ -227,6 +233,7 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         and left.token == right.token
         and left.pay_to == right.pay_to
         and left.permit2_nonce == right.permit2_nonce
+        and left.transfer_method == right.transfer_method
     )
 
 
@@ -317,10 +324,23 @@ class MongoEvidenceRepository:
         await self._heads.create_index([("purchaseId", ASCENDING), ("eventCount", DESCENDING)])
         await self._sensitive.create_index([("payloadId", ASCENDING)], unique=True)
         await self._sensitive.create_index([("purchaseId", ASCENDING), ("kind", ASCENDING)])
+        policy_index_name = "unique_wallet_policy_day"
+        policy_index_keys = [
+            ("buyerWalletAddress", ASCENDING),
+            ("policyDate", ASCENDING),
+            ("token", ASCENDING),
+        ]
+        policy_indexes = await self._wallet_policies.index_information()
+        existing_policy_index = policy_indexes.get(policy_index_name)
+        if (
+            existing_policy_index is not None
+            and existing_policy_index.get("key") != policy_index_keys
+        ):
+            await self._wallet_policies.drop_index(policy_index_name)
         await self._wallet_policies.create_index(
-            [("buyerWalletAddress", ASCENDING), ("policyDate", ASCENDING)],
+            policy_index_keys,
             unique=True,
-            name="unique_wallet_policy_day",
+            name=policy_index_name,
         )
         await self._payment_intents.create_index(
             [("purchaseId", ASCENDING)],
@@ -566,6 +586,7 @@ class MongoEvidenceRepository:
         key = {
             "buyerWalletAddress": normalized.buyer_wallet_address,
             "policyDate": normalized.policy_date,
+            "token": normalized.token,
         }
         existing_document = await self._wallet_policies.find_one(key)
         if existing_document is not None:
@@ -594,22 +615,28 @@ class MongoEvidenceRepository:
             raise PaymentConflictError("wallet policy was configured concurrently") from exc
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None:
-        document = await self._wallet_policies.find_one(
-            {
-                "buyerWalletAddress": buyer_wallet_address.lower(),
-                "policyDate": policy_date,
-            }
-        )
+        query = {
+            "buyerWalletAddress": buyer_wallet_address.lower(),
+            "policyDate": policy_date,
+        }
+        if token is not None:
+            query["token"] = token.lower()
+        document = await self._wallet_policies.find_one(query, sort=[("_id", DESCENDING)])
         return _wallet_policy_from_document(document) if document is not None else None
 
     async def get_latest_wallet_policy(
-        self, buyer_wallet_address: str
+        self, buyer_wallet_address: str, *, max_policy_date: str | None = None
     ) -> WalletPolicy | None:
+        query: dict[str, Any] = {
+            "buyerWalletAddress": buyer_wallet_address.lower()
+        }
+        if max_policy_date is not None:
+            query["policyDate"] = {"$lte": max_policy_date}
         document = await self._wallet_policies.find_one(
-            {"buyerWalletAddress": buyer_wallet_address.lower()},
-            sort=[("policyDate", DESCENDING)],
+            query,
+            sort=[("policyDate", DESCENDING), ("_id", DESCENDING)],
         )
         return _wallet_policy_from_document(document) if document is not None else None
 
@@ -655,11 +682,15 @@ class MongoEvidenceRepository:
                             if event.type == EventType.PAYMENT_INTENT_CLAIMED
                         ]
                         if (
-                            not _same_payment_binding(existing, normalized_intent)
+                            not _same_payment_claim_binding(existing, normalized_intent)
                             or len(claim_events) != 1
                             or claim_events[0].payload.get("quoteId") != existing.quote_id
                             or claim_events[0].payload.get("decisionEventHash")
                             != existing.decision_event_hash
+                            or claim_events[0].payload.get("transferMethod")
+                            != existing.transfer_method
+                            or claim_events[0].payload.get("authorizationNonce")
+                            != existing.authorization_nonce
                         ):
                             raise PaymentConflictError(
                                 "purchase payment intent has different immutable data"
@@ -685,6 +716,7 @@ class MongoEvidenceRepository:
                         {
                             "buyerWalletAddress": normalized_intent.buyer_wallet_address,
                             "policyDate": normalized_intent.policy_date,
+                            "token": normalized_intent.token,
                         },
                         session=active_session,
                     )
@@ -791,6 +823,8 @@ class MongoEvidenceRepository:
             "token",
             "pay_to",
             "permit2_nonce",
+            "transfer_method",
+            "authorization_nonce",
             "claimed_at",
         )
         async with self._client.start_session() as session:
@@ -855,6 +889,7 @@ class MongoEvidenceRepository:
                     policy_filter: dict[str, Any] = {
                         "buyerWalletAddress": existing.buyer_wallet_address,
                         "policyDate": existing.policy_date,
+                        "token": existing.token,
                     }
                     policy_update: dict[str, Any] | None = None
                     if reservation_action in ("settle", "release"):

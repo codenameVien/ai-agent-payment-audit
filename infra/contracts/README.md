@@ -1,6 +1,7 @@
 # Base Sepolia contracts
 
-- `DemoToken.sol`: 6-decimal EIP-2612 ERC-20 used only for the project test economy. The deployment owner can mint team balances, so token faucet replenishment is not required. Exact-amount permits let the x402 Facilitator sponsor the buyer's Permit2 approval gas.
+- `DemoTokenV2.sol`: active 6-decimal ERC-3009 ERC-20 for exact x402 payments. The deployment owner can mint team balances, so token faucet replenishment is not required.
+- `DemoToken.sol`: source of the previously deployed V1 token, retained only to explain historical on-chain evidence; application payment code cannot use it.
 - `EvidenceAnchor.sol`: domain-neutral append-only checkpoint of MongoDB evidence heads.
 
 Build and test without secrets:

@@ -11,6 +11,9 @@ import type { ReceiptProof, ReceiptReader } from "../contracts.js";
 const TRANSFER_ABI = parseAbi([
   "event Transfer(address indexed from, address indexed to, uint256 value)",
 ]);
+const AUTHORIZATION_ABI = parseAbi([
+  "event AuthorizationUsed(address indexed authorizer, bytes32 indexed nonce)",
+]);
 
 function safeNumber(value: bigint, label: string): number {
   const parsed = Number(value);
@@ -35,6 +38,7 @@ export class ViemReceiptReader implements ReceiptReader {
       throw error;
     }
     const transfers: ReceiptProof["transfers"] = [];
+    const authorizations: NonNullable<ReceiptProof["authorizations"]> = [];
     for (const log of receipt.logs) {
       try {
         const decoded = decodeEventLog({
@@ -52,7 +56,23 @@ export class ViemReceiptReader implements ReceiptReader {
           logIndex: log.logIndex,
         });
       } catch {
-        continue;
+        try {
+          const decoded = decodeEventLog({
+            abi: AUTHORIZATION_ABI,
+            data: log.data,
+            topics: log.topics,
+            strict: true,
+          });
+          if (decoded.eventName !== "AuthorizationUsed") continue;
+          authorizations.push({
+            token: log.address as Address,
+            authorizer: decoded.args.authorizer,
+            nonce: decoded.args.nonce,
+            logIndex: log.logIndex,
+          });
+        } catch {
+          continue;
+        }
       }
     }
     return {
@@ -60,6 +80,7 @@ export class ViemReceiptReader implements ReceiptReader {
       status: receipt.status === "success" ? 1 : 0,
       blockNumber: safeNumber(receipt.blockNumber, "block number"),
       transfers,
+      authorizations,
     };
   }
 }

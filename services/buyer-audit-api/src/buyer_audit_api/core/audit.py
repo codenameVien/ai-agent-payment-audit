@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
@@ -286,6 +286,222 @@ class AuditService:
                     (quoted.event_hash,),
                 )
             )
+        if requested.payload.get("domain") == "ai_inference":
+            normalized = requested.payload.get("normalizedRequest")
+            preset = decided.payload.get("preset")
+            priority = normalized.get("priority") if isinstance(normalized, dict) else None
+            if not isinstance(priority, str) or preset != priority:
+                findings.append(
+                    AuditFinding(
+                        "AUD-PRIORITY-PRESET-MISMATCH",
+                        AuditSeverity.RISK,
+                        "사용자 우선순위와 선택 점수표가 다릅니다",
+                        "요청의 priority와 결정에 기록된 preset이 일치하지 않습니다.",
+                        (requested.event_hash, decided.event_hash),
+                    )
+                )
+            expected_weights = {
+                "balanced": {
+                    "quality": 40,
+                    "price": 25,
+                    "speed": 20,
+                    "reputation": 10,
+                    "freshness": 5,
+                },
+                "quality": {
+                    "quality": 60,
+                    "price": 10,
+                    "speed": 15,
+                    "reputation": 10,
+                    "freshness": 5,
+                },
+                "price": {
+                    "quality": 25,
+                    "price": 50,
+                    "speed": 10,
+                    "reputation": 10,
+                    "freshness": 5,
+                },
+                "speed": {
+                    "quality": 25,
+                    "price": 10,
+                    "speed": 50,
+                    "reputation": 10,
+                    "freshness": 5,
+                },
+            }.get(str(preset))
+            eligible = decided.payload.get("eligible")
+            valid_eligible = (
+                [item for item in eligible if isinstance(item, dict)]
+                if isinstance(eligible, list)
+                else []
+            )
+            weights_wrong = expected_weights is None or any(
+                item.get("weights") != expected_weights for item in valid_eligible
+            )
+            if not valid_eligible or weights_wrong:
+                findings.append(
+                    AuditFinding(
+                        "AUD-SELECTION-WEIGHTS-MISMATCH",
+                        AuditSeverity.RISK,
+                        "후보 점수의 가중치가 우선순위 정책과 다릅니다",
+                        "eligible 후보의 weights가 기록된 preset의 "
+                        "고정 가중치와 일치하지 않습니다.",
+                        (requested.event_hash, decided.event_hash),
+                    )
+                )
+            scores = [item.get("total_score") for item in valid_eligible]
+            numeric_scores = [float(score) for score in scores if isinstance(score, (int, float))]
+            winner_score = winner.get("total_score") if isinstance(winner, dict) else None
+            if (
+                not scores
+                or len(numeric_scores) != len(scores)
+                or not isinstance(winner_score, (int, float))
+                or float(winner_score) != max(numeric_scores)
+            ):
+                findings.append(
+                    AuditFinding(
+                        "AUD-INFERIOR-CANDIDATE-SELECTED",
+                        AuditSeverity.RISK,
+                        "최고 점수 후보가 선택되지 않았습니다",
+                        "선택 결과가 저장된 eligible 후보의 최고 점수와 일치하지 않습니다.",
+                        (quoted.event_hash, decided.event_hash),
+                    )
+                )
+            explanation = decided.payload.get("generatedExplanation")
+            winner_provider = winner.get("provider_id") if isinstance(winner, dict) else None
+            winner_model = winner.get("model_id") if isinstance(winner, dict) else None
+            explanation_tokens = (str(preset), str(winner_provider), str(winner_model))
+            if not isinstance(explanation, str) or any(
+                token not in explanation for token in explanation_tokens
+            ):
+                findings.append(
+                    AuditFinding(
+                        "AUD-EXPLANATION-SELECTION-MISMATCH",
+                        AuditSeverity.RISK,
+                        "구매 에이전트 설명과 실제 선택이 다릅니다",
+                        "설명에 실제 preset, 판매자, 모델 선택 근거가 모두 반영되지 않았습니다.",
+                        (decided.event_hash,),
+                    )
+                )
+            benchmarks = quoted.payload.get("benchmarkSnapshots")
+            identities = quoted.payload.get("quoteIdentityEvidence")
+            rejected = decided.payload.get("rejected")
+            if (
+                isinstance(normalized, dict)
+                and isinstance(quotes, list)
+                and isinstance(benchmarks, list)
+                and isinstance(identities, list)
+                and isinstance(rejected, list)
+            ):
+                identity_by_quote = {
+                    item.get("quoteId"): item.get("identityVerified")
+                    for item in identities
+                    if isinstance(item, dict)
+                }
+                expected_rejected: dict[str, tuple[str, ...]] = {}
+                expected_eligible: set[str] = set()
+                for quote in (item for item in quotes if isinstance(item, dict)):
+                    quote_id = quote.get("quote_id")
+                    if not isinstance(quote_id, str):
+                        continue
+                    matches = [
+                        item
+                        for item in benchmarks
+                        if isinstance(item, dict)
+                        and item.get("provider_id") == quote.get("provider_id")
+                        and item.get("model_id") == quote.get("model_id")
+                        and item.get("model_version") == quote.get("model_version")
+                    ]
+                    reasons: list[str] = []
+                    if len(matches) != 1:
+                        reasons.append("quote_benchmark_mismatch")
+                        snapshot: dict[str, object] = {}
+                    else:
+                        snapshot = matches[0]
+                    if quote.get("available") is not True:
+                        reasons.append("unavailable")
+                    if identity_by_quote.get(quote_id) is not True:
+                        reasons.append("identity_unverified")
+                    budget = requested.payload.get("budgetUnits")
+                    amount = quote.get("amount_units")
+                    if isinstance(budget, int) and isinstance(amount, int) and amount > budget:
+                        reasons.append("over_budget")
+                    try:
+                        expiry = datetime.fromisoformat(
+                            str(quote.get("expires_at")).replace("Z", "+00:00")
+                        )
+                        if expiry <= decided.occurred_at:
+                            reasons.append("quote_expired")
+                    except ValueError:
+                        reasons.append("quote_expired")
+                    try:
+                        observed = datetime.fromisoformat(
+                            str(snapshot.get("observed_at")).replace("Z", "+00:00")
+                        )
+                        if (
+                            decided.occurred_at - observed > timedelta(hours=24)
+                            or observed > decided.occurred_at
+                        ):
+                            reasons.append("benchmark_stale")
+                    except ValueError:
+                        reasons.append("benchmark_stale")
+                    allowed = normalized.get("allowed_sellers", [])
+                    if (
+                        isinstance(allowed, list)
+                        and allowed
+                        and str(quote.get("provider_id")).lower()
+                        not in {str(value).lower() for value in allowed}
+                    ):
+                        reasons.append("seller_not_allowed")
+                    for request_key, quote_key, reason in (
+                        ("min_input_limit", "input_limit", "input_limit"),
+                        ("min_output_limit", "output_limit", "output_limit"),
+                    ):
+                        required = normalized.get(request_key)
+                        offered = quote.get(quote_key)
+                        if isinstance(required, int) and (
+                            not isinstance(offered, int) or offered < required
+                        ):
+                            reasons.append(reason)
+                    max_latency = normalized.get("max_latency_ms")
+                    latency = quote.get("expected_latency_ms")
+                    if isinstance(max_latency, int) and (
+                        not isinstance(latency, int) or latency > max_latency
+                    ):
+                        reasons.append("latency_limit")
+                    required_capabilities = {
+                        str(value).lower() for value in normalized.get("required_capabilities", [])
+                    }
+                    raw_capabilities = snapshot.get("capabilities", [])
+                    available_capabilities = (
+                        {str(value).lower() for value in raw_capabilities}
+                        if isinstance(raw_capabilities, list)
+                        else set()
+                    )
+                    if not required_capabilities.issubset(available_capabilities):
+                        reasons.append("missing_capability")
+                    if reasons:
+                        expected_rejected[quote_id] = tuple(reasons)
+                    else:
+                        expected_eligible.add(quote_id)
+                recorded_rejected = {
+                    str(item.get("quote_id")): tuple(item.get("reasons", []))
+                    for item in rejected
+                    if isinstance(item, dict)
+                }
+                recorded_eligible = {str(item.get("quote_id")) for item in valid_eligible}
+                if expected_rejected != recorded_rejected or expected_eligible != recorded_eligible:
+                    findings.append(
+                        AuditFinding(
+                            "AUD-HARD-FILTER-MISMATCH",
+                            AuditSeverity.RISK,
+                            "후보 필터 결과가 사용자 조건과 다릅니다",
+                            "요청·예산·견적·신원·벤치마크로 재계산한 탈락 사유와 "
+                            "저장된 eligible/rejected 결과가 일치하지 않습니다.",
+                            (requested.event_hash, quoted.event_hash, decided.event_hash),
+                        )
+                    )
         identity = quoted.payload.get("quoteIdentityEvidence")
         selected_identities = (
             [

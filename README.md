@@ -29,13 +29,13 @@
 - 인증된 `/purchases/{id}/run`으로 요청→선택→결제→전달→감사를 한 번에 실행하는 E2E
 - 판매자 `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` durable journal과 응답 유실·재시작 복구
 - 전달 결과의 seller/provider/model/version을 선택된 서명 견적과 결속하는 무결성 감사
-- 자체 PBLC의 EIP-2612 서명으로 buyer ETH·수동 승인을 없앤 x402 v2 Permit2 결제와 안전한 중단 후 재개
+- PBLC V2 x402 v2 `exact + ERC-3009` 단일 신규 결제 경로와 과거 Permit2 감사 기록 읽기 호환성
 - 원자적 예산 예약과 독립 Base Sepolia receipt·정확한 ERC-20 Transfer 검증
 - 결정적 normal/caution/risk 감사와 semantic advisor 권한 제한
 - audit bundle hash에 결합된 ERC-8004 객관 100/0 평판 및 tx evidence
 - 성공 receipt와 정확한 event 이후에만 기록하는 EvidenceAnchor
 - 지갑·거래·선택 이유·평판·감사 경고를 보여주는 읽기 전용 Next.js 대시보드와 SSE
-- 사용자 대시보드 메뉴·공용 셸에서 분리된 `/experiments` 운영자 실행기, 고정 `0.1 PBLC`·명시적 확인·탭 간 중복 방지
+- 별도 `/request` 구매 요청 화면과 구매 폼·실험 실행기가 없는 `/`·`/dashboard` 읽기 전용 감사 화면
 - MongoDB·API·대시보드·두 Seller·Gateway Compose와 비용 기본 차단 AWS Terraform handoff
 
 Base Sepolia x402 결제·ERC-8004 평판·EvidenceAnchor 실거래는 완료했다. 실제 provider API·AWS·대시보드 캡처 등 남은 외부 게이트와 거래 링크는 [인계 문서](docs/HANDOFF.md)에 정리했다.
@@ -44,16 +44,23 @@ Base Sepolia x402 결제·ERC-8004 평판·EvidenceAnchor 실거래는 완료했
 
 ```mermaid
 flowchart LR
-  UI[Next.js dashboard] --> API[FastAPI Buyer/Audit API]
-  BUYER[Buyer Agent] --> API
-  API <--> MONGO[(MongoDB evidence + encrypted payload)]
-  BUYER --> GATEWAY[Commerce Gateway]
-  GATEWAY --> SELLER[Provider Seller Agent]
-  SELLER --> FACILITATOR[x402 Facilitator]
-  GATEWAY --> CHAIN[Base Sepolia ERC-20 / Permit2]
-  GATEWAY --> ERC8004[ERC-8004 identity / reputation]
-  GATEWAY --> ANCHOR[EvidenceAnchor]
-  DOMAIN[domains/features/ai-inference] -. adapter .-> API
+  U[사용자] --> R[구매 요청 /request]
+  U --> D[감사 대시보드 /dashboard]
+  R --> B[Buyer Agent]
+  subgraph BUYER[Buyer Agent 논리 경계]
+    B --> BW[Buyer SDK Wrapper]
+    BW --> P[Payment Executor\n별도 프로세스·키 격리]
+  end
+  BW --> S[판매 에이전트]
+  S --> SW[Seller SDK Wrapper\nGemini · Nemotron]
+  BW --> E[Audit Evidence API]
+  P --> E
+  S --> E
+  E --> M[(MongoDB)]
+  P --> F[x402 Facilitator]
+  F --> C[Base Sepolia\nPBLC V2 ERC-3009]
+  P -. 독립 RPC .-> C
+  D --> E
 ```
 
 `core/`는 `domains/ai_inference/`, Gemini, Nemotron을 import하지 않는다. 다음 구매 도메인은 core를 수정하지 않고 domain port, schema, seller adapter, UI renderer로 연결한다.
@@ -70,16 +77,9 @@ npm run test:mongo:local
 
 Compose 실행과 실제 체인 smoke 순서는 [docs/HANDOFF.md](docs/HANDOFF.md)에 있다.
 
-로그인 후 개요는 기록을 읽기만 한다. 실제 정상 거래는 `/experiments`에서 Base Sepolia
-결제 고지를 확인한 뒤 실행하며, 현재 기본 `PROVIDER_MODE=mock`에서는 결제·체인 검증·감사
+로그인 후 `/`와 `/dashboard`는 기록을 읽기만 한다. 구매는 `/request`에서 Base Sepolia
+결제 고지를 확인한 뒤 실행하며, `/experiments`는 `/request`로 이동한다. 현재 기본 `PROVIDER_MODE=mock`에서는 결제·체인 검증·감사
 증거는 실제지만 AI 응답 본문은 mock provider가 만든다.
-
-Base Sepolia 공개 주소·잔액과 x402 testnet Facilitator 지원 상태는 키를 노출하지 않고 확인할 수 있다.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-npm run chain:status
-```
 
 API를 직접 실행하려면 시크릿을 채팅에 붙이지 말고 별도 터미널에서 한 번 생성한다.
 
@@ -103,11 +103,11 @@ python3 scripts/input_provider_keys.py
 현재 빌드에서 수행한 검증:
 
 ```text
-71 passed, 1 skipped  # Python; native Mongo is isolated by default
-29 passed             # Seller Service
-33 passed             # Commerce Gateway
-6 passed              # Solidity Foundry
-3 passed              # Dashboard runner safety
+75 passed, 1 skipped  # Python; native Mongo is isolated by default
+30 passed             # Seller Service
+35 passed             # Payment Executor (internal package name: commerce-gateway)
+11 passed             # Solidity Foundry
+3 passed              # Dashboard request/read-only boundary
 1 passed              # Native MongoDB replica-set integration
 Success: no issues found in 43 source files  # strict mypy
 ```
@@ -121,7 +121,7 @@ SIWE 인증 후 fake domain purchase를 만들면 공개 이벤트에는 정규�
 - RFC 8785 + SHA-256: 동일한 JSON 증거가 동일한 hash를 갖게 함
 - AES-256-GCM envelope encryption: 원문별 data key와 이후 AWS KMS 교체 경계 제공
 - SIWE: MetaMask 소유권과 자율 결제 buyer wallet을 분리
-- 자체 PBLC + EIP-2612 + x402 Permit2: token faucet 없이 발행하고 buyer의 결제 승인을 Facilitator가 가스 대납
+- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 유일한 신규 결제 경로. 과거 Permit2 거래는 감사 조회용 데이터로만 남고 재실행할 수 없음
 - ERC-8004: provider 단위 판매 에이전트 신원과 객관적 결제 결과 평판
 - Next.js: 공통 감사 shell과 도메인별 renderer를 분리한 대시보드
 

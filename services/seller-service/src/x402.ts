@@ -8,39 +8,11 @@ import type {
 import type { PaymentChallengeProvider } from "./http.js";
 
 const PBLC_TOKEN_NAME = "PBL Agent Credit";
-const PBLC_TOKEN_VERSION = "1";
-const EIP2612_GAS_SPONSORING = "eip2612GasSponsoring";
-const EIP2612_EXTENSION = {
-  info: {
-    description:
-      "The facilitator accepts EIP-2612 gasless Permit to `Permit2` canonical contract.",
-    version: "1",
-  },
-  schema: {
-    $schema: "https://json-schema.org/draft/2020-12/schema",
-    type: "object",
-    properties: {
-      from: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      asset: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      spender: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      amount: { type: "string", pattern: "^[0-9]+$" },
-      nonce: { type: "string", pattern: "^[0-9]+$" },
-      deadline: { type: "string", pattern: "^[0-9]+$" },
-      signature: { type: "string", pattern: "^0x[a-fA-F0-9]+$" },
-      version: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)*$" },
-    },
-    required: [
-      "from",
-      "asset",
-      "spender",
-      "amount",
-      "nonce",
-      "deadline",
-      "signature",
-      "version",
-    ],
-  },
-} as const;
+const PBLC_TOKEN_VERSION = "2";
+interface ExactEvmConfig {
+  tokenName?: string;
+  tokenVersion?: string;
+}
 
 export interface X402QuoteTerms {
   modelId: string;
@@ -54,13 +26,18 @@ export interface QuoteTermsReader {
   read(purchaseId: string, quoteId: string): Promise<X402QuoteTerms | null>;
 }
 
-export class Permit2ChallengeProvider implements PaymentChallengeProvider {
+export class ExactEvmChallengeProvider implements PaymentChallengeProvider {
   readonly #quotes: QuoteTermsReader;
   readonly #providerId: string;
+  readonly #config: Required<ExactEvmConfig>;
 
-  constructor(quotes: QuoteTermsReader, providerId: string) {
+  constructor(quotes: QuoteTermsReader, providerId: string, config: ExactEvmConfig = {}) {
     this.#quotes = quotes;
     this.#providerId = providerId;
+    this.#config = {
+      tokenName: config.tokenName ?? PBLC_TOKEN_NAME,
+      tokenVersion: config.tokenVersion ?? PBLC_TOKEN_VERSION,
+    };
   }
 
   async challenge(purchaseId: string, quoteId: string, resourceUrl: string) {
@@ -88,13 +65,13 @@ export class Permit2ChallengeProvider implements PaymentChallengeProvider {
           payTo: quote.payTo,
           maxTimeoutSeconds,
           extra: {
-            assetTransferMethod: "permit2",
-            name: PBLC_TOKEN_NAME,
-            version: PBLC_TOKEN_VERSION,
+            assetTransferMethod: "eip3009",
+            name: this.#config.tokenName,
+            version: this.#config.tokenVersion,
           },
         },
       ],
-      extensions: { [EIP2612_GAS_SPONSORING]: EIP2612_EXTENSION },
+      extensions: {},
     };
   }
 }
@@ -145,7 +122,11 @@ function decodePaymentSignature(encoded: string): PaymentPayload {
   return payload as PaymentPayload;
 }
 
-function requirementFor(quote: X402QuoteTerms, accepted: PaymentRequirements) {
+function requirementFor(
+  quote: X402QuoteTerms,
+  accepted: PaymentRequirements,
+  config: Required<ExactEvmConfig>,
+) {
   const remaining = quote.expiresAt - BigInt(Math.floor(Date.now() / 1000));
   if (remaining <= 0n) throw new Error("payment quote expired");
   const requirement: PaymentRequirements = {
@@ -156,9 +137,9 @@ function requirementFor(quote: X402QuoteTerms, accepted: PaymentRequirements) {
     payTo: quote.payTo,
     maxTimeoutSeconds: 60,
     extra: {
-      assetTransferMethod: "permit2",
-      name: PBLC_TOKEN_NAME,
-      version: PBLC_TOKEN_VERSION,
+      assetTransferMethod: "eip3009",
+      name: config.tokenName,
+      version: config.tokenVersion,
     },
   };
   if (
@@ -170,9 +151,9 @@ function requirementFor(quote: X402QuoteTerms, accepted: PaymentRequirements) {
     !Number.isSafeInteger(accepted.maxTimeoutSeconds) ||
     accepted.maxTimeoutSeconds <= 0 ||
     accepted.maxTimeoutSeconds > requirement.maxTimeoutSeconds ||
-    accepted.extra?.assetTransferMethod !== "permit2" ||
-    accepted.extra?.name !== PBLC_TOKEN_NAME ||
-    accepted.extra?.version !== PBLC_TOKEN_VERSION
+    accepted.extra?.assetTransferMethod !== "eip3009" ||
+    accepted.extra?.name !== config.tokenName ||
+    accepted.extra?.version !== config.tokenVersion
   ) {
     throw new Error("PAYMENT-SIGNATURE does not match the signed quote");
   }
@@ -190,8 +171,23 @@ async function facilitatorJson(
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
-  const value = await response.json() as unknown;
-  if (!response.ok || typeof value !== "object" || value === null) {
+  const responseText = await response.text();
+  let value: unknown;
+  try {
+    value = responseText ? JSON.parse(responseText) : undefined;
+  } catch {
+    value = undefined;
+  }
+  if (!response.ok) {
+    const detail = typeof value === "object" && value !== null
+      ? ["invalidReason", "errorReason", "error", "message"]
+        .map((field) => (value as Record<string, unknown>)[field])
+        .find((item): item is string => typeof item === "string" && item.length > 0)
+      : undefined;
+    const safeDetail = (detail ?? "request rejected").replace(/\s+/g, " ").slice(0, 240);
+    throw new Error(`facilitator ${response.status}: ${safeDetail}`);
+  }
+  if (typeof value !== "object" || value === null) {
     throw new Error(`facilitator ${response.status} response is invalid`);
   }
   return value as Record<string, unknown>;
@@ -202,17 +198,24 @@ export class FacilitatorPaymentGate implements PaymentGate {
   readonly #facilitatorUrl: string;
   readonly #headers: Record<string, string>;
   readonly #fetch: typeof fetch;
+  readonly #config: Required<ExactEvmConfig>;
 
   constructor(args: {
     quotes: QuoteTermsReader;
     facilitatorUrl: string;
     facilitatorHeaders?: Record<string, string>;
     fetchImpl?: typeof fetch;
+    tokenName?: string;
+    tokenVersion?: string;
   }) {
     this.#quotes = args.quotes;
     this.#facilitatorUrl = args.facilitatorUrl.replace(/\/$/, "");
     this.#headers = { ...args.facilitatorHeaders };
     this.#fetch = args.fetchImpl ?? fetch;
+    this.#config = {
+      tokenName: args.tokenName ?? PBLC_TOKEN_NAME,
+      tokenVersion: args.tokenVersion ?? PBLC_TOKEN_VERSION,
+    };
   }
 
   async authorize(proof: {
@@ -224,7 +227,7 @@ export class FacilitatorPaymentGate implements PaymentGate {
     const quote = await this.#quotes.read(proof.purchaseId, proof.quoteId);
     if (quote === null) throw new Error("unknown payment quote");
     const paymentPayload = decodePaymentSignature(proof.paymentSignature);
-    const paymentRequirements = requirementFor(quote, paymentPayload.accepted);
+    const paymentRequirements = requirementFor(quote, paymentPayload.accepted, this.#config);
     const verified = await facilitatorJson(
       this.#fetch,
       `${this.#facilitatorUrl}/verify`,

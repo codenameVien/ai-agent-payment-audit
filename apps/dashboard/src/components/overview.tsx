@@ -5,7 +5,12 @@ import { useCallback, useEffect, useState } from "react";
 
 import { api, credits, short } from "@/lib/api";
 import type { AuditFinding, PurchaseSummary, WalletView } from "@/lib/types";
-import { Empty, SeverityBadge } from "./status";
+import {
+  Empty,
+  PaymentAmount,
+  PurchaseStatusBadge,
+  SeverityBadge,
+} from "./status";
 
 const priorityLabel: Record<string, string> = {
   balanced: "균형 우선",
@@ -25,20 +30,6 @@ function requestLabel(item: PurchaseSummary): string {
     return `${capabilities.slice(0, 2).join(" · ")} · ${suffix}`;
   }
   return `AI 모델 선택 · ${suffix}`;
-}
-
-function statusLabel(status: string): string {
-  const labels: Record<string, string> = {
-    REQUESTED: "요청 기록",
-    QUOTED: "견적 수집",
-    DECIDED: "선택 완료",
-    PAYMENT_INTENT_CLAIMED: "결제 준비",
-    PAYMENT_AUTHORIZED: "결제 승인",
-    PAYMENT_SETTLED: "결제 완료",
-    DELIVERED: "응답 완료",
-    AUDITED: "감사 완료",
-  };
-  return labels[status] ?? status.replaceAll("_", " ");
 }
 
 export function Overview() {
@@ -171,9 +162,9 @@ export function Overview() {
                   <thead>
                     <tr>
                       <th>요청·Purchase ID</th>
-                      <th>진행 상태</th>
-                      <th>결제</th>
-                      <th>감사</th>
+                      <th>처리 상태</th>
+                      <th>결제 금액</th>
+                      <th>감사 결과</th>
                       <th>온체인</th>
                     </tr>
                   </thead>
@@ -189,8 +180,16 @@ export function Overview() {
                             {new Date(item.created_at).toLocaleString("ko-KR")}
                           </small>
                         </td>
-                        <td>{statusLabel(item.status)}</td>
-                        <td>{credits(item.amount_units)} PBLC</td>
+                        <td>
+                          <PurchaseStatusBadge value={item.status} />
+                        </td>
+                        <td>
+                          <PaymentAmount
+                            amountUnits={item.amount_units}
+                            transactionHash={item.transaction_hash}
+                            status={item.status}
+                          />
+                        </td>
                         <td>
                           <SeverityBadge value={item.audit_severity} />
                         </td>
@@ -205,7 +204,7 @@ export function Overview() {
                               {short(item.transaction_hash, 5)} ↗
                             </a>
                           ) : (
-                            <span className="muted">미정산</span>
+                            <span className="muted">거래 해시 없음</span>
                           )}
                         </td>
                       </tr>

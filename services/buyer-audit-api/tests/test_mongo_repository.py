@@ -41,7 +41,20 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
     failing_repository = FailingHeadMongoRepository(uri=mongo_uri, database=database)
     cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
     try:
+        await cleanup[database]["walletPolicies"].create_index(
+            [("buyerWalletAddress", 1), ("policyDate", 1)],
+            unique=True,
+            name="unique_wallet_policy_day",
+        )
         await repository.ensure_indexes()
+        policy_index = (
+            await cleanup[database]["walletPolicies"].index_information()
+        )["unique_wallet_policy_day"]
+        assert policy_index["key"] == [
+            ("buyerWalletAddress", 1),
+            ("policyDate", 1),
+            ("token", 1),
+        ]
         with pytest.raises(RuntimeError, match="injected head write failure"):
             await failing_repository.append_event(
                 purchase_id="purchase-rollback",
@@ -150,9 +163,32 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
         raced_policy = await repository.get_wallet_policy(
             buyer_wallet_address=race_policy.buyer_wallet_address,
             policy_date=race_policy.policy_date,
+            token=race_policy.token,
         )
         assert raced_policy is not None
         assert raced_policy.reserved_units == 100_000
+
+        second_token_policy = replace(
+            race_policy,
+            token="0xtoken-race-v2",
+            spent_units=0,
+            reserved_units=0,
+        )
+        await repository.put_wallet_policy(second_token_policy)
+        assert (
+            await cleanup[database]["walletPolicies"].count_documents(
+                {
+                    "buyerWalletAddress": race_policy.buyer_wallet_address,
+                    "policyDate": race_policy.policy_date,
+                }
+            )
+            == 2
+        )
+        assert await repository.get_wallet_policy(
+            buyer_wallet_address=race_policy.buyer_wallet_address,
+            policy_date=race_policy.policy_date,
+            token=second_token_policy.token,
+        ) == second_token_policy
 
         payment_purchase_id = "purchase-payment-atomic"
         payment_token = "0xtoken"
@@ -254,7 +290,9 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
         intents = await asyncio.gather(
             *(payment_service.claim(payment_purchase_id) for _ in range(12))
         )
-        assert len({intent.permit2_nonce for intent in intents}) == 1
+        assert len({intent.authorization_nonce for intent in intents}) == 1
+        assert intents[0].permit2_nonce is None
+        assert intents[0].transfer_method == "eip3009"
         stored_intent = await repository.get_payment_intent(payment_purchase_id)
         assert stored_intent is not None
         assert stored_intent.decision_event_hash == decided.event_hash

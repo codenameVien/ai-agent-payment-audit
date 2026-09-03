@@ -25,7 +25,7 @@ from buyer_audit_api.core.payment import PaymentIntent, PaymentIntentState, Wall
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 
-def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
+def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
     return (
         left.purchase_id,
         left.buyer_wallet_address.lower(),
@@ -36,6 +36,7 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         left.token.lower(),
         left.pay_to.lower(),
         left.permit2_nonce,
+        left.transfer_method,
     ) == (
         right.purchase_id,
         right.buyer_wallet_address.lower(),
@@ -46,6 +47,7 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         right.token.lower(),
         right.pay_to.lower(),
         right.permit2_nonce,
+        right.transfer_method,
     )
 
 
@@ -55,7 +57,7 @@ class InMemoryEvidenceRepository:
         self._events: dict[str, list[EvidenceEvent]] = {}
         self._heads: dict[str, list[EvidenceHead]] = {}
         self._sensitive: dict[str, SensitivePayload] = {}
-        self._wallet_policies: dict[tuple[str, str], WalletPolicy] = {}
+        self._wallet_policies: dict[tuple[str, str, str], WalletPolicy] = {}
         self._payment_intents: dict[str, PaymentIntent] = {}
         self._seller_executions: dict[str, SellerExecution] = {}
         self._lock = asyncio.Lock()
@@ -267,7 +269,7 @@ class InMemoryEvidenceRepository:
             buyer_wallet_address=policy.buyer_wallet_address.lower(),
             token=policy.token.lower(),
         )
-        key = (normalized.buyer_wallet_address, normalized.policy_date)
+        key = (normalized.buyer_wallet_address, normalized.policy_date, normalized.token)
         async with self._lock:
             existing = self._wallet_policies.get(key)
             if existing is not None and (existing.spent_units or existing.reserved_units):
@@ -277,23 +279,45 @@ class InMemoryEvidenceRepository:
             self._wallet_policies[key] = normalized
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None:
         async with self._lock:
-            policy = self._wallet_policies.get((buyer_wallet_address.lower(), policy_date))
+            if token is not None:
+                policy = self._wallet_policies.get(
+                    (buyer_wallet_address.lower(), policy_date, token.lower())
+                )
+            else:
+                policy = next(
+                    (
+                        candidate
+                        for (address, date, _), candidate in reversed(
+                            self._wallet_policies.items()
+                        )
+                        if address == buyer_wallet_address.lower() and date == policy_date
+                    ),
+                    None,
+                )
             return deepcopy(policy) if policy is not None else None
 
     async def get_latest_wallet_policy(
-        self, buyer_wallet_address: str
+        self, buyer_wallet_address: str, *, max_policy_date: str | None = None
     ) -> WalletPolicy | None:
         normalized = buyer_wallet_address.lower()
         async with self._lock:
             candidates = [
-                policy
-                for (address, _), policy in self._wallet_policies.items()
+                (index, policy)
+                for index, ((address, _, _), policy) in enumerate(
+                    self._wallet_policies.items()
+                )
                 if address == normalized
+                and (max_policy_date is None or policy.policy_date <= max_policy_date)
             ]
-            latest = max(candidates, key=lambda item: item.policy_date, default=None)
+            latest_entry = max(
+                candidates,
+                key=lambda item: (item[1].policy_date, item[0]),
+                default=None,
+            )
+            latest = latest_entry[1] if latest_entry is not None else None
             return deepcopy(latest) if latest is not None else None
 
     async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None:
@@ -322,11 +346,15 @@ class InMemoryEvidenceRepository:
                     if event.type == EventType.PAYMENT_INTENT_CLAIMED
                 ]
                 if (
-                    not _same_payment_binding(existing, intent)
+                    not _same_payment_claim_binding(existing, intent)
                     or len(claim_events) != 1
                     or claim_events[0].payload.get("quoteId") != existing.quote_id
                     or claim_events[0].payload.get("decisionEventHash")
                     != existing.decision_event_hash
+                    or claim_events[0].payload.get("transferMethod")
+                    != existing.transfer_method
+                    or claim_events[0].payload.get("authorizationNonce")
+                    != existing.authorization_nonce
                 ):
                     raise PaymentConflictError(
                         "purchase payment intent has different immutable data"
@@ -343,7 +371,11 @@ class InMemoryEvidenceRepository:
                 expected_event_count=expected_event_count,
                 expected_head_event_hash=expected_head_event_hash,
             )
-            key = (intent.buyer_wallet_address.lower(), intent.policy_date)
+            key = (
+                intent.buyer_wallet_address.lower(),
+                intent.policy_date,
+                intent.token.lower(),
+            )
             policy = self._wallet_policies.get(key)
             if policy is None:
                 raise PaymentPolicyError("wallet policy is not configured for today")
@@ -415,6 +447,8 @@ class InMemoryEvidenceRepository:
                 "token",
                 "pay_to",
                 "permit2_nonce",
+                "transfer_method",
+                "authorization_nonce",
                 "claimed_at",
             )
             if any(
@@ -432,7 +466,7 @@ class InMemoryEvidenceRepository:
                 expected_event_count=expected_event_count,
                 expected_head_event_hash=expected_head_event_hash,
             )
-            key = (existing.buyer_wallet_address, existing.policy_date)
+            key = (existing.buyer_wallet_address, existing.policy_date, existing.token)
             policy = self._wallet_policies.get(key)
             if policy is None:
                 raise PaymentPolicyError("wallet policy is missing during transition")

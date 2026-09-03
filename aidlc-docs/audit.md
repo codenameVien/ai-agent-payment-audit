@@ -1,5 +1,52 @@
 # AI-DLC Audit Log
 
+## 2026-09-04 — 중단 거래의 결제·감사 UI 의미 분리
+
+- 사용자는 `PAYMENT_RECONCILIATION_REQUIRED` 거래가 감사 `진행 중`으로 표시되고, 실제 송금되지 않은 `0.1 PBLC` 예약액이 결제액처럼 보이는 문제를 발견했다.
+- 감사 결과가 없다는 하나의 조건을 `진행 중`으로 표시하던 fallback을 제거했다. lifecycle은 `결제 확인 필요` 또는 `결제 실패`, 감사는 `감사 미실행`으로 별도 표시한다.
+- lifecycle이 정산 완료 상태이고 거래 hash도 있을 때만 온체인 결제 확인으로 표시한다. 정산 완료 전에는 hash가 있어도 `거래 해시 존재 · 결제 미확정`으로 구분한다.
+- 기존 MongoDB·온체인 기록은 변경하지 않으며 사용자 화면의 의미와 테스트만 수정한다.
+
+## 2026-09-04 — ERC-3009를 유일한 신규 결제 경로로 확정
+
+- 사용자는 ERC-3009 실거래 성공 뒤에도 Permit2 실행 경로를 보존한 결정이 지나치게 보수적이라고 판단했고, Permit2를 다시 사용할 계획이 없음을 명확히 했다.
+- 과거 Permit2 온체인 거래와 MongoDB 성공·실패·미완결 기록은 감사 증거로 그대로 보존한다. 삭제·덮어쓰기·재정산은 하지 않는다.
+- `PAYMENT_TRANSFER_METHOD`, Permit2 signer/challenge/payload 분기와 기본 실행 설정을 제거한다. 신규 intent는 ERC-3009 nonce만 생성한다.
+- legacy Permit2 intent는 사용자 화면과 내부 조회에서 읽을 수 있지만 execute/reconcile은 seller 또는 signer 호출 전에 fail-closed한다.
+- 기본 PBLC 주소와 seller 402는 PBLC V2 `exact + eip3009`로 고정하며, 이전 Permit2 배포 스크립트와 실행 중인 로컬 프로세스도 제거·중지한다.
+- 검증 결과: lint/typecheck 통과, Python 75 passed/1 skipped, Seller 30 passed, Payment Executor 34 passed, Solidity 11 passed, native replica-set Mongo 1 passed, dashboard production build 통과. 실제 `pbl_audit`의 과거 Permit2 성공 10-event/미완결 6-event와 ERC-3009 성공 10-event 기록도 변경 없이 확인했다.
+
+## 2026-09-04 — PBLC V2 ERC-3009 deployment and real settlement approved and completed
+
+- User explicitly approved the previously reported deployer, predicted address, initial holder/supply, gas estimate, and `0.1 PBLC` Base Sepolia smoke.
+- Deployed PBLC V2 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` in tx `0x5e5e6b1acde5d51e0d11f4c3784d64fc738fb6daa814f3bfe14afae1c8d4e83f`, block `46349391`; buyer received `1,000,000 PBLC`.
+- Two pre-settlement attempts were preserved as `RECONCILIATION_REQUIRED` with no tx hash and no token movement. The captured Facilitator reason was `invalid_exact_evm_transaction_simulation_failed`; comparison with the official x402 client identified `validAfter=now` instead of canonical `validAfter=0`.
+- Added same-UTC-day V1/V2 wallet policy coexistence (`buyerWalletAddress + policyDate + token`), deterministic current-date selection, safe Facilitator error propagation, and a reusable isolated ERC-3009 smoke stack.
+- Successful purchase `451f8657-cbc0-4469-acb6-a7037b4d4865` settled `100000` units to Gemini seller in tx `0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee`, block `46349821`; receipt contains `AuthorizationUsed` at log `196` and exact Transfer at log `197`.
+- Independent replay verification returned `invalid_exact_evm_nonce_already_used`. Audit result is `NORMAL`, findings empty, bundle `sha256:3c4d3d5c53dbc275feb8bef02fd7eabd5a3c016468b9d1c2340a947dd17587d5`.
+- Existing Permit2 success and incomplete records were not deleted or rewritten. This was the migration snapshot; the later ERC-3009-only decision above supersedes its temporary legacy-runtime availability.
+
+## 2026-09-04 — ERC-3009 local implementation reached deployment approval gate
+
+- Preserved PBLC V1, Permit2 runtime default, successful transaction `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`, and incomplete purchase `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b` without mutation.
+- Added `/request`, read-only `/` and `/dashboard`, and a data-neutral `/experiments` redirect. The pending legacy localStorage key remains readable.
+- Added user-facing Buyer Agent/Payment Executor/Audit Evidence API and Buyer/Seller SDK Wrapper boundaries while preserving internal compatibility names.
+- Added PBLC V2 ERC-3009 contract and exact EVM payload path behind `PAYMENT_TRANSFER_METHOD`; default remains `permit2`.
+- Local plan only: predicted PBLC V2 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`; deployer `0x5B2BC76a3e4DeA700309FD9D746180162bcAbec8`; holder/buyer `0xa45Cd1a41E1e548e2daB0123E7Cb4E3dB964cdaB`; estimated gas `848512`; estimated max fee `0.000005939584 ETH`; smoke `0.1 PBLC`. No transaction was sent.
+- Deployment and real x402 verify/settle remain blocked until the user explicitly approves these values.
+
+## 2026-09-04 — Request boundary and ERC-3009 migration revision approved
+
+- User explicitly directed a material revision and ordered design → impact → implementation → tests → architecture update.
+- `/request` becomes the only purchase input/execution surface. `/` and `/dashboard` remain read-only audit surfaces; `/experiments` redirects without deleting evidence.
+- The Buyer Agent owns analysis, quote comparison, seller selection, purchase approval, payment-execution request, and result return. The existing Commerce Gateway implementation is presented as a separately deployed Payment Executor inside that logical boundary so FastAPI never receives the private key.
+- User-facing `Evidence Repository` wording becomes `감사 증거 기록 모듈` or `Audit Evidence API`; it remains the sole MongoDB record/query boundary and is not an agent.
+- Buyer and Seller SDK Wrapper responsibilities are restored at the architecture level while existing adapter files may remain.
+- Target payment is PBLC V2 x402 v2 `exact + eip3009`. The proven PBLC Permit2/EIP-2612 route stays active until a separately deployed ERC-3009 token passes local negative tests and an explicitly approved Base Sepolia verify/settle/receipt/replay smoke.
+- Live preservation baseline: `pbl_audit` contains canonical settled purchase `378beb23-e352-49f0-b450-87da88791292` with tx `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8` and 10 events, plus incomplete `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b` in `RECONCILIATION_REQUIRED` with no tx hash and 6 events. Neither may be mutated or deleted.
+- Official check on 2026-09-04: x402 v2 exact EVM defines EIP-3009 as the recommended default for compatible tokens; Coinbase documents Base Sepolia v2 exact plus EIP-3009/Permit2 ERC-20 support; live x402.org `/supported` advertises `{x402Version:2, scheme:exact, network:eip155:84532}` but does not enumerate transfer methods or custom token addresses. Therefore custom PBLC V2 compatibility remains an external smoke proof obligation.
+- Next irreversible gate: before PBLC V2 deployment, report wallets, intended deployment/mint/test values, predicted address when available, and gas/cost estimate, then wait for explicit approval.
+
 ## 2026-09-01 — Intent and delivery calibration approved
 
 - The user confirmed the shared product definition after a numbered grilling process.

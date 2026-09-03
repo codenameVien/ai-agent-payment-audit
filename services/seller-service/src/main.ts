@@ -13,7 +13,7 @@ import type { ModelOffer, ProviderAdapter } from "./contracts.js";
 import { LocalEip712QuoteSigner } from "./eip712.js";
 import { SellerHttpTransport } from "./http.js";
 import { SellerEngine, SystemClock } from "./seller-engine.js";
-import { FacilitatorPaymentGate, Permit2ChallengeProvider } from "./x402.js";
+import { ExactEvmChallengeProvider, FacilitatorPaymentGate } from "./x402.js";
 import type { QuoteTermsReader, X402QuoteTerms } from "./x402.js";
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
@@ -153,6 +153,7 @@ export function createSellerTransport(env: NodeJS.ProcessEnv = process.env): Sel
     quotes: quoteTerms,
     facilitatorUrl: required(env, "FACILITATOR_URL"),
     ...(facilitatorHeaders === undefined ? {} : { facilitatorHeaders }),
+    tokenVersion: "2",
   });
   const application = new SellerApplication(
     engine,
@@ -165,7 +166,9 @@ export function createSellerTransport(env: NodeJS.ProcessEnv = process.env): Sel
   return new SellerHttpTransport(
     application,
     required(env, "PROVIDER_ID"),
-    new Permit2ChallengeProvider(quoteTerms, required(env, "PROVIDER_ID")),
+    new ExactEvmChallengeProvider(quoteTerms, required(env, "PROVIDER_ID"), {
+      tokenVersion: "2",
+    }),
     required(env, "INTERNAL_SERVICE_TOKEN"),
   );
 }

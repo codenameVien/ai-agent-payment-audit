@@ -44,7 +44,7 @@ class PurchaseRequest(BaseModel):
 
     domain: str
     request: dict[str, Any]
-    budget_units: int = Field(ge=0)
+    budget_units: int | None = Field(default=None, ge=0)
     policy: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -224,7 +224,9 @@ class PaymentIntentResponse(BaseModel):
     amount_units: int
     token: str
     pay_to: str
-    permit2_nonce: str
+    permit2_nonce: str | None
+    transfer_method: str
+    authorization_nonce: str | None
     state: str
     claimed_at: datetime
     decision_authorization_hash: str | None
