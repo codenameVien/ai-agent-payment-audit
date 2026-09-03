@@ -1,5 +1,17 @@
 # AI-DLC Audit Log
 
+## 2026-09-04 — Request boundary and ERC-3009 migration revision approved
+
+- User explicitly directed a material revision and ordered design → impact → implementation → tests → architecture update.
+- `/request` becomes the only purchase input/execution surface. `/` and `/dashboard` remain read-only audit surfaces; `/experiments` redirects without deleting evidence.
+- The Buyer Agent owns analysis, quote comparison, seller selection, purchase approval, payment-execution request, and result return. The existing Commerce Gateway implementation is presented as a separately deployed Payment Executor inside that logical boundary so FastAPI never receives the private key.
+- User-facing `Evidence Repository` wording becomes `감사 증거 기록 모듈` or `Audit Evidence API`; it remains the sole MongoDB record/query boundary and is not an agent.
+- Buyer and Seller SDK Wrapper responsibilities are restored at the architecture level while existing adapter files may remain.
+- Target payment is PBLC V2 x402 v2 `exact + eip3009`. The proven PBLC Permit2/EIP-2612 route stays active until a separately deployed ERC-3009 token passes local negative tests and an explicitly approved Base Sepolia verify/settle/receipt/replay smoke.
+- Live preservation baseline: `pbl_audit` contains canonical settled purchase `378beb23-e352-49f0-b450-87da88791292` with tx `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8` and 10 events, plus incomplete `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b` in `RECONCILIATION_REQUIRED` with no tx hash and 6 events. Neither may be mutated or deleted.
+- Official check on 2026-09-04: x402 v2 exact EVM defines EIP-3009 as the recommended default for compatible tokens; Coinbase documents Base Sepolia v2 exact plus EIP-3009/Permit2 ERC-20 support; live x402.org `/supported` advertises `{x402Version:2, scheme:exact, network:eip155:84532}` but does not enumerate transfer methods or custom token addresses. Therefore custom PBLC V2 compatibility remains an external smoke proof obligation.
+- Next irreversible gate: before PBLC V2 deployment, report wallets, intended deployment/mint/test values, predicted address when available, and gas/cost estimate, then wait for explicit approval.
+
 ## 2026-09-01 — Intent and delivery calibration approved
 
 - The user confirmed the shared product definition after a numbered grilling process.

@@ -1,7 +1,8 @@
 # Requirements — AI Agent M2M Payment Audit
 
-Status: Approved
+Status: Revised and Approved
 Approved: 2026-09-02
+Revised: 2026-09-04 — request/dashboard boundary, Buyer ownership, Audit Evidence API, SDK Wrappers, and parallel ERC-3009 migration
 
 ## 1. Scope Contract
 
@@ -30,8 +31,8 @@ In one reproducible demonstration, the user can submit an AI request, see the bu
 ### Binding constraints
 
 - Use a project-issued ERC-20 token rather than repeatedly acquiring faucet USDC.
-- Use Base Sepolia and x402 Permit2 with the Coinbase CDP Facilitator.
-- Place MongoDB between agent workflows and durable audit evidence.
+- Target Base Sepolia x402 v2 `exact` with PBLC V2 ERC-3009. Keep the proven Permit2/EIP-2612 path active until ERC-3009 passes local tests and an explicitly approved real settlement.
+- Place the internal Audit Evidence API between every agent/payment service and MongoDB; Seller Service and Payment Executor never access MongoDB directly.
 - Preserve provider/model portability through adapters.
 - Prove the complete path locally before AWS deployment.
 
@@ -48,11 +49,13 @@ In one reproducible demonstration, the user can submit an AI request, see the bu
 ## 3. Actors and System Boundaries
 
 - **User:** owns a MetaMask wallet, states the request/budget/policy, and reviews results.
-- **Buyer agent:** parses the request, gathers evidence, selects an offer, explains the decision, and asks the Commerce Gateway to pay.
+- **Purchase request page:** `/request`; collects request, optional budget, and priority, then starts the buyer agent. It is not part of the audit dashboard.
+- **Buyer agent:** owns request analysis, quote comparison, seller selection, purchase approval, payment-execution request, delivery, and final result return.
 - **Seller agent:** represents one provider, advertises multiple models, returns signed/traceable quotes, and delivers one inference result after settlement.
-- **Commerce Gateway:** validates policy and quote bindings, manages the programmatic buyer wallet, and is the only blockchain writer.
+- **Payment Executor:** the renamed Commerce Gateway implementation used by the buyer agent. It validates policy/quote bindings, isolates the programmatic buyer key, signs x402 payloads, and is the only blockchain writer. It may remain a separate process/container.
+- **Audit Evidence API:** a MongoDB record/query module, not an agent. It joins request, quote, decision, payment, response, and audit evidence by `purchaseId` and enforces validation, event order, hash-chain integrity, and internal access control.
 - **Audit engine:** applies deterministic rules and optional LLM semantic analysis.
-- **Dashboard:** exposes balance, decisions, transactions, seller reputation, and alerts.
+- **Audit dashboard:** `/` and `/dashboard`; read-only balance, decisions, transactions, seller reputation, and alerts. It contains no purchase form or experiment runner.
 - **Admin:** deploys/registers contracts and agents, mints demo credits, and funds the programmatic buyer wallet.
 
 ## 4. Functional Requirements
@@ -73,7 +76,8 @@ As a user, I want to submit a prompt with optional budget and priority so that t
 - **AC-02.2:** GIVEN no explicit budget WHEN the request is submitted THEN the configured system limit applies.
 - **AC-02.3:** GIVEN an explicit user budget lower than a system limit WHEN policy is evaluated THEN the lower limit is enforced.
 - **AC-02.4:** GIVEN the priority preset balanced, quality, price, or speed WHEN candidates are scored THEN the documented preset weights are used and stored with the decision.
-- **AC-02.5:** GIVEN the normal-transaction demonstration runner WHEN the presenter starts an experiment THEN the runner requires an explicit real-payment acknowledgement, fixes the budget at `100000` raw units (`0.1 PBLC`), and retains the pending `purchaseId` across same-origin tabs so a retry does not silently create another purchase.
+- **AC-02.5:** GIVEN `/request` WHEN the user submits a request THEN the page collects request, optional PBLC budget, and one priority preset, requires explicit testnet-payment acknowledgement, and retains the pending `purchaseId` across same-origin tabs so a retry does not silently create another purchase.
+- **AC-02.6:** GIVEN `/experiments` WHEN it is opened THEN it redirects to `/request`; no existing purchase, payment intent, or evidence event is deleted or rewritten.
 
 ### US-03 — Discover eligible models and obtain live quotes
 
@@ -103,9 +107,10 @@ As a user, I want the buyer's choice and reasoning to be visible so that I can j
 
 As a user, I want the buyer agent to pay autonomously within strict limits so that the demonstration is useful without allowing uncontrolled spending.
 
-- **AC-05.1:** GIVEN a selected unexpired quote WHEN payment is requested THEN the Commerce Gateway verifies `purchaseId`, amount, token, recipient, quote expiry, seller identity, user budget, transaction limit, and rolling daily limit before signing.
-- **AC-05.2:** GIVEN valid policy and sufficient balance WHEN payment settles THEN one x402 Permit2 payment using the project ERC-20 is submitted on Base Sepolia and its transaction hash is linked to the purchase.
-- **AC-05.3:** GIVEN any retry for a `purchaseId` that already has a successful settlement WHEN the Gateway receives it THEN no second payment is submitted and the existing result is returned or reported.
+- **AC-05.1:** GIVEN a selected unexpired quote WHEN payment is requested THEN the buyer agent asks the Payment Executor to verify `purchaseId`, amount, token, recipient, quote expiry, seller identity, user budget, transaction limit, and rolling daily limit before signing.
+- **AC-05.2:** GIVEN PBLC V2 is configured for parallel verification WHEN payment is constructed THEN the Seller advertises x402 v2 `exact` with `extra.assetTransferMethod: eip3009`, and the Payment Executor signs an exact `TransferWithAuthorization` payload whose amount, recipient, token, validity window, and random `bytes32` nonce match the selected quote.
+- **AC-05.2a:** GIVEN ERC-3009 has not yet passed the approved real-settlement gate WHEN normal purchases run THEN the existing Permit2/EIP-2612 path remains available and no historic Permit2 evidence is modified.
+- **AC-05.3:** GIVEN any retry for a `purchaseId` that already has a successful settlement WHEN the Payment Executor receives it THEN no second payment is submitted and the existing result is returned or reported.
 - **AC-05.4:** GIVEN an amount above 1 demo token per transaction or a rolling total above 20 demo tokens per day WHEN payment is requested THEN the Gateway rejects it before signing.
 - **AC-05.5:** GIVEN a settled payment followed by service-delivery failure WHEN the workflow handles the failure THEN it creates an alert and does not automatically repurchase or refund.
 
@@ -122,7 +127,7 @@ As a user, I want the actual model response connected to the payment so that pay
 
 As a user, I want rule-based and semantic audit results so that objective violations and uncertain concerns are distinguishable.
 
-- **AC-07.1:** GIVEN a completed or failed purchase WHEN audit runs THEN deterministic checks cover user budget/policy violation, quote/payment amount-token-recipient mismatch, duplicate or rapid repeated payment, missing selection evidence or benchmark snapshot, and seller ERC-8004 identity mismatch.
+- **AC-07.1:** GIVEN a completed or failed purchase WHEN audit runs THEN deterministic checks cover: request priority versus stored weights; hard-filter reasons versus request/budget/policy; whether a higher-scoring eligible candidate was unfairly rejected or bypassed; winner versus score ordering; generated explanation versus preset/winner/score; quote versus payment amount-token-recipient; duplicate settlement per `purchaseId`; seller ERC-8004 identity; and independent Base Sepolia `Transfer` evidence.
 - **AC-07.2:** GIVEN prompt, decision explanation, and structured evidence WHEN semantic audit runs THEN the LLM may flag request-versus-rationale concerns but cannot clear a deterministic violation.
 - **AC-07.3:** GIVEN findings WHEN severity is assigned THEN results use normal, caution, or risk; objective violations are risk and semantic uncertainty or missing context is caution unless supported by objective evidence.
 - **AC-07.4:** GIVEN an audit report WHEN displayed THEN each finding names the applicable rule, evidence reference, human-readable reason, and recommended inspection action.
@@ -135,6 +140,7 @@ As an auditor, I want every stage connected by identifiers and hashes so that mi
 - **AC-08.2:** GIVEN a pre-payment decision WHEN the Gateway authorizes it THEN the Gateway signs the decision/evidence hash before settlement.
 - **AC-08.3:** GIVEN objective ERC-8004 feedback WHEN published THEN success maps to 100, confirmed failure maps to 0, and the detailed off-chain evidence is referenced through `feedbackHash`.
 - **AC-08.4:** GIVEN semantic-only warnings WHEN reputation is updated THEN they remain off-chain and do not reduce the objective on-chain score.
+- **AC-08.5:** GIVEN Seller Service or Payment Executor needs to record/read evidence WHEN it accesses persistence THEN it uses authenticated Audit Evidence API endpoints and cannot connect directly to MongoDB.
 
 ### US-09 — Inspect the system through a dashboard
 
@@ -145,6 +151,7 @@ As a user, I want one place to inspect balances, transactions, choices, reputati
 - **AC-09.3:** GIVEN a seller identity WHEN its reputation view opens THEN the dashboard shows ERC-8004 registration and objective feedback with links to supporting purchase evidence.
 - **AC-09.4:** GIVEN a material state change WHEN the dashboard is open THEN the UI receives an SSE update or clearly indicates degraded/stale data and allows refresh.
 - **AC-09.5:** GIVEN MVP alerting WHEN a caution or risk is created THEN it appears in the dashboard; email, SMS, and push notifications are not required.
+- **AC-09.6:** GIVEN any audit-dashboard route WHEN it renders THEN it contains no request form, purchase-submit action, scenario runner, or experiment trigger.
 
 ### US-10 — Bootstrap the demonstration environment
 
@@ -153,6 +160,8 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 - **AC-10.1:** GIVEN a fresh Base Sepolia setup WHEN deployment scripts run THEN they deploy or configure the 6-decimal project ERC-20 whose unit represents one USD-equivalent demo credit.
 - **AC-10.2:** GIVEN the admin wallet WHEN demo funding is performed THEN only the admin can mint credits and transfer them to the bound buyer-agent wallet; no public faucet is required.
 - **AC-10.2a:** GIVEN a buyer-agent wallet with project credits but no native ETH WHEN its first x402 Permit2 payment is authorized THEN an EIP-2612 permit lets the Facilitator sponsor the approval and settlement gas without a buyer-funded approval transaction.
+- **AC-10.2b:** GIVEN the ERC-3009 migration WHEN PBLC V2 is built THEN it is a separately deployed, non-upgrade proxy-free ERC-20 with `transferWithAuthorization`, `authorizationState`, random `bytes32` nonce replay protection, `validAfter`/`validBefore`, EIP-712 verification, and `AuthorizationUsed`.
+- **AC-10.2c:** GIVEN PBLC V2 has not been deployed WHEN the deployment step is reached THEN the operator reports the deployment account, buyer/seller addresses, predicted contract address if available, estimated gas/cost, mint amount, and `0.1 PBLC` test amount and waits for explicit user approval.
 - **AC-10.3:** GIVEN buyer and seller agents WHEN registration runs THEN each has an ERC-8004 identity and the application stores the resulting chain identifiers.
 - **AC-10.4:** GIVEN missing credentials or private keys WHEN local or AWS services start THEN they fail safely with actionable configuration errors and never print secret values.
 
@@ -161,8 +170,8 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 | Surface | User stories | Responsibility | User outcome |
 |---|---|---|---|
 | Sign-in | US-01 | SIWE challenge and wallet binding | User enters only records associated with the signed wallet |
-| Overview | US-01, US-09 | Read-only balance, payment, audit, and alert summary | User immediately sees account and evidence health without starting a purchase |
-| Normal-transaction runner | US-02–US-05 | Fixed `0.1 PBLC` budget, balanced priority, explicit acknowledgement, and controlled purchase start outside the dashboard navigation/shell | Presenter creates one real normal-path experiment without turning the user dashboard into a purchase UI |
+| Purchase request (`/request`) | US-02–US-05 | Request, optional PBLC budget, priority, acknowledgement, buyer-agent start, and safe retry | User delegates one autonomous purchase outside the audit dashboard |
+| Audit overview (`/`, `/dashboard`) | US-01, US-09 | Read-only balance, payment, audit, and alert summary | User immediately sees account and evidence health without purchase or experiment controls |
 | Transaction list | US-09 | Filterable request/payment/audit summaries | User finds a prior decision quickly |
 | Transaction detail | US-03–US-09 | Evidence comparison and end-to-end timeline | User understands what was chosen, why, paid, delivered, and flagged |
 | Seller reputation | US-03, US-08, US-09 | ERC-8004 identities and objective feedback | User compares seller trust evidence |
@@ -176,7 +185,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 2. User submits prompt, optional budget, and priority.
 3. Buyer parses constraints, loads a benchmark snapshot, and requests live seller quotes.
 4. Buyer hard-filters, scores, selects, and records the decision.
-5. Commerce Gateway validates and submits one x402 payment.
+5. Buyer agent asks its separately deployed Payment Executor to validate and submit one x402 exact payment.
 6. Selected seller returns one model inference.
 7. Audit engine cross-checks decision, quote, chain settlement, delivery, and evidence hashes.
 8. Dashboard receives status updates and exposes the complete trace.
@@ -195,7 +204,8 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 ## 7. Applicable UI States
 
 - **Sign-in:** initial, wallet unavailable, signature pending, authenticated, rejected/expired challenge.
-- **Normal-transaction runner:** ready, acknowledgement required, request creation, discovery/quote/decision/payment in progress, completed, limit exceeded, and recoverable external failure with the created `purchaseId` retained. It is not part of the overview surface; abnormal scenario controls remain future work.
+- **Purchase request:** ready, acknowledgement required, request creation, discovery/quote/decision/payment in progress, completed, limit exceeded, and recoverable external failure with the created `purchaseId` retained.
+- **Audit overview:** loading, empty, populated, stale/degraded, and failed with refresh; it has no mutation control except authentication/session actions.
 - **Transaction list:** loading, empty, populated, stale/degraded, failed with retry.
 - **Transaction detail:** requested, discovered, quoted, decided, payment pending, settled, delivered, audited, and explicit failure states at each boundary.
 - **Seller reputation:** loading, registered with feedback, registered without feedback, identity mismatch, chain unavailable.
@@ -204,6 +214,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 ## 8. Data and Audit Constraints
 
 - The canonical workflow identity is `purchaseId`; transaction hash, quote ID, benchmark snapshot ID, event IDs, audit report ID, ERC-8004 agent ID, and feedback hash attach to it.
+- Existing successful Permit2 settlements, failed/incomplete purchases, payment intents, seller journals, encrypted payloads, and evidence heads are immutable migration inputs and must not be deleted, overwritten, or backfilled with fabricated ERC-3009 fields.
 - General structured evidence and sensitive raw payloads must be separable by access policy and storage encryption.
 - General purchase events are append-only and hash-linked.
 - Corrections are new events; existing audit evidence is never silently overwritten.
@@ -219,6 +230,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 - **NFR-SEC-03:** Sensitive payload encryption uses an authenticated encryption scheme and stores key material separately from MongoDB.
 - **NFR-SEC-04:** Payment authorization is idempotent and rejects replay, mismatched quote bindings, expired quotes, and chain-ID mismatch.
 - **NFR-SEC-05:** Authentication cookies/tokens are secure, short-lived, and bound to verified SIWE sessions.
+- **NFR-SEC-06:** FastAPI never receives or stores the buyer private key; key use remains isolated in the separately deployed Payment Executor.
 
 ### Reliability and integrity
 
@@ -244,7 +256,8 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 
 ## 10. External Dependencies and Proof Obligations
 
-- Coinbase CDP Facilitator and x402 Permit2 compatibility with the custom ERC-20 must be demonstrated by an actual Base Sepolia transaction.
+- Official x402 v2 and Coinbase documentation plus live `/supported` evidence must be captured for Base Sepolia `exact`; custom PBLC V2 EIP-3009 compatibility remains unproven until `/verify`, `/settle`, `AuthorizationUsed`, and exact `Transfer` are observed in an explicitly approved real transaction.
+- The current PBLC/Permit2 real transaction remains the rollback path until the ERC-3009 proof obligation succeeds. A failed ERC-3009 smoke records the Facilitator response and cause without deleting Permit2.
 - Gemini and Nemotron integrations must be proven with actual provider responses before final demonstration; mocks are acceptable for local development tests only.
 - ERC-8004 registration and feedback must be confirmed with transaction hashes and readable on-chain state.
 - MongoDB persistence claims require a stored record query, not only a connection message.
@@ -253,6 +266,6 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 ## 11. Requirements Approval Gate
 
 - **Decision:** Approve and Continue
-- **Approved on:** 2026-09-02
-- This requirements baseline is frozen. Material changes must be recorded in `aidlc-docs/audit.md` before updating downstream design.
-- Next checkpoint: disposable dashboard mockup confirmation before design.
+- **Approved on:** 2026-09-02; revision explicitly directed by the user on 2026-09-04.
+- This revision supersedes conflicting Permit2-only, Commerce-Gateway-as-owner, `/experiments`, and Evidence-Repository-as-component wording while preserving historic evidence.
+- Next external checkpoint: PBLC V2 deployment approval after local implementation and verification.

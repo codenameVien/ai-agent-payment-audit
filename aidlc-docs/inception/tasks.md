@@ -1,17 +1,18 @@
 # 작업 분할 — AI 에이전트 M2M 결제 감사
 
-Status: Approved on 2026-09-02
-Date: 2026-09-02
+Status: Approved on 2026-09-02; migration packet approved by explicit user direction on 2026-09-04
+Date: 2026-09-04
 Upstream:
 
-- `aidlc-docs/inception/requirements.md` — Approved 2026-09-02
-- `aidlc-docs/inception/design.md` — Approved 2026-09-02
+- `aidlc-docs/inception/requirements.md` — Revised and approved 2026-09-04
+- `aidlc-docs/inception/design.md` — Revised and approved 2026-09-04
+- `aidlc-docs/inception/erc3009-impact.md` — Approved scope and compatibility map 2026-09-04
 
 ## 1. 실행 계약
 
-- **packet-count:** 4 coherent work packets
-- **review-boundaries:** 2 independent reviews
-- **broad-suite-count:** 2
+- **packet-count:** 6 coherent work packets total (original 4 complete + migration 5.1 and 5.2)
+- **review-boundaries:** original 2 complete; migration payment boundary receives focused diff/security review before deployment
+- **broad-suite-count:** original 2 complete; one new broad suite before deployment approval
 - **baseline:** Standard
 - **soft checkpoint:** milestone당 active 90분. 신뢰 가능한 token telemetry가 있을 때만 300k observable tokens도 적용한다.
 - **continue-past limit:** milestone당 active 3시간 또는 신뢰 가능한 telemetry 기준 750k tokens 전에 사용자 확인
@@ -25,6 +26,7 @@ Upstream:
 | 1.1 SIWE, Evidence Repository, sensitive payload encryption | 인증 재사용·증거 변조·원문 노출이 결제 감사의 신뢰 경계를 무너뜨림 | High-assurance negative, mutation, access-boundary tests | 인증 replay/도메인/체인/만료와 hash-chain 변조, plaintext 비노출 검증 통과 |
 | 3.1 buyer wallet, budget reservation, x402/Permit2, chain write | 중복·재생·대체 결제가 실제 토큰 손실을 일으킴 | High-assurance concurrency, replay, reconciliation tests | 동시 중복, nonce replay, quote/402 치환, timeout 복구와 독립 receipt 검증 통과 |
 | 4.1 audit integrity and encrypted payload presentation | 잘못된 판정 또는 원문 노출이 사용자에게 거짓 안전 신호를 줌 | High-assurance evidence-binding and authorization tests | 규칙 판정 재현성, bundle hash 연결, 원문 접근 통제와 redaction 검증 통과 |
+| 5.2 PBLC V2, ERC-3009 signer, x402 settlement | 재생·위조·대체 서명이 실제 토큰 손실과 거짓 감사 증거를 만듦 | High-assurance signature, time-window, replay, exact-binding, reconciliation tests | 계약·wire·gateway negative tests와 broad suite 통과; 실거래는 별도 승인 |
 
 ## 2. 작업 순서
 
@@ -36,6 +38,9 @@ flowchart LR
   P3 --> R2["독립 리뷰 2"]
   R2 --> P4["4.1 대시보드·감사·E2E"]
   P4 --> B2["Broad suite 2<br/>최종 로컬 증거"]
+  B2 --> P5["5.1 요청/감사 경계·용어"]
+  P5 --> P6["5.2 PBLC V2 ERC-3009 병렬 경로"]
+  P6 --> B3["Broad suite 3<br/>배포 전 승인 자료"]
 ```
 
 ## Phase 1 — 재사용 코어와 신뢰 데이터 기반
@@ -108,6 +113,27 @@ flowchart LR
 - 실제 제공자 응답 ID, Mongo record ID, Base Sepolia tx hash, ERC-8004 tx hash와 현재 빌드의 대시보드 캡처를 최종 증거로 남긴다.
 - 공개 AWS 배포 전 민감 원문 TTL/수동 삭제 정책과 시연 증거 보존을 다시 승인받는다.
 - GitHub remote가 준비되면 팀 저장소의 기본 브랜치를 확인하고 각 coherent packet을 PR 검토 가능한 커밋/브랜치로 전달한다.
+
+## Phase 5 — 승인된 요청 경계와 PBLC V2 ERC-3009 병렬 전환
+
+- [ ] **5.1 `/request`와 읽기 전용 감사 대시보드, Buyer/Wrapper/Evidence 용어를 일치시킨다**
+  - `/request`에 prompt, optional PBLC budget, priority, explicit testnet acknowledgement, pending `purchaseId` 재개를 구현한다.
+  - `/`, `/dashboard`에는 조회만 남기고 `/experiments`는 데이터 변경 없이 `/request`로 리다이렉트한다.
+  - 사용자 문서·화면·구조도는 `Audit Evidence API`, `Payment Executor`, Buyer/Seller SDK Wrapper를 사용한다. 내부 클래스/패키지 호환 이름은 유지한다.
+  - 구매 에이전트가 분석→견적→선택→승인→결제 실행 요청→결과 반환을 소유한다는 경계를 composition과 설명에 반영한다.
+  - 선택 감사가 priority/weights, 재계산한 hard filter, 최고 eligible score, winner, generated explanation을 검증하게 한다.
+  - **Done when:** route/static tests와 audit adversarial tests가 통과하고 dashboard route에서 구매/실험 action이 검출되지 않는다.
+
+- [ ] **5.2 PBLC V2 ERC-3009와 x402 exact 병렬 경로를 배포 직전까지 구현한다**
+  - 기존 `DemoToken.sol`과 Permit2 runtime/default를 보존하고 별도 `DemoTokenV2.sol`을 추가한다.
+  - EIP-712 `transferWithAuthorization`, random bytes32 nonce, `authorizationState`, time window, low-s/v, `AuthorizationUsed`를 구현한다.
+  - 정상/오서명/만료/not-yet-valid/replay/잔액 부족 계약 테스트를 작성한다.
+  - Seller 402와 Payment Executor에 `permit2 | eip3009` 전략을 추가하며 method/token/name/version substitution을 거부한다.
+  - ERC-3009 intent nonce를 Mongo에 additive/backward-compatible하게 저장하고 재시도에서 고정한다.
+  - receipt 검증에 정확한 Transfer와 AuthorizationUsed를 결속한다. 기존 Permit2 receipt는 회귀 통과한다.
+  - PBLC V2 status/plan/deploy 스크립트를 기존 v1 deploy와 분리하고 deploy는 실행하지 않는다.
+  - **Done when:** 전체 lint/typecheck/unit/integration/contracts/Mongo/dashboard build가 통과하고 deployer/buyer/sellers/predicted address/gas/mint/0.1 PBLC 승인 자료가 준비된다.
+  - **External gate:** 사용자 승인 전 Base Sepolia deploy, mint, verify, settle을 실행하지 않는다. 승인 후 성공한 경우에만 기본 method를 `eip3009`로 전환한다.
 
 ## 3. 재사용성 완료 조건
 
