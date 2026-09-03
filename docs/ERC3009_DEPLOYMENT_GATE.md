@@ -2,6 +2,17 @@
 
 확인일: 2026-09-04
 
+## 승인·실행 결과
+
+- 사용자 승인 후 PBLC V2를 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`에 배포했다.
+- 배포 tx: `0x5e5e6b1acde5d51e0d11f4c3784d64fc738fb6daa814f3bfe14afae1c8d4e83f`, block `46349391`.
+- 성공 purchase: `451f8657-cbc0-4469-acb6-a7037b4d4865`.
+- x402 settle tx: `0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee`, block `46349821`.
+- `AuthorizationUsed` log index `196`, buyer→Gemini seller `100000` units Transfer log index `197`을 독립 RPC로 확인했다.
+- 동일 payload 재검증은 `invalid_exact_evm_nonce_already_used`로 거부됐다.
+- 첫 두 시도는 돈이 이동하지 않았고 append-only `RECONCILIATION_REQUIRED` 증거로 보존했다. 첫 오류는 상세 응답 누락, 둘째는 공식 클라이언트와 달리 `validAfter=now`를 사용해 발생한 `invalid_exact_evm_transaction_simulation_failed`였다. 공식 구현대로 `validAfter=0`으로 수정한 뒤 성공했다.
+- 같은 UTC 날짜의 V1/V2 정책이 충돌하지 않도록 wallet policy 키를 `buyer + date + token`으로 확장했다.
+
 ## 공식 지원 근거
 
 - [x402 v2 specification](https://github.com/x402-foundation/x402/blob/main/specs/x402-specification-v2.md): v2 payload/requirements 구조와 `extra.assetTransferMethod` 확장 경계를 정의한다.
@@ -15,7 +26,7 @@
 - 기존 PBLC V1: `0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9`
 - 성공 Permit2 거래: `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`
 - 미완결 purchase: `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`
-- 기본 `PAYMENT_TRANSFER_METHOD=permit2`; 배포/실거래 성공 전 변경하지 않는다.
+- 신규 구매 검증 런타임은 `eip3009`; 기존 Permit2 런타임과 증거는 롤백·미완결 복구를 위해 병렬 보존한다.
 
 ## 승인 대상
 

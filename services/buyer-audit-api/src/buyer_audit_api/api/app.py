@@ -597,6 +597,7 @@ def create_app(container: AppContainer) -> FastAPI:
             stored = await payment_service.get_wallet_policy(
                 buyer_wallet_address=policy.buyer_wallet_address,
                 policy_date=policy.policy_date,
+                token=policy.token,
             )
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc

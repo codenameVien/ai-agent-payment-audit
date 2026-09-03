@@ -110,7 +110,7 @@ python3 scripts/input_provider_keys.py
 현재 빌드에서 수행한 검증:
 
 ```text
-74 passed, 1 skipped  # Python; native Mongo is isolated by default
+75 passed, 1 skipped  # Python; native Mongo is isolated by default
 30 passed             # Seller Service
 35 passed             # Payment Executor (internal package name: commerce-gateway)
 11 passed             # Solidity Foundry
@@ -128,7 +128,7 @@ SIWE 인증 후 fake domain purchase를 만들면 공개 이벤트에는 정규�
 - RFC 8785 + SHA-256: 동일한 JSON 증거가 동일한 hash를 갖게 함
 - AES-256-GCM envelope encryption: 원문별 data key와 이후 AWS KMS 교체 경계 제공
 - SIWE: MetaMask 소유권과 자율 결제 buyer wallet을 분리
-- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 목표 경로. 실거래 성공 전 기본은 기존 Permit2
+- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 검증 완료 경로. Base Sepolia `0.1 PBLC` 실거래와 nonce 재사용 거부까지 확인했으며 기존 Permit2는 롤백·과거 복구 경로로 보존
 - ERC-8004: provider 단위 판매 에이전트 신원과 객관적 결제 결과 평판
 - Next.js: 공통 감사 shell과 도메인별 renderer를 분리한 대시보드
 

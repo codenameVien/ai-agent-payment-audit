@@ -164,9 +164,9 @@ export class CommerceGateway {
       throw new CommerceGatewayError("resumed payment authorization changed");
     }
 
-    const validAfter = this.#clock.nowSeconds();
+    const now = this.#clock.nowSeconds();
     const quoteDeadline = BigInt(Math.floor(Date.parse(view.quote.expires_at) / 1000));
-    const timeoutDeadline = validAfter + BigInt(requirement.maxTimeoutSeconds);
+    const timeoutDeadline = now + BigInt(requirement.maxTimeoutSeconds);
     const deadline = quoteDeadline < timeoutDeadline ? quoteDeadline : timeoutDeadline;
     let payload;
     if (intent.transfer_method === "eip3009") {
@@ -175,7 +175,7 @@ export class CommerceGateway {
       }
       const authorization = createErc3009Authorization({
         intent,
-        validAfter,
+        validAfter: 0n,
         validBefore: deadline,
       });
       const signature = await this.#erc3009Signer.sign({
@@ -191,7 +191,11 @@ export class CommerceGateway {
         signature,
       });
     } else {
-      const permit2Authorization = createPermit2Authorization({ intent, validAfter, deadline });
+      const permit2Authorization = createPermit2Authorization({
+        intent,
+        validAfter: now,
+        deadline,
+      });
       const permitSignature = await this.#permit2Signer.sign(permit2Authorization);
       const paymentExtensions = await createEip2612GasSponsoringPayloadExtension({
         declaredExtensions: required.extensions,
@@ -224,9 +228,16 @@ export class CommerceGateway {
     recoveredFromHashless = false,
   ): Promise<PaymentExecutionResult> {
     if (!paid.paymentResponse) {
+      const sellerDetail =
+        typeof paid.body === "object" && paid.body !== null
+        && typeof (paid.body as Record<string, unknown>).error === "string"
+          ? String((paid.body as Record<string, unknown>).error).slice(0, 240)
+          : undefined;
       return this.#evidence.reconciliation(
         purchaseId,
-        `seller response ${paid.status} omitted PAYMENT-RESPONSE after authorization`,
+        sellerDetail === undefined
+          ? `seller response ${paid.status} omitted PAYMENT-RESPONSE after authorization`
+          : `seller response ${paid.status}: ${sellerDetail}`,
       );
     }
     let settlement;

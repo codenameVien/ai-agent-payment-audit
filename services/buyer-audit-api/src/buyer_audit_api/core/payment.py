@@ -130,10 +130,12 @@ class PaymentRepository(Protocol):
     async def put_wallet_policy(self, policy: WalletPolicy) -> None: ...
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None: ...
 
-    async def get_latest_wallet_policy(self, buyer_wallet_address: str) -> WalletPolicy | None: ...
+    async def get_latest_wallet_policy(
+        self, buyer_wallet_address: str, *, max_policy_date: str | None = None
+    ) -> WalletPolicy | None: ...
 
     async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None: ...
 
@@ -214,18 +216,22 @@ class PaymentService:
         await self._repository.put_wallet_policy(policy)
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None:
         return await self._repository.get_wallet_policy(
             buyer_wallet_address=buyer_wallet_address,
             policy_date=policy_date,
+            token=token,
         )
 
     async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None:
         return await self._repository.get_payment_intent(purchase_id)
 
     async def get_latest_wallet_policy(self, buyer_wallet_address: str) -> WalletPolicy | None:
-        return await self._repository.get_latest_wallet_policy(buyer_wallet_address)
+        return await self._repository.get_latest_wallet_policy(
+            buyer_wallet_address,
+            max_policy_date=self._clock.now().date().isoformat(),
+        )
 
     async def _transition_context(self, purchase_id: str) -> tuple[PaymentIntent, int, str]:
         intent = await self._repository.get_payment_intent(purchase_id)

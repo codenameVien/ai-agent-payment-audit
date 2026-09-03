@@ -211,8 +211,23 @@ async function facilitatorJson(
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
-  const value = await response.json() as unknown;
-  if (!response.ok || typeof value !== "object" || value === null) {
+  const responseText = await response.text();
+  let value: unknown;
+  try {
+    value = responseText ? JSON.parse(responseText) : undefined;
+  } catch {
+    value = undefined;
+  }
+  if (!response.ok) {
+    const detail = typeof value === "object" && value !== null
+      ? ["invalidReason", "errorReason", "error", "message"]
+        .map((field) => (value as Record<string, unknown>)[field])
+        .find((item): item is string => typeof item === "string" && item.length > 0)
+      : undefined;
+    const safeDetail = (detail ?? "request rejected").replace(/\s+/g, " ").slice(0, 240);
+    throw new Error(`facilitator ${response.status}: ${safeDetail}`);
+  }
+  if (typeof value !== "object" || value === null) {
     throw new Error(`facilitator ${response.status} response is invalid`);
   }
   return value as Record<string, unknown>;

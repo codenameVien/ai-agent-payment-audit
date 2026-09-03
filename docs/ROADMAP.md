@@ -79,7 +79,9 @@
   - [x] seller 402, Payment Executor 서명/payload, Mongo nonce, Transfer+AuthorizationUsed 검증
   - [x] 기존 Permit2 기본값·실거래·미완결 기록 보존
   - [x] 배포 전 예상 주소·가스만 계산하는 승인 차단 스크립트
-  - [ ] 사용자 승인 후 PBLC V2 배포와 0.1 PBLC verify/settle/replay 실거래
+  - [x] 사용자 승인 후 PBLC V2 배포와 0.1 PBLC verify/settle/replay 실거래
+  - [x] 공식 x402 클라이언트와 동일한 ERC-3009 `validAfter=0` 적용 및 Facilitator 시뮬레이션 경계 검증
+  - [x] 같은 UTC 날짜에 PBLC V1/V2 지갑 정책이 공존하는 Mongo 인덱스 마이그레이션
 
 ## 외부 게이트
 

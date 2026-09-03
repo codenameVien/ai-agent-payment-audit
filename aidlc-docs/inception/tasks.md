@@ -134,6 +134,7 @@ flowchart LR
   - PBLC V2 status/plan/deploy 스크립트를 기존 v1 deploy와 분리하고 deploy는 실행하지 않는다.
   - **Done when:** 전체 lint/typecheck/unit/integration/contracts/Mongo/dashboard build가 통과하고 deployer/buyer/sellers/predicted address/gas/mint/0.1 PBLC 승인 자료가 준비된다.
   - **External gate:** 사용자 승인 전 Base Sepolia deploy, mint, verify, settle을 실행하지 않는다. 승인 후 성공한 경우에만 기본 method를 `eip3009`로 전환한다.
+  - **Executed 2026-09-04:** 사용자 승인 후 PBLC V2를 배포하고 x402.org Facilitator `verify/settle`, 정확한 `0.1 PBLC` Transfer, `AuthorizationUsed`, 동일 nonce 재사용 거부를 확인했다. 신규 ERC-3009 런타임은 별도 포트로 활성화하고 기존 Permit2 런타임은 보존했다.
 
 ## 3. 재사용성 완료 조건
 

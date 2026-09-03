@@ -1,5 +1,9 @@
 # 영향 범위 — `/request` 경계와 PBLC V2 ERC-3009 병렬 전환
 
+## 2026-09-04 실행 결과
+
+승인된 PBLC V2 배포와 `0.1 PBLC` x402 settle이 완료됐다. 실제 Facilitator 시뮬레이션에서 발견한 시간 경계는 공식 x402 클라이언트와 동일한 `validAfter=0`으로 수정했다. 같은 UTC 날짜의 V1/V2 예산 정책을 보존하기 위해 wallet policy 키를 `buyer + date + token`으로 확장했다. 신규 ERC-3009 런타임과 기존 Permit2 런타임은 서로 다른 프로세스 경계로 병렬 유지한다.
+
 Status: Approved by explicit user direction on 2026-09-04
 Upstream: `requirements.md`, `design.md` revised 2026-09-04
 

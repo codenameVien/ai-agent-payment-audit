@@ -36,7 +36,7 @@ test("ERC-3009 exact payload is bound to buyer, token, seller, amount and random
   } satisfies PaymentIntent;
   const authorization = createErc3009Authorization({
     intent,
-    validAfter: 1_800_000_000n,
+    validAfter: 0n,
     validBefore: 1_800_000_060n,
   });
   const signature = await new LocalErc3009Signer(PRIVATE_KEY, 84532).sign({
@@ -58,7 +58,7 @@ test("ERC-3009 exact payload is bound to buyer, token, seller, amount and random
       from: buyer.address,
       to: SELLER,
       value: 100000n,
-      validAfter: 1_800_000_000n,
+      validAfter: 0n,
       validBefore: 1_800_000_060n,
       nonce: intent.authorization_nonce,
     },

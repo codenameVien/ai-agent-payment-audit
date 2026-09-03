@@ -117,6 +117,42 @@ async def configure_policy(
 
 
 @pytest.mark.asyncio
+async def test_wallet_policies_for_two_tokens_can_coexist_on_same_day(clock) -> None:
+    repository = InMemoryEvidenceRepository()
+    legacy = WalletPolicy(
+        buyer_wallet_address=BUYER,
+        policy_date=clock.now().date().isoformat(),
+        token=TOKEN,
+        per_transaction_limit_units=200_000,
+        daily_limit_units=1_000_000,
+        spent_units=100_000,
+    )
+    v2_token = "0x0000000000000000000000000000000000000006"
+    current = WalletPolicy(
+        buyer_wallet_address=BUYER,
+        policy_date=clock.now().date().isoformat(),
+        token=v2_token,
+        per_transaction_limit_units=250_000,
+        daily_limit_units=1_000_000,
+    )
+
+    await repository.put_wallet_policy(legacy)
+    await repository.put_wallet_policy(current)
+
+    assert await repository.get_wallet_policy(
+        buyer_wallet_address=BUYER,
+        policy_date=legacy.policy_date,
+        token=TOKEN,
+    ) == legacy
+    assert await repository.get_wallet_policy(
+        buyer_wallet_address=BUYER,
+        policy_date=current.policy_date,
+        token=v2_token,
+    ) == current
+    assert await repository.get_latest_wallet_policy(BUYER) == current
+
+
+@pytest.mark.asyncio
 async def test_concurrent_claim_is_atomic_idempotent_and_domain_neutral(clock) -> None:
     repository = InMemoryEvidenceRepository()
     await seed_payment_ready(repository, clock)

@@ -654,11 +654,11 @@ DomainResultPresenter
 
 - [x] x402.org `/supported`에서 2026-09-04 Base Sepolia x402 v2 `exact` 광고 확인(transfer method/token 목록은 응답하지 않음)
 - [x] Coinbase 공식 문서에서 CDP가 Base Sepolia x402 v2 `exact`와 EIP-3009/Permit2 기반 모든 ERC-20을 지원한다고 명시한 근거 확인(`/supported` 실측은 CDP 인증 필요)
-- [ ] PBLC V2 배포 전 주소·지갑·예상 가스·mint 및 `0.1 PBLC` 테스트 금액 승인
-- [ ] 승인 후 PBLC V2 `exact + eip3009` verify/settle 성공
-- [ ] `AuthorizationUsed`와 token·sender·recipient·exact amount Transfer 독립 RPC 검증
-- [ ] 같은 ERC-3009 nonce 재결제 거부 확인
-- [ ] 성공 뒤에만 기본 payment transfer method를 Permit2에서 ERC-3009로 전환
+- [x] PBLC V2 배포 전 주소·지갑·예상 가스·mint 및 `0.1 PBLC` 테스트 금액 승인
+- [x] 승인 후 PBLC V2 `exact + eip3009` verify/settle 성공
+- [x] `AuthorizationUsed`와 token·sender·recipient·exact amount Transfer 독립 RPC 검증
+- [x] 같은 ERC-3009 nonce 재결제 거부 확인
+- [x] 신규 구매용 ERC-3009 격리 런타임 활성화; Permit2 런타임은 기존 미완결 증거 복구용으로 병렬 보존
 - [ ] 공식 ERC-8004 Base Sepolia 주소/ABI 재확인
 - [ ] buyer feedback 주소가 seller owner/operator가 아님을 확인
 - [ ] 민감 원문 TTL/수동 삭제 정책 재결정
@@ -678,4 +678,4 @@ DomainResultPresenter
 - **Approved:** 2026-09-02; revision explicitly directed and approved by the user on 2026-09-04
 - **Approval clarification:** 공통 인증·증거·결제·평판 레일과 `ai_inference` 도메인 모듈을 분리해, 나중에 구매 대상 도메인을 바꿀 때 공통 레일을 재사용한다.
 - **Scope guard:** 여러 도메인을 동시에 설치·운영하는 범용 플러그인 플랫폼은 MVP 범위 밖이다.
-- **Migration guard:** Permit2/EIP-2612 활성 경로와 기존 실거래/미완결 증거는 PBLC V2 ERC-3009 실거래 성공 전까지 삭제·교체하지 않는다.
+- **Migration result:** PBLC V2 ERC-3009 실거래 성공 뒤 신규 구매용 격리 런타임을 활성화했다. Permit2/EIP-2612 런타임과 기존 실거래/미완결 증거는 삭제·변조 없이 롤백·복구 경로로 유지한다.

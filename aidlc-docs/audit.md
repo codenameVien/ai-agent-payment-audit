@@ -1,5 +1,15 @@
 # AI-DLC Audit Log
 
+## 2026-09-04 — PBLC V2 ERC-3009 deployment and real settlement approved and completed
+
+- User explicitly approved the previously reported deployer, predicted address, initial holder/supply, gas estimate, and `0.1 PBLC` Base Sepolia smoke.
+- Deployed PBLC V2 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` in tx `0x5e5e6b1acde5d51e0d11f4c3784d64fc738fb6daa814f3bfe14afae1c8d4e83f`, block `46349391`; buyer received `1,000,000 PBLC`.
+- Two pre-settlement attempts were preserved as `RECONCILIATION_REQUIRED` with no tx hash and no token movement. The captured Facilitator reason was `invalid_exact_evm_transaction_simulation_failed`; comparison with the official x402 client identified `validAfter=now` instead of canonical `validAfter=0`.
+- Added same-UTC-day V1/V2 wallet policy coexistence (`buyerWalletAddress + policyDate + token`), deterministic current-date selection, safe Facilitator error propagation, and a reusable isolated ERC-3009 smoke stack.
+- Successful purchase `451f8657-cbc0-4469-acb6-a7037b4d4865` settled `100000` units to Gemini seller in tx `0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee`, block `46349821`; receipt contains `AuthorizationUsed` at log `196` and exact Transfer at log `197`.
+- Independent replay verification returned `invalid_exact_evm_nonce_already_used`. Audit result is `NORMAL`, findings empty, bundle `sha256:3c4d3d5c53dbc275feb8bef02fd7eabd5a3c016468b9d1c2340a947dd17587d5`.
+- Existing Permit2 success and incomplete records were not deleted or rewritten. The legacy runtime remains available while the isolated new-purchase runtime uses ERC-3009.
+
 ## 2026-09-04 — ERC-3009 local implementation reached deployment approval gate
 
 - Preserved PBLC V1, Permit2 runtime default, successful transaction `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`, and incomplete purchase `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b` without mutation.

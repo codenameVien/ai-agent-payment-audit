@@ -89,7 +89,7 @@ async function plan() {
 
 async function deploy() {
   const value = await context();
-  if (value.env.PBLC_V2_DEPLOY_APPROVED !== "yes") {
+  if (process.env.PBLC_V2_DEPLOY_APPROVED !== "yes") {
     throw new Error("deployment blocked: set PBLC_V2_DEPLOY_APPROVED=yes only after explicit approval");
   }
   const hash = await value.walletClient.deployContract({

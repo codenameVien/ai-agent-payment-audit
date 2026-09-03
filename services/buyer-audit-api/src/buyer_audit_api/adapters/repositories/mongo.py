@@ -325,10 +325,23 @@ class MongoEvidenceRepository:
         await self._heads.create_index([("purchaseId", ASCENDING), ("eventCount", DESCENDING)])
         await self._sensitive.create_index([("payloadId", ASCENDING)], unique=True)
         await self._sensitive.create_index([("purchaseId", ASCENDING), ("kind", ASCENDING)])
+        policy_index_name = "unique_wallet_policy_day"
+        policy_index_keys = [
+            ("buyerWalletAddress", ASCENDING),
+            ("policyDate", ASCENDING),
+            ("token", ASCENDING),
+        ]
+        policy_indexes = await self._wallet_policies.index_information()
+        existing_policy_index = policy_indexes.get(policy_index_name)
+        if (
+            existing_policy_index is not None
+            and existing_policy_index.get("key") != policy_index_keys
+        ):
+            await self._wallet_policies.drop_index(policy_index_name)
         await self._wallet_policies.create_index(
-            [("buyerWalletAddress", ASCENDING), ("policyDate", ASCENDING)],
+            policy_index_keys,
             unique=True,
-            name="unique_wallet_policy_day",
+            name=policy_index_name,
         )
         await self._payment_intents.create_index(
             [("purchaseId", ASCENDING)],
@@ -574,6 +587,7 @@ class MongoEvidenceRepository:
         key = {
             "buyerWalletAddress": normalized.buyer_wallet_address,
             "policyDate": normalized.policy_date,
+            "token": normalized.token,
         }
         existing_document = await self._wallet_policies.find_one(key)
         if existing_document is not None:
@@ -602,22 +616,28 @@ class MongoEvidenceRepository:
             raise PaymentConflictError("wallet policy was configured concurrently") from exc
 
     async def get_wallet_policy(
-        self, *, buyer_wallet_address: str, policy_date: str
+        self, *, buyer_wallet_address: str, policy_date: str, token: str | None = None
     ) -> WalletPolicy | None:
-        document = await self._wallet_policies.find_one(
-            {
-                "buyerWalletAddress": buyer_wallet_address.lower(),
-                "policyDate": policy_date,
-            }
-        )
+        query = {
+            "buyerWalletAddress": buyer_wallet_address.lower(),
+            "policyDate": policy_date,
+        }
+        if token is not None:
+            query["token"] = token.lower()
+        document = await self._wallet_policies.find_one(query, sort=[("_id", DESCENDING)])
         return _wallet_policy_from_document(document) if document is not None else None
 
     async def get_latest_wallet_policy(
-        self, buyer_wallet_address: str
+        self, buyer_wallet_address: str, *, max_policy_date: str | None = None
     ) -> WalletPolicy | None:
+        query: dict[str, Any] = {
+            "buyerWalletAddress": buyer_wallet_address.lower()
+        }
+        if max_policy_date is not None:
+            query["policyDate"] = {"$lte": max_policy_date}
         document = await self._wallet_policies.find_one(
-            {"buyerWalletAddress": buyer_wallet_address.lower()},
-            sort=[("policyDate", DESCENDING)],
+            query,
+            sort=[("policyDate", DESCENDING), ("_id", DESCENDING)],
         )
         return _wallet_policy_from_document(document) if document is not None else None
 
@@ -693,6 +713,7 @@ class MongoEvidenceRepository:
                         {
                             "buyerWalletAddress": normalized_intent.buyer_wallet_address,
                             "policyDate": normalized_intent.policy_date,
+                            "token": normalized_intent.token,
                         },
                         session=active_session,
                     )
@@ -865,6 +886,7 @@ class MongoEvidenceRepository:
                     policy_filter: dict[str, Any] = {
                         "buyerWalletAddress": existing.buyer_wallet_address,
                         "policyDate": existing.policy_date,
+                        "token": existing.token,
                     }
                     policy_update: dict[str, Any] | None = None
                     if reservation_action in ("settle", "release"):

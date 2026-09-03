@@ -94,6 +94,7 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 현재 Base Sepolia 배포:
 
 - PBLC: [`0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9`](https://base-sepolia.blockscout.com/address/0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9)
+- PBLC V2 ERC-3009: [`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`](https://base-sepolia.blockscout.com/address/0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3), [배포 tx](https://base-sepolia.blockscout.com/tx/0x5e5e6b1acde5d51e0d11f4c3784d64fc738fb6daa814f3bfe14afae1c8d4e83f)
 - EvidenceAnchor: [`0x31691806C02ca6921a9Bac7AF0972302F8CfA101`](https://base-sepolia.blockscout.com/address/0x31691806C02ca6921a9Bac7AF0972302F8CfA101)
 - buyer writer 등록: [`0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b`](https://base-sepolia.blockscout.com/tx/0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b)
 
@@ -143,6 +144,18 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - hash-chain head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다.
 - provider 응답은 현재 mock Gemini다. 이 실행에서는 새 ERC-8004 feedback이나 EvidenceAnchor 거래를 자동 제출하지 않았다.
 - 이전 시도 `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`는 RPC 제출 오류 뒤 transaction hash 없는 reconciliation 상태로 남았다. 실제 Transfer는 없으며 안전상 예약 `0.1 PBLC`와 append-only 기록을 유지한다.
+
+## 2026-09-04 PBLC V2 ERC-3009 실거래 결과
+
+- 완료 구매 ID: `451f8657-cbc0-4469-acb6-a7037b4d4865`
+- x402 v2 `exact + eip3009` 결제: [`0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee`](https://base-sepolia.blockscout.com/tx/0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee)
+  - block `46349821`, `AuthorizationUsed` log `196`, Transfer log `197`
+  - buyer `0xa45C...cdaB` → Gemini seller `0xfE4D...A41F`, 정확히 `100000` units = `0.1 PBLC`
+  - 구매자 V2 잔액 `999,999.9 PBLC`, Gemini seller V2 잔액 `0.1 PBLC`
+- 동일 서명·nonce를 Facilitator `/verify`에 다시 제출하면 `invalid_exact_evm_nonce_already_used`로 거부된다.
+- 감사 결과 `NORMAL`, findings 없음, audit bundle `sha256:3c4d3d5c53dbc275feb8bef02fd7eabd5a3c016468b9d1c2340a947dd17587d5`.
+- 사전 두 시도는 온체인 Transfer 없이 `RECONCILIATION_REQUIRED`로 보존되며 V2 정책의 예약액 `0.2 PBLC`로 표시된다. 이는 삭제하지 않은 실패 증거이며 공개 데모 전에 운영자 검토가 필요하다.
+- 재현: 먼저 `npm run smoke:erc3009:stack -- 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, 그 다음 별도 터미널에서 `npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`를 실행한다. 정상 사용자 UI에서는 `/request`를 사용한다.
 
 ## AWS 인계
 
