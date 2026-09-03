@@ -90,6 +90,11 @@
   - [x] 기존 Permit2 배포 스크립트·로컬 프로세스 중지와 기본 Compose·환경 예시의 PBLC V2 전환
   - [x] 최종 검증: lint/typecheck, Python 75 passed/1 skipped, Seller 30, Payment Executor 34, Solidity 11, native replica-set Mongo 1, dashboard production build
 
+- [x] **5.4 중단 결제와 감사 미실행 상태를 사용자 화면에서 분리**
+  - [x] `PAYMENT_RECONCILIATION_REQUIRED`를 `결제 확인 필요`로 표시하고 실제 진행 중인 작업처럼 보이던 문구 제거
+  - [x] 감사 결과가 없는 거래는 `감사 미실행`으로 표시
+  - [x] 정산 완료 lifecycle과 거래 해시가 모두 확인될 때만 `온체인 결제 확인`, 그 외에는 `예정 금액·결제 미확정`으로 구분
+
 ## 외부 게이트
 
 - [x] 개인 비공개 GitHub 저장소 `codenameVien/ai-agent-payment-audit` 생성 및 SSH remote 연결
