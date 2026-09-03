@@ -27,7 +27,7 @@ Implemented locally:
 - `/health`, `/internal/quotes`, and x402-gated `/v1/inference` transport shell
 - Authenticated `/purchases/{id}/run` orchestration across decision, payment, delivery, and audit
 - Durable seller `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` journal with restart recovery and at-most-once provider attempts
-- A parallel PBLC V2 x402 v2 `exact + eip3009` path while preserving the proven PBLC EIP-2612/Permit2 route and records
+- A single PBLC V2 x402 v2 `exact + eip3009` path for new payments, with read-only compatibility for historical Permit2 evidence
 - Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
 - Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
 - Objective ERC-8004 reputation and confirmed external evidence anchors
@@ -54,7 +54,7 @@ flowchart LR
   S --> E
   E --> M[(MongoDB)]
   P --> F[x402 Facilitator]
-  F --> C[Base Sepolia PBLC V2 ERC-3009 target]
+  F --> C[Base Sepolia PBLC V2 ERC-3009]
   P -. independent RPC .-> C
   D --> E
 ```
@@ -77,13 +77,6 @@ After sign-in, `/` and `/dashboard` only read evidence. Start a purchase from
 `/request` after acknowledging the Base Sepolia payment; `/experiments` redirects there. With the default
 `PROVIDER_MODE=mock`, payment, chain verification, and audit evidence are real while the AI
 response body comes from the mock provider.
-
-Public Base Sepolia addresses, balances, and x402 testnet Facilitator support can be checked without exposing keys.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-npm run chain:status
-```
 
 ```bash
 cd /Users/vien/MyProjects/PBL
@@ -123,7 +116,7 @@ After SIWE authentication, a fake-domain purchase stores only normalized data an
 - RFC 8785 plus SHA-256 provides deterministic JSON evidence hashes.
 - AES-256-GCM envelope encryption provides per-payload data keys and an AWS KMS seam.
 - SIWE separates user ownership via MetaMask from the autonomous buyer wallet.
-- PBLC V2 plus ERC-3009 is the target exact gasless path; the proven Permit2 route remains active until the real smoke succeeds.
+- PBLC V2 plus ERC-3009 is the only executable path for new payments; historical Permit2 evidence remains readable but cannot be executed or reconciled.
 - ERC-8004 provides provider-level seller-agent identity and objective payment reputation.
 - Next.js separates the reusable audit shell from domain-specific renderers.
 

@@ -224,7 +224,7 @@ class PaymentIntentResponse(BaseModel):
     amount_units: int
     token: str
     pay_to: str
-    permit2_nonce: str
+    permit2_nonce: str | None
     transfer_method: str
     authorization_nonce: str | None
     state: str

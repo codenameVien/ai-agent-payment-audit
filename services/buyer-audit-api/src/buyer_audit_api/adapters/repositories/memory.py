@@ -25,7 +25,7 @@ from buyer_audit_api.core.payment import PaymentIntent, PaymentIntentState, Wall
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 
-def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
+def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
     return (
         left.purchase_id,
         left.buyer_wallet_address.lower(),
@@ -37,7 +37,6 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         left.pay_to.lower(),
         left.permit2_nonce,
         left.transfer_method,
-        left.authorization_nonce,
     ) == (
         right.purchase_id,
         right.buyer_wallet_address.lower(),
@@ -49,7 +48,6 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         right.pay_to.lower(),
         right.permit2_nonce,
         right.transfer_method,
-        right.authorization_nonce,
     )
 
 
@@ -348,11 +346,15 @@ class InMemoryEvidenceRepository:
                     if event.type == EventType.PAYMENT_INTENT_CLAIMED
                 ]
                 if (
-                    not _same_payment_binding(existing, intent)
+                    not _same_payment_claim_binding(existing, intent)
                     or len(claim_events) != 1
                     or claim_events[0].payload.get("quoteId") != existing.quote_id
                     or claim_events[0].payload.get("decisionEventHash")
                     != existing.decision_event_hash
+                    or claim_events[0].payload.get("transferMethod")
+                    != existing.transfer_method
+                    or claim_events[0].payload.get("authorizationNonce")
+                    != existing.authorization_nonce
                 ):
                     raise PaymentConflictError(
                         "purchase payment intent has different immutable data"

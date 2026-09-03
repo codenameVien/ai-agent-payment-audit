@@ -30,7 +30,7 @@
 
 ## 로컬 완료
 
-- [x] **3.1 결제·체인 검증·ERC-8004 로컬 신뢰 경계**
+- [x] **3.1 결제·체인 검증·ERC-8004 로컬 신뢰 경계 (과거 V1 구현; 실행 경로 폐기)**
   - [x] 원자적 예산 예약·DecisionAuthorization·정확히 한 번 settlement
   - [x] x402 v2/Permit2 조건 결합·고정 nonce·replay 방지·reconciliation
   - [x] 독립 receipt/Transfer 검증과 MongoDB 원자적 spent/reserved 정산
@@ -74,14 +74,21 @@
   - [x] Buyer Agent, Buyer/Seller SDK Wrapper, Payment Executor, Audit Evidence API 용어와 책임 갱신
   - [x] priority/weights/최고 점수/설명 일치 감사 규칙 추가
 
-- [x] **5.2 PBLC V2 ERC-3009 로컬 병렬 경로**
+- [x] **5.2 PBLC V2 ERC-3009 전환 경로**
   - [x] 별도 비업그레이드 `DemoTokenV2`와 정상·오서명·시간·replay·잔액 부족 테스트
   - [x] seller 402, Payment Executor 서명/payload, Mongo nonce, Transfer+AuthorizationUsed 검증
-  - [x] 기존 Permit2 기본값·실거래·미완결 기록 보존
+  - [x] 전환 중 기존 Permit2 실거래·미완결 기록 보존
   - [x] 배포 전 예상 주소·가스만 계산하는 승인 차단 스크립트
   - [x] 사용자 승인 후 PBLC V2 배포와 0.1 PBLC verify/settle/replay 실거래
   - [x] 공식 x402 클라이언트와 동일한 ERC-3009 `validAfter=0` 적용 및 Facilitator 시뮬레이션 경계 검증
   - [x] 같은 UTC 날짜에 PBLC V1/V2 지갑 정책이 공존하는 Mongo 인덱스 마이그레이션
+
+- [x] **5.3 ERC-3009 단일 신규 결제 경로 확정**
+  - [x] `PAYMENT_TRANSFER_METHOD` 선택 설정과 Permit2 signer/challenge/payload 실행 분기 제거
+  - [x] 신규 intent는 ERC-3009 nonce만 생성하고 PBLC V2만 사용
+  - [x] 과거 Permit2 intent는 대시보드·감사 조회만 허용하고 execute/reconcile 거부
+  - [x] 기존 Permit2 배포 스크립트·로컬 프로세스 중지와 기본 Compose·환경 예시의 PBLC V2 전환
+  - [x] 최종 검증: lint/typecheck, Python 75 passed/1 skipped, Seller 30, Payment Executor 34, Solidity 11, native replica-set Mongo 1, dashboard production build
 
 ## 외부 게이트
 

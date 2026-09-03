@@ -2,14 +2,12 @@ import type { Address, Hex } from "viem";
 
 import type {
   Clock,
-  DecisionAuthorization,
   DecisionSigner,
   Erc3009Signer,
   EvidenceApi,
   PaymentIntent,
   PaymentExecutionResult,
   PaymentView,
-  Permit2Signer,
   QuoteIdentityVerifier,
   ReceiptReader,
   SellerClient,
@@ -22,9 +20,6 @@ import {
   PBLC_V2_TOKEN_VERSION,
   createErc3009Authorization,
   createErc3009PaymentPayload,
-  createEip2612GasSponsoringPayloadExtension,
-  createPaymentPayload,
-  createPermit2Authorization,
   decodePaymentRequired,
   decodeSettlementResponse,
   encodeHeader,
@@ -51,8 +46,7 @@ export class CommerceGateway {
   readonly #evidence: EvidenceApi;
   readonly #seller: SellerClient;
   readonly #decisionSigner: DecisionSigner;
-  readonly #permit2Signer: Permit2Signer;
-  readonly #erc3009Signer?: Erc3009Signer;
+  readonly #erc3009Signer: Erc3009Signer;
   readonly #receipts: ReceiptReader;
   readonly #identityVerifier: QuoteIdentityVerifier;
   readonly #clock: Clock;
@@ -61,8 +55,7 @@ export class CommerceGateway {
     evidence: EvidenceApi;
     seller: SellerClient;
     decisionSigner: DecisionSigner;
-    permit2Signer: Permit2Signer;
-    erc3009Signer?: Erc3009Signer;
+    erc3009Signer: Erc3009Signer;
     receipts: ReceiptReader;
     identityVerifier: QuoteIdentityVerifier;
     clock: Clock;
@@ -70,7 +63,6 @@ export class CommerceGateway {
     this.#evidence = args.evidence;
     this.#seller = args.seller;
     this.#decisionSigner = args.decisionSigner;
-    this.#permit2Signer = args.permit2Signer;
     this.#erc3009Signer = args.erc3009Signer;
     this.#receipts = args.receipts;
     this.#identityVerifier = args.identityVerifier;
@@ -91,6 +83,11 @@ export class CommerceGateway {
     }
     if (intent.state === "FAILED") {
       return intent;
+    }
+    if (intent.transfer_method !== "eip3009") {
+      throw new CommerceGatewayError(
+        "legacy Permit2 payment intents are read-only and cannot be executed",
+      );
     }
     if (intent.state === "RECONCILIATION_REQUIRED" && intent.transaction_hash) {
       const outcome = await this.#reconcileTransaction(
@@ -131,26 +128,13 @@ export class CommerceGateway {
       token: intent.token,
       payTo: intent.pay_to,
     };
-    let signedDecision;
-    if (intent.transfer_method === "eip3009") {
-      if (
-        this.#decisionSigner.signErc3009 === undefined ||
-        intent.authorization_nonce === undefined ||
-        intent.authorization_nonce === null
-      ) {
-        throw new CommerceGatewayError("ERC-3009 decision signer or nonce is unavailable");
-      }
-      signedDecision = await this.#decisionSigner.signErc3009({
-        ...commonDecision,
-        authorizationNonce: intent.authorization_nonce,
-      });
-    } else {
-      const decision: DecisionAuthorization = {
-        ...commonDecision,
-        permit2Nonce: BigInt(intent.permit2_nonce),
-      };
-      signedDecision = await this.#decisionSigner.sign(decision);
+    if (intent.authorization_nonce === undefined || intent.authorization_nonce === null) {
+      throw new CommerceGatewayError("ERC-3009 authorization nonce is unavailable");
     }
+    const signedDecision = await this.#decisionSigner.signErc3009({
+      ...commonDecision,
+      authorizationNonce: intent.authorization_nonce,
+    });
     if (intent.state === "CLAIMED") {
       await this.#evidence.authorize({
         purchaseId,
@@ -168,49 +152,23 @@ export class CommerceGateway {
     const quoteDeadline = BigInt(Math.floor(Date.parse(view.quote.expires_at) / 1000));
     const timeoutDeadline = now + BigInt(requirement.maxTimeoutSeconds);
     const deadline = quoteDeadline < timeoutDeadline ? quoteDeadline : timeoutDeadline;
-    let payload;
-    if (intent.transfer_method === "eip3009") {
-      if (this.#erc3009Signer === undefined) {
-        throw new CommerceGatewayError("ERC-3009 signer is unavailable");
-      }
-      const authorization = createErc3009Authorization({
-        intent,
-        validAfter: 0n,
-        validBefore: deadline,
-      });
-      const signature = await this.#erc3009Signer.sign({
-        token: intent.token,
-        tokenName: String(requirement.extra?.name ?? PBLC_TOKEN_NAME),
-        tokenVersion: String(requirement.extra?.version ?? PBLC_V2_TOKEN_VERSION),
-        authorization,
-      });
-      payload = createErc3009PaymentPayload({
-        resource: required.resource,
-        requirement,
-        authorization,
-        signature,
-      });
-    } else {
-      const permit2Authorization = createPermit2Authorization({
-        intent,
-        validAfter: now,
-        deadline,
-      });
-      const permitSignature = await this.#permit2Signer.sign(permit2Authorization);
-      const paymentExtensions = await createEip2612GasSponsoringPayloadExtension({
-        declaredExtensions: required.extensions,
-        requirement,
-        authorization: permit2Authorization,
-        signer: this.#permit2Signer,
-      });
-      payload = createPaymentPayload({
-        resource: required.resource,
-        requirement,
-        authorization: permit2Authorization,
-        signature: permitSignature,
-        extensions: paymentExtensions,
-      });
-    }
+    const authorization = createErc3009Authorization({
+      intent,
+      validAfter: 0n,
+      validBefore: deadline,
+    });
+    const signature = await this.#erc3009Signer.sign({
+      token: intent.token,
+      tokenName: String(requirement.extra?.name ?? PBLC_TOKEN_NAME),
+      tokenVersion: String(requirement.extra?.version ?? PBLC_V2_TOKEN_VERSION),
+      authorization,
+    });
+    const payload = createErc3009PaymentPayload({
+      resource: required.resource,
+      requirement,
+      authorization,
+      signature,
+    });
     const paid = await this.#seller.request({
       purchaseId,
       quoteId: intent.quote_id,
@@ -377,6 +335,11 @@ export class CommerceGateway {
 
   async reconcile(purchaseId: string, transactionHash: Hex): Promise<PaymentIntent> {
     const intent = await this.#evidence.claim(purchaseId);
+    if (intent.transfer_method !== "eip3009") {
+      throw new CommerceGatewayError(
+        "legacy Permit2 payment intents are read-only and cannot be reconciled",
+      );
+    }
     if (
       intent.state !== "RECONCILIATION_REQUIRED" ||
       intent.transaction_hash?.toLowerCase() !== transactionHash.toLowerCase()
@@ -428,21 +391,19 @@ export class CommerceGateway {
         transactionHash,
       );
     }
-    if (intent.transfer_method === "eip3009") {
-      const authorizations = (receipt.authorizations ?? []).filter(
-        (authorization) =>
-          authorization.token.toLowerCase() === intent.token.toLowerCase() &&
-          authorization.authorizer.toLowerCase() ===
-            intent.buyer_wallet_address.toLowerCase() &&
-          authorization.nonce.toLowerCase() === intent.authorization_nonce?.toLowerCase(),
+    const authorizations = (receipt.authorizations ?? []).filter(
+      (authorization) =>
+        authorization.token.toLowerCase() === intent.token.toLowerCase() &&
+        authorization.authorizer.toLowerCase() ===
+          intent.buyer_wallet_address.toLowerCase() &&
+        authorization.nonce.toLowerCase() === intent.authorization_nonce?.toLowerCase(),
+    );
+    if (authorizations.length !== 1) {
+      return this.#evidence.reconciliation(
+        purchaseId,
+        "independent receipt lacks one matching AuthorizationUsed event",
+        transactionHash,
       );
-      if (authorizations.length !== 1) {
-        return this.#evidence.reconciliation(
-          purchaseId,
-          "independent receipt lacks one matching AuthorizationUsed event",
-          transactionHash,
-        );
-      }
     }
     const transfer = matches[0]!;
     return this.#evidence.settle({

@@ -411,7 +411,9 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
         assert first.json()["state"] == "CLAIMED"
         assert first.json()["amount_units"] == 100_000
         assert first.json()["pay_to"] == SELLER
-        assert first.json()["permit2_nonce"].isdecimal()
+        assert first.json()["permit2_nonce"] is None
+        assert first.json()["transfer_method"] == "eip3009"
+        assert len(first.json()["authorization_nonce"]) == 66
         authorized = client.post(
             "/internal/evidence/payment-intents/authorize",
             headers=INTERNAL_HEADERS,

@@ -8,8 +8,8 @@ This graduation PBL audits whether an AI buyer agent's model choice obeyed the u
 - One provider-level seller agent may offer multiple models. MVP sellers are Gemini and Nemotron.
 - The buyer must use objective benchmark evidence and live seller quotes before choosing.
 - One user request produces at most one successful payment.
-- Payments use the project-issued 6-decimal ERC-20 demo credit through x402 Permit2 on Base Sepolia.
-- The demo credit implements EIP-2612; x402 payment approval uses an exact-amount gas-sponsored permit, not buyer-funded manual allowance.
+- New payments use the project-issued PBLC V2 6-decimal ERC-20 through x402 v2 `exact + ERC-3009` on Base Sepolia.
+- Permit2 is not an executable fallback. Historical Permit2 settlements and incomplete MongoDB evidence remain readable and immutable.
 - The Commerce Gateway is the only component allowed to sign or submit blockchain writes.
 - MongoDB stores an auditable evidence chain that connects request, candidates, quotes, decision, payment, delivery, and audit.
 - ERC-8004 provides agent identity and objective reputation evidence; semantic concerns stay off-chain.
@@ -30,7 +30,7 @@ This graduation PBL audits whether an AI buyer agent's model choice obeyed the u
 - Buyer and audit API: Python with FastAPI
 - Seller agents and Commerce Gateway: Node.js with TypeScript
 - Smart contracts: Solidity on Base Sepolia
-- Payment: x402 v2 with Permit2 and Coinbase CDP Facilitator
+- Payment: x402 v2 `exact + ERC-3009` with the PBLC V2 token and x402 Facilitator
 - Data: MongoDB Atlas
 - Identity and reputation: ERC-8004
 - Local model strategy: swappable model adapters; Nemotron and Gemini integrations first
@@ -77,8 +77,8 @@ This graduation PBL audits whether an AI buyer agent's model choice obeyed the u
 
 ## Caveats
 
-- Coinbase Facilitator support for the custom Permit2 token must be proven with a real Base Sepolia transaction; documentation compatibility alone is insufficient.
-- MetaMask is used for SIWE and user/admin actions. The autonomous buyer uses a separate programmatic wallet because the MetaMask x402 helper does not cover this Permit2 path.
+- PBLC V2 ERC-3009 compatibility is proven by the Base Sepolia settlement recorded in `docs/ERC3009_DEPLOYMENT_GATE.md`.
+- MetaMask is used for SIWE and user/admin actions. The autonomous buyer uses a separate programmatic wallet to sign exact ERC-3009 authorizations inside the Payment Executor boundary.
 - Provider prices, limits, and model availability change; live quotes and benchmark freshness must be visible in evidence.
 - `siwe==4.4.0` must keep `abnf==2.2.0`, matching the upstream v4.4.0 lockfile. Newer `abnf 2.9` rejects SIWE's bundled RFC 5234 grammar during import.
 - The Python `siwe 4.4.0` package states that it has not had a formal security audit. Keep strict local domain/URI/chain checks and atomic server-side nonce consumption; do not treat library verification alone as the auth boundary.

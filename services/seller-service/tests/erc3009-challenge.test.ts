@@ -3,7 +3,7 @@ import test from "node:test";
 
 import { ExactEvmChallengeProvider } from "../src/x402.js";
 
-test("seller advertises x402 v2 exact eip3009 without Permit2 sponsorship", async () => {
+test("seller advertises only x402 v2 exact eip3009", async () => {
   const challenge = await new ExactEvmChallengeProvider(
     { async read() { return {
       modelId: "gemini-test",
@@ -13,7 +13,7 @@ test("seller advertises x402 v2 exact eip3009 without Permit2 sponsorship", asyn
       expiresAt: BigInt(Math.floor(Date.now() / 1000) + 300),
     }; } },
     "gemini",
-    { transferMethod: "eip3009", tokenVersion: "2" },
+    { tokenVersion: "2" },
   ).challenge("purchase-1", "quote-1", "https://seller.test/inference");
   assert.equal(challenge.x402Version, 2);
   assert.equal(challenge.accepts[0]?.scheme, "exact");

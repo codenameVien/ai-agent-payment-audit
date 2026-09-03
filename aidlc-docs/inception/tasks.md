@@ -39,7 +39,7 @@ flowchart LR
   R2 --> P4["4.1 대시보드·감사·E2E"]
   P4 --> B2["Broad suite 2<br/>최종 로컬 증거"]
   B2 --> P5["5.1 요청/감사 경계·용어"]
-  P5 --> P6["5.2 PBLC V2 ERC-3009 병렬 경로"]
+  P5 --> P6["5.2 PBLC V2 ERC-3009 전환 검증"]
   P6 --> B3["Broad suite 3<br/>배포 전 승인 자료"]
 ```
 
@@ -73,7 +73,7 @@ flowchart LR
 - **Broad suite 1:** Phase 1–2 전체 lint, typecheck, unit, integration, request-to-decision E2E를 한 번 실행한다.
 - 같은 범주의 수정이 두 번 실패하면 Phase 3으로 넘어가지 않고 packet을 재분해한다.
 
-## Phase 3 — 결제, 체인 검증, ERC-8004
+## Phase 3 — 결제, 체인 검증, ERC-8004 (과거 V1 구현 단계; 실행 경로 폐기)
 
 - [x] **3.1 자체 ERC-20의 정확히 한 번 결제와 온체인 평판 연결을 로컬에서 구현**
   - 6-decimal EIP-2612 demo ERC-20, buyer 무가스 Permit2 승인, 분리된 deployer wallet, Base Sepolia bootstrap과 배포 주소 주입 방식을 구현한다.
@@ -114,7 +114,7 @@ flowchart LR
 - 공개 AWS 배포 전 민감 원문 TTL/수동 삭제 정책과 시연 증거 보존을 다시 승인받는다.
 - GitHub remote가 준비되면 팀 저장소의 기본 브랜치를 확인하고 각 coherent packet을 PR 검토 가능한 커밋/브랜치로 전달한다.
 
-## Phase 5 — 승인된 요청 경계와 PBLC V2 ERC-3009 병렬 전환
+## Phase 5 — 승인된 요청 경계와 PBLC V2 ERC-3009 전환
 
 - [x] **5.1 `/request`와 읽기 전용 감사 대시보드, Buyer/Wrapper/Evidence 용어를 일치시킨다**
   - `/request`에 prompt, optional PBLC budget, priority, explicit testnet acknowledgement, pending `purchaseId` 재개를 구현한다.
@@ -124,17 +124,24 @@ flowchart LR
   - 선택 감사가 priority/weights, 재계산한 hard filter, 최고 eligible score, winner, generated explanation을 검증하게 한다.
   - **Done when:** route/static tests와 audit adversarial tests가 통과하고 dashboard route에서 구매/실험 action이 검출되지 않는다.
 
-- [x] **5.2 PBLC V2 ERC-3009와 x402 exact 병렬 경로를 배포 직전까지 구현한다**
-  - 기존 `DemoToken.sol`과 Permit2 runtime/default를 보존하고 별도 `DemoTokenV2.sol`을 추가한다.
+- [x] **5.2 PBLC V2 ERC-3009와 x402 exact 전환 경로를 검증한다 (완료된 이행 단계)**
+  - 전환 검증 중 기존 `DemoToken.sol`과 Permit2 runtime/default를 보존하고 별도 `DemoTokenV2.sol`을 추가했다. 5.3 완료 후 Permit2 runtime/default는 제거됐다.
   - EIP-712 `transferWithAuthorization`, random bytes32 nonce, `authorizationState`, time window, low-s/v, `AuthorizationUsed`를 구현한다.
   - 정상/오서명/만료/not-yet-valid/replay/잔액 부족 계약 테스트를 작성한다.
   - Seller 402와 Payment Executor에 `permit2 | eip3009` 전략을 추가하며 method/token/name/version substitution을 거부한다.
   - ERC-3009 intent nonce를 Mongo에 additive/backward-compatible하게 저장하고 재시도에서 고정한다.
-  - receipt 검증에 정확한 Transfer와 AuthorizationUsed를 결속한다. 기존 Permit2 receipt는 회귀 통과한다.
+  - receipt 검증에 정확한 Transfer와 AuthorizationUsed를 결속한다. 기존 Permit2 receipt는 과거 증거 조회 호환성으로 확인한다.
   - PBLC V2 status/plan/deploy 스크립트를 기존 v1 deploy와 분리하고 deploy는 실행하지 않는다.
   - **Done when:** 전체 lint/typecheck/unit/integration/contracts/Mongo/dashboard build가 통과하고 deployer/buyer/sellers/predicted address/gas/mint/0.1 PBLC 승인 자료가 준비된다.
   - **External gate:** 사용자 승인 전 Base Sepolia deploy, mint, verify, settle을 실행하지 않는다. 승인 후 성공한 경우에만 기본 method를 `eip3009`로 전환한다.
-  - **Executed 2026-09-04:** 사용자 승인 후 PBLC V2를 배포하고 x402.org Facilitator `verify/settle`, 정확한 `0.1 PBLC` Transfer, `AuthorizationUsed`, 동일 nonce 재사용 거부를 확인했다. 신규 ERC-3009 런타임은 별도 포트로 활성화하고 기존 Permit2 런타임은 보존했다.
+  - **Executed 2026-09-04:** 사용자 승인 후 PBLC V2를 배포하고 x402.org Facilitator `verify/settle`, 정확한 `0.1 PBLC` Transfer, `AuthorizationUsed`, 동일 nonce 재사용 거부를 확인했다.
+
+- [x] **5.3 성공한 ERC-3009를 유일한 신규 결제 경로로 확정한다**
+  - `PAYMENT_TRANSFER_METHOD`와 Permit2 signer/challenge/payload 실행 분기를 제거한다.
+  - 신규 payment intent는 ERC-3009 nonce만 생성한다.
+  - 기존 Permit2 성공·실패·미완결 증거는 그대로 조회하되 execute/reconcile을 거부한다.
+  - 기존 Permit2 로컬 프로세스를 중지하고 기본 Compose·환경 예시를 PBLC V2로 전환한다.
+  - **Done when:** Permit2 선택 설정이 없고, seller가 eip3009만 광고하며, legacy intent rejection·전체 회귀·기존 Mongo 증거 보존 검사가 통과한다.
 
 ## 3. 재사용성 완료 조건
 

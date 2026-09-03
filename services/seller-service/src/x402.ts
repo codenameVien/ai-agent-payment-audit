@@ -8,45 +8,11 @@ import type {
 import type { PaymentChallengeProvider } from "./http.js";
 
 const PBLC_TOKEN_NAME = "PBL Agent Credit";
-const PBLC_TOKEN_VERSION = "1";
-type TransferMethod = "permit2" | "eip3009";
+const PBLC_TOKEN_VERSION = "2";
 interface ExactEvmConfig {
-  transferMethod?: TransferMethod;
   tokenName?: string;
   tokenVersion?: string;
 }
-const EIP2612_GAS_SPONSORING = "eip2612GasSponsoring";
-const EIP2612_EXTENSION = {
-  info: {
-    description:
-      "The facilitator accepts EIP-2612 gasless Permit to `Permit2` canonical contract.",
-    version: "1",
-  },
-  schema: {
-    $schema: "https://json-schema.org/draft/2020-12/schema",
-    type: "object",
-    properties: {
-      from: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      asset: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      spender: { type: "string", pattern: "^0x[a-fA-F0-9]{40}$" },
-      amount: { type: "string", pattern: "^[0-9]+$" },
-      nonce: { type: "string", pattern: "^[0-9]+$" },
-      deadline: { type: "string", pattern: "^[0-9]+$" },
-      signature: { type: "string", pattern: "^0x[a-fA-F0-9]+$" },
-      version: { type: "string", pattern: "^[0-9]+(\\.[0-9]+)*$" },
-    },
-    required: [
-      "from",
-      "asset",
-      "spender",
-      "amount",
-      "nonce",
-      "deadline",
-      "signature",
-      "version",
-    ],
-  },
-} as const;
 
 export interface X402QuoteTerms {
   modelId: string;
@@ -69,7 +35,6 @@ export class ExactEvmChallengeProvider implements PaymentChallengeProvider {
     this.#quotes = quotes;
     this.#providerId = providerId;
     this.#config = {
-      transferMethod: config.transferMethod ?? "permit2",
       tokenName: config.tokenName ?? PBLC_TOKEN_NAME,
       tokenVersion: config.tokenVersion ?? PBLC_TOKEN_VERSION,
     };
@@ -100,21 +65,16 @@ export class ExactEvmChallengeProvider implements PaymentChallengeProvider {
           payTo: quote.payTo,
           maxTimeoutSeconds,
           extra: {
-            assetTransferMethod: this.#config.transferMethod,
+            assetTransferMethod: "eip3009",
             name: this.#config.tokenName,
             version: this.#config.tokenVersion,
           },
         },
       ],
-      extensions: this.#config.transferMethod === "permit2"
-        ? { [EIP2612_GAS_SPONSORING]: EIP2612_EXTENSION }
-        : {},
+      extensions: {},
     };
   }
 }
-
-/** Compatibility alias for the currently active Permit2 path. */
-export class Permit2ChallengeProvider extends ExactEvmChallengeProvider {}
 
 interface PaymentRequirements {
   scheme: string;
@@ -177,7 +137,7 @@ function requirementFor(
     payTo: quote.payTo,
     maxTimeoutSeconds: 60,
     extra: {
-      assetTransferMethod: config.transferMethod,
+      assetTransferMethod: "eip3009",
       name: config.tokenName,
       version: config.tokenVersion,
     },
@@ -191,7 +151,7 @@ function requirementFor(
     !Number.isSafeInteger(accepted.maxTimeoutSeconds) ||
     accepted.maxTimeoutSeconds <= 0 ||
     accepted.maxTimeoutSeconds > requirement.maxTimeoutSeconds ||
-    accepted.extra?.assetTransferMethod !== config.transferMethod ||
+    accepted.extra?.assetTransferMethod !== "eip3009" ||
     accepted.extra?.name !== config.tokenName ||
     accepted.extra?.version !== config.tokenVersion
   ) {
@@ -245,7 +205,6 @@ export class FacilitatorPaymentGate implements PaymentGate {
     facilitatorUrl: string;
     facilitatorHeaders?: Record<string, string>;
     fetchImpl?: typeof fetch;
-    transferMethod?: TransferMethod;
     tokenName?: string;
     tokenVersion?: string;
   }) {
@@ -254,7 +213,6 @@ export class FacilitatorPaymentGate implements PaymentGate {
     this.#headers = { ...args.facilitatorHeaders };
     this.#fetch = args.fetchImpl ?? fetch;
     this.#config = {
-      transferMethod: args.transferMethod ?? "permit2",
       tokenName: args.tokenName ?? PBLC_TOKEN_NAME,
       tokenVersion: args.tokenVersion ?? PBLC_TOKEN_VERSION,
     };

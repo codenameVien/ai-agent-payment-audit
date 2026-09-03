@@ -63,7 +63,6 @@ const sellerEnv = (provider) => {
     MODEL_PRICE_UNITS: shared[`${upper}_MODEL_PRICE_UNITS`] || "100000",
     TOKEN_ADDRESS,
     PAY_TO_ADDRESS: required(shared, `${upper}_PAY_TO_ADDRESS`),
-    PAYMENT_TRANSFER_METHOD: "eip3009",
     EVIDENCE_API_URL: apiUrl,
   };
 };
@@ -73,7 +72,6 @@ const apiEnv = {
   MONGODB_URI: "mongodb://127.0.0.1:27018/?replicaSet=pblrs&directConnection=true",
   MONGODB_DATABASE: "pbl_audit",
   COMMERCE_GATEWAY_URL: "http://127.0.0.1:8181",
-  PAYMENT_TRANSFER_METHOD: "eip3009",
   SELLER_ROUTES_JSON: JSON.stringify({
     gemini: "http://127.0.0.1:8180",
     nemotron: "http://127.0.0.1:8182",

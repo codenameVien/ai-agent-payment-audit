@@ -28,7 +28,6 @@ test("ERC-3009 exact payload is bound to buyer, token, seller, amount and random
     amount_units: 100000,
     token: TOKEN,
     pay_to: SELLER,
-    permit2_nonce: "123",
     transfer_method: "eip3009",
     authorization_nonce: `0x${"ab".repeat(32)}`,
     state: "CLAIMED",
@@ -80,9 +79,8 @@ test("ERC-3009 exact payload is bound to buyer, token, seller, amount and random
     signature,
   });
   assert.equal(recovered, buyer.address);
-  assert.equal(payload.payload.authorization?.nonce, intent.authorization_nonce);
-  assert.equal(payload.payload.authorization?.value, "100000");
-  assert.equal(payload.payload.permit2Authorization, undefined);
+  assert.equal(payload.payload.authorization.nonce, intent.authorization_nonce);
+  assert.equal(payload.payload.authorization.value, "100000");
 });
 
 test("ERC-3009 payload rejects absent nonce and invalid time window", () => {
@@ -90,7 +88,7 @@ test("ERC-3009 payload rejects absent nonce and invalid time window", () => {
   const base = {
     purchase_id: "p", buyer_wallet_address: buyer.address, policy_date: "2026-09-04",
     quote_id: "q", decision_event_hash: `sha256:${"11".repeat(32)}`,
-    amount_units: 1, token: TOKEN, pay_to: SELLER, permit2_nonce: "1",
+    amount_units: 1, token: TOKEN, pay_to: SELLER,
     transfer_method: "eip3009", state: "CLAIMED", claimed_at: "2026-09-04T00:00:00Z",
   } satisfies PaymentIntent;
   assert.throws(

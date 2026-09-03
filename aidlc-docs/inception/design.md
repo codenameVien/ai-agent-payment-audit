@@ -11,7 +11,7 @@ Upstream: `aidlc-docs/inception/requirements.md` (Revised 2026-09-04)
 1. 사용자의 원문 요청·예산·우선순위
 2. 사용한 벤치마크 스냅샷과 판매 에이전트의 견적
 3. 구매 에이전트의 필터·점수·선택 설명
-4. 실제 x402 `exact` 결제와 Base Sepolia 영수증(목표: ERC-3009, 검증 중 롤백: Permit2/EIP-2612)
+4. 실제 x402 `exact + ERC-3009` 결제와 Base Sepolia 영수증
 5. 실제 AI 응답의 모델·지연시간·해시
 6. 결정적 규칙 검사와 LLM 의미 감사 결과
 7. ERC-8004 신원 및 객관적 피드백
@@ -75,10 +75,10 @@ flowchart LR
 |---|---|---|
 | Purchase + Dashboard web | Next.js 16, TypeScript, AWS Amplify | `/request` 구매 입력과 `/dashboard` 읽기 전용 감사를 라우트·책임으로 분리, SIWE, SSE |
 | Buyer & Audit API | Python 3.12, FastAPI, ECS Fargate | 인증 HTTP 경계, Buyer Agent 오케스트레이션, 선택·감사 엔진, Audit Evidence API, 조회 API |
-| Payment Executor (internal code: Commerce Gateway) | Node.js 20, TypeScript, ECS Fargate | Buyer Agent가 사용하는 키 격리 실행 모듈; 원자적 예산 예약, 견적 검증, ERC-3009/Permit2 병렬 서명, x402 재시도, 체인 교차 검증 |
+| Payment Executor (internal code: Commerce Gateway) | Node.js 20, TypeScript, ECS Fargate | Buyer Agent가 사용하는 키 격리 실행 모듈; 원자적 예산 예약, 견적 검증, ERC-3009 서명, x402 재시도, 체인 교차 검증 |
 | Seller Service | Node.js 20, TypeScript, ECS Fargate | 공통 판매 엔진, Gemini/Nemotron 설정, 견적 서명, x402 유료 inference endpoint |
 | MongoDB Atlas | AWS Seoul 인접 리전 | 구조화 증거, 암호화 원문, 정책·평판·감사 기록 |
-| Base Sepolia | 외부 신뢰 경계 | 기존 PBLC/Permit2 증거, PBLC V2/ERC-3009 목표 정산, ERC-8004 Identity/Reputation |
+| Base Sepolia | 외부 신뢰 경계 | PBLC V2/ERC-3009 정산, ERC-8004 Identity/Reputation, 과거 PBLC/Permit2 불변 증거 |
 
 FastAPI는 에이전트 자체가 아니라 기존 구매·감사 함수를 HTTP API로 감싸 대시보드와 다른 서비스가 안전하게 호출하게 하는 얇은 애플리케이션 계층이다.
 
@@ -200,15 +200,15 @@ Payment Executor는 Buyer Agent 경계 안의 실행 모듈이지만 개인키 �
 6. MongoDB 원자적 예산 예약과 `PAYMENT_INTENT_CLAIMED` 이벤트 생성
 7. seller endpoint의 402 요구사항이 저장된 견적과 완전히 같은지 확인
 8. Gateway가 `DecisionAuthorization` EIP-712 서명을 만들고 `PAYMENT_AUTHORIZED` 이벤트로 저장
-9. 선택된 병렬 결제 방식에 따라 PBLC V2 ERC-3009 authorization 또는 기존 Permit2/EIP-2612 payload를 서명해 재요청
+9. PBLC V2 ERC-3009 authorization을 서명해 정확한 금액으로 재요청
 10. facilitator 응답만 믿지 않고 독립 Base RPC에서 receipt와 ERC-20 `Transfer` 이벤트 확인
 11. 예약 금액을 settled로 전환하고 `PAYMENT_SETTLED` 이벤트 생성
 
 감사가 끝나면 FastAPI는 `purchaseId`만 Payment Executor에 보내 객관적 ERC-8004 feedback 제출을 요청한다. Payment Executor는 Audit Evidence API에서 감사 결과와 bundle hash를 다시 읽고, 허용된 100/0 결과만 buyer agent wallet로 서명한다.
 
-#### PBLC V2 `exact + eip3009` 병렬 경로
+#### PBLC V2 `exact + eip3009` 단일 실행 경로
 
-기존 PBLC는 프록시가 없는 생성자 배포형이며 EIP-2612만 구현하므로 업그레이드할 수 없다. PBLC V2는 별도 주소에 배포하고 기존 PBLC/Permit2 기록과 활성 롤백 경로를 보존한다.
+기존 PBLC는 프록시가 없는 생성자 배포형이며 EIP-2612만 구현하므로 업그레이드할 수 없다. PBLC V2는 별도 주소에 배포됐으며 기존 PBLC/Permit2 기록은 불변 감사 자료로만 보존한다.
 
 - ERC-20 6 decimals와 owner mint 정책은 유지한다.
 - EIP-712 domain은 `name = PBL Agent Credit`, `version = 2`, Base Sepolia chain ID, PBLC V2 주소로 고정한다.
@@ -218,24 +218,18 @@ Payment Executor는 Buyer Agent 경계 안의 실행 모듈이지만 개인키 �
 - 서명 복구 주소, low-s, v, zero address, 잔액, nonce 미사용을 확인한 뒤 nonce를 소비하고 `AuthorizationUsed`와 정확한 `Transfer`를 발생시킨다.
 - Seller 402는 `scheme: exact`, `network: eip155:84532`, `extra.assetTransferMethod: eip3009`, PBLC V2 name/version을 광고한다.
 - Payment payload는 `payload.signature`와 `payload.authorization`을 사용한다. `authorization.value`는 견적 금액과 정확히 같고 `to`는 선택된 seller다.
-- feature flag는 `permit2`를 기본 활성값으로 유지한다. ERC-3009 로컬 검증 후에도 PBLC V2 실거래 승인·성공 전에는 운영 기본값을 바꾸지 않는다.
+- PBLC V2 실거래 성공 이후 전송 방식 feature flag와 Permit2 실행 분기를 제거했다. 신규 결제는 `eip3009` 고정이며 과거 Permit2 intent의 execute/reconcile은 fail-closed한다.
 - Facilitator 응답과 별개로 ERC-20 `Transfer` 하나와 `AuthorizationUsed` 하나를 독립 RPC로 확인한다.
 
-#### 구매자 무가스 Permit2 승인
+#### 과거 PBLC V1 Permit2 증거 — 실행 중단
 
-PBLC는 자체 6-decimal ERC-20을 유지하되 EIP-2612 `permit`을 구현한다. buyer wallet은 native ETH나 수동 `approve` 거래 없이 결제액과 같은 allowance만 오프체인 서명한다. x402 Facilitator가 permit과 Permit2 settlement를 한 거래로 제출하고 가스를 부담한다.
-
-- Base Sepolia 배포 가스는 온라인 buyer와 분리된 Admin/Deployer wallet이 한 번 부담한다.
-- 초기 PBLC 공급량은 배포 시 buyer wallet에 직접 mint한다. 이후 admin이 필요한 만큼 추가 mint할 수 있어 token faucet은 사용하지 않는다.
-- EIP-2612 permit의 spender는 canonical Permit2, value는 해당 결제액, deadline은 견적/402 만료보다 길 수 없다.
-- 결제 후 allowance가 남지 않도록 `uint256.max` 승인을 사용하지 않는다.
-- Facilitator가 `eip2612GasSponsoring`을 실제로 지원하고 자체 PBLC settlement를 처리하는지는 Base Sepolia tx로 입증한다.
+PBLC V1의 EIP-2612/Permit2 결제는 Base Sepolia에서 실제 정산에 성공한 과거 감사 증거다. 거래, 영수증, MongoDB 이벤트는 변경하지 않지만 신규 결제나 미완결 거래 복구에는 사용하지 않는다. Payment Executor는 legacy Permit2 intent를 조회 결과로만 반환하고 seller 호출·서명·settlement 전에 거부한다. PBLC V1 계약 소스는 증거 해석을 위해 보존한다.
 
 #### 중복·동시 결제 방지
 
 - `PAYMENT_INTENT_CLAIMED`는 `purchaseId`당 하나만 허용하는 unique partial index를 둔다.
 - 예산 예약은 `walletPolicies` 문서에서 조건부 `findOneAndUpdate`로 원자 처리한다.
-- Permit2 nonce는 purchase 단위로 고정하고 재시도에서 새 nonce를 만들지 않는다.
+- ERC-3009 authorization nonce는 purchase 단위로 고정하고 재시도에서 새 nonce를 만들지 않는다.
 - `PAYMENT_SETTLED` 역시 purchase당 하나만 허용한다.
 - 결과가 모호한 timeout에서는 예약을 해제하지 않고 `PAYMENT_RECONCILIATION_REQUIRED`로 전환해 체인을 먼저 조회한다.
 
@@ -358,7 +352,7 @@ sequenceDiagram
 | `modelCatalog` | provider별 모델, limits, enabled | unique providerId+modelId+version |
 | `benchmarkSnapshots` | source, observedAt, normalized metrics, contentHash | provider/model/observedAt |
 | `purchaseEvents` | append-only 전체 상태와 해시 체인 | unique purchaseId+sequence; partial unique payment events |
-| `paymentIntents` | quote/decision binding, transfer method, Permit2 nonce 또는 ERC-3009 bytes32 nonce, settlement proof | unique purchaseId; transaction hash when present |
+| `paymentIntents` | quote/decision binding, transfer method, ERC-3009 bytes32 nonce, legacy Permit2 nonce(read-only), settlement proof | unique purchaseId; transaction hash when present |
 | `auditReports` | rulesetVersion, findings, evidence refs, bundle hash | unique purchaseId+auditVersion |
 | `walletPolicies` | perTxLimit, dailyLimit, spent, reserved, policyDate | unique buyerWallet+policyDate |
 | `sensitivePayloads` | encrypted prompt/response envelope와 content hash | unique payloadId; purchaseId+kind |
@@ -403,7 +397,7 @@ ERC-8004는 현재 Draft이므로 주소와 ABI는 빌드에 고정 복사하지
 | 지갑 | 역할 | 보관 |
 |---|---|---|
 | User Owner Wallet | MetaMask SIWE, buyer identity 소유 | 사용자 MetaMask |
-| Buyer Agent Wallet | 결정·ERC-3009 또는 Permit2 서명, seller feedback 제출 | Payment Executor Secrets Manager |
+| Buyer Agent Wallet | 결정·ERC-3009 서명, seller feedback 제출 | Payment Executor Secrets Manager |
 | Admin/Minter Wallet | Demo ERC-20 배포·mint·초기 agent 등록 | 배포 전용 secret |
 | Gemini Seller Wallet | 견적 서명, 결제 수신, ERC-8004 agentWallet | Seller secret |
 | Nemotron Seller Wallet | 견적 서명, 결제 수신, ERC-8004 agentWallet | Seller secret |
@@ -557,7 +551,7 @@ docs/
 
 - SIWE 인증과 user/buyer wallet 바인딩
 - purchase lifecycle, append-only evidence, 암호화 원문 저장
-- 예산 예약, x402 exact 결제(ERC-3009 목표/Permit2 롤백), 체인 교차 검증
+- 예산 예약, x402 exact ERC-3009 결제, 체인 교차 검증
 - ERC-8004 identity/reputation 연결
 - 공통 거래·경고·감사 조회 API와 대시보드 shell
 
@@ -623,7 +617,7 @@ DomainResultPresenter
 
 | 선택 | 채택 이유 | 포기한 것 |
 |---|---|---|
-| 별도 PBLC V2 + ERC-3009, 검증 전 Permit2 유지 | faucet 없이 exact 고정 견적을 truly gasless로 한 번 결제하고 안전하게 롤백 | 새 계약 주소·토큰 잔액 마이그레이션과 실제 Facilitator 검증 필요 |
+| 별도 PBLC V2 + ERC-3009 단일 실행 경로 | faucet 없이 exact 고정 견적을 truly gasless로 한 번 결제 | 새 계약 주소·토큰 잔액과 실제 Facilitator 검증 필요 |
 | MetaMask owner + programmatic buyer wallet | 로그인 소유권과 자율 결제 분리 | 서버 key 관리 책임 |
 | 제공자별 seller agent | 회사별 가격·정책 표현, 모델 증설 용이 | 모델별 완전 독립 에이전트 |
 | Mongo append-only evidence | 판단 과정을 풍부하게 저장·검색 | 모든 근거를 온체인에 쓰는 단순성 |
@@ -658,7 +652,7 @@ DomainResultPresenter
 - [x] 승인 후 PBLC V2 `exact + eip3009` verify/settle 성공
 - [x] `AuthorizationUsed`와 token·sender·recipient·exact amount Transfer 독립 RPC 검증
 - [x] 같은 ERC-3009 nonce 재결제 거부 확인
-- [x] 신규 구매용 ERC-3009 격리 런타임 활성화; Permit2 런타임은 기존 미완결 증거 복구용으로 병렬 보존
+- [x] 신규 구매용 ERC-3009 런타임 활성화; Permit2 런타임 중지 및 과거 intent execute/reconcile 차단
 - [ ] 공식 ERC-8004 Base Sepolia 주소/ABI 재확인
 - [ ] buyer feedback 주소가 seller owner/operator가 아님을 확인
 - [ ] 민감 원문 TTL/수동 삭제 정책 재결정
@@ -678,4 +672,4 @@ DomainResultPresenter
 - **Approved:** 2026-09-02; revision explicitly directed and approved by the user on 2026-09-04
 - **Approval clarification:** 공통 인증·증거·결제·평판 레일과 `ai_inference` 도메인 모듈을 분리해, 나중에 구매 대상 도메인을 바꿀 때 공통 레일을 재사용한다.
 - **Scope guard:** 여러 도메인을 동시에 설치·운영하는 범용 플러그인 플랫폼은 MVP 범위 밖이다.
-- **Migration result:** PBLC V2 ERC-3009 실거래 성공 뒤 신규 구매용 격리 런타임을 활성화했다. Permit2/EIP-2612 런타임과 기존 실거래/미완결 증거는 삭제·변조 없이 롤백·복구 경로로 유지한다.
+- **Migration result:** PBLC V2 ERC-3009 실거래 성공 뒤 이를 유일한 신규 결제 경로로 활성화했다. Permit2/EIP-2612 실행 경로는 제거하고 기존 실거래/미완결 증거만 삭제·변조 없이 읽기 전용으로 유지한다.

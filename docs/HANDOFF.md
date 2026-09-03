@@ -2,19 +2,22 @@
 
 ## 현재 로컬 완료 범위
 
-요청·견적·결정·예산 예약·x402 Permit2 결제·독립 영수증 검증·전달·결정적 감사·ERC-8004 평판·외부 evidence anchor를 `purchaseId`로 연결하는 코드와 테스트가 완료됐다. Gemini/Nemotron은 공통 판매 계약 뒤에 있고, AI 추론 UI만 `apps/dashboard/src/features/ai-inference/`에 분리되어 다른 구매 도메인이 공통 결제·감사 코드를 재사용할 수 있다.
+요청·견적·결정·예산 예약·x402 ERC-3009 결제·독립 영수증 검증·전달·결정적 감사·ERC-8004 평판·외부 evidence anchor를 `purchaseId`로 연결하는 코드와 테스트가 완료됐다. Gemini/Nemotron은 공통 판매 계약 뒤에 있고, AI 추론 UI만 `apps/dashboard/src/features/ai-inference/`에 분리되어 다른 구매 도메인이 공통 결제·감사 코드를 재사용할 수 있다. 과거 Permit2 증거는 조회만 가능하고 다시 실행할 수 없다.
 
 ```mermaid
 flowchart LR
-  U[MetaMask 사용자] --> D[Next.js 감사 대시보드]
+  U[MetaMask 사용자] --> R[Next.js 구매 요청 /request]
+  R --> BA[구매 에이전트]
+  U -. 결과 조회 .-> D[읽기 전용 감사 대시보드]
   D --> A[FastAPI Buyer/Audit API]
-  BA[구매 에이전트] --> A
-  A <--> M[(MongoDB Evidence + 암호화 원문)]
+  BA --> A
+  A <--> EAPI[Audit Evidence API]
+  EAPI <--> M[(MongoDB Evidence + 암호화 원문)]
   BA --> S[판매 에이전트\nGemini 또는 Nemotron]
-  BA --> G[Commerce Gateway]
+  BA --> G[Payment Executor\n논리적으로 Buyer 내부·물리적으로 별도 프로세스]
   G --> S
   S --> F[Coinbase x402 Facilitator]
-  G --> B[Base Sepolia\nDemo ERC-20 / Permit2]
+  G --> B[Base Sepolia\nPBLC V2 / ERC-3009]
   G --> I[ERC-8004 Identity / Reputation]
   G --> E[EvidenceAnchor]
   B --> A
@@ -56,7 +59,7 @@ docker compose -f infra/docker/compose.yml --profile app up --build
 docker compose -f infra/docker/compose.yml --profile app --profile agents up --build
 ```
 
-Gateway는 `seller-gemini`와 `seller-nemotron`을 선택된 `sellerAgentId`로 라우팅한다. 외부 호출은 `GATEWAY_SERVICE_TOKEN` bearer 인증이 필요하다. hash 없는 `RECONCILIATION_REQUIRED`에서는 새 결제 서명이나 제출을 만들지 않고, 인증된 seller 복구 endpoint가 MongoDB의 durable `SUBMITTED`/`SETTLED` journal을 재개한다. 회수한 거래 hash는 별도 `PAYMENT_SUBMISSION_IDENTIFIED` CAS로 `None → tx` 한 번만 결속한다. 해당 journal도 없으면 안전하게 중단된 상태를 유지한다.
+Gateway는 `seller-gemini`와 `seller-nemotron`을 선택된 `sellerAgentId`로 라우팅한다. 외부 호출은 `GATEWAY_SERVICE_TOKEN` bearer 인증이 필요하다. ERC-3009 intent의 hash 없는 `RECONCILIATION_REQUIRED`에서는 새 결제 서명이나 제출을 만들지 않고, 인증된 seller 복구 endpoint가 MongoDB의 durable `SUBMITTED`/`SETTLED` journal을 재개한다. 회수한 거래 hash는 별도 `PAYMENT_SUBMISSION_IDENTIFIED` CAS로 `None → tx` 한 번만 결속한다. 해당 journal도 없으면 안전하게 중단된 상태를 유지한다. 과거 Permit2 미완결 intent는 재개하지 않고 조회 전용 상태로 남긴다.
 
 Provider 호출 직전에는 `PROVIDER_SUBMITTED`, 결정적 attempt ID, 호출자별 획득 토큰을 CAS로 먼저 저장한다. 동시 복구에서는 저장된 획득 토큰과 일치하는 단 한 호출자만 provider를 실행한다. 이 저장 이후 결과의 성공 여부가 불명확해지면 provider를 다시 호출하지 않고 전달 조정 필요 상태로 남겨, 중복 유료 추론보다 보수적 실패를 선택한다.
 
@@ -71,24 +74,16 @@ npm run test:mongo:local
 npm audit --omit=dev
 ```
 
-## 실제 Base Sepolia smoke 순서
+## PBLC V2 Base Sepolia smoke 재현
 
-사전 상태 확인과 배포는 개인키를 출력하지 않는 전용 스크립트를 사용한다.
+PBLC V2는 이미 배포됐다. 신규 배포 없이 현재 주소로 로컬 ERC-3009 runtime과 smoke만 실행한다.
 
 ```bash
 cd /Users/vien/MyProjects/PBL
-npm run chain:status
-npm run chain:deploy
 npm run erc8004:status
-npm run erc8004:register
-npm run smoke:x402
-```
-
-배포 거래는 성공했지만 후속 writer 등록 또는 로컬 주소 저장 전에 중단됐다면 새 계약을 중복 배포하지 않는다. 온체인 주소와 owner·초기 buyer 잔액을 검증한 뒤 다음 복구 명령을 사용한다.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
+npm run smoke:erc3009:stack -- 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3
+# 다른 터미널에서
+npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3
 ```
 
 현재 Base Sepolia 배포:
@@ -104,19 +99,9 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - Nemotron agent ID `9155`: [등록](https://base-sepolia.blockscout.com/tx/0xc3d570a4cb87d9b854df8c3a875ec8bbcd3d59b101700dce1b290e879210e212), [agent wallet 연결](https://base-sepolia.blockscout.com/tx/0xdd5aeaa8e97f62295bb3be3f9d71dca40f88d36836f4d7799767eac41e26f1e8)
 - 두 identity NFT의 owner는 deployer이고 `getAgentWallet`은 각각의 seller signer와 일치한다. `npm run erc8004:status`가 registry version과 두 결속을 RPC에서 다시 검증한다.
 
-1. `npm run chain:status`에 표시되는 전용 deployer 주소에 계약 배포용 Base Sepolia ETH만 준비한다. buyer 주소에는 x402 결제용 ETH를 넣지 않는다.
-2. `DemoToken`과 `EvidenceAnchor`를 deployer로 배포하고, buyer를 EvidenceAnchor writer로 등록한 거래와 온체인 상태를 확인한 뒤에만 주소를 `.env.local`에 주입한다.
-3. 배포 constructor가 1,000,000 PBLC를 buyer-agent wallet에 직접 발행한다. PBLC는 admin이 추가 mint할 수 있으므로 token faucet을 사용하지 않는다.
-4. buyer는 결제액과 같은 EIP-2612 permit만 오프체인 서명한다. x402.org Facilitator가 canonical Permit2 승인과 settlement 가스를 부담하며 수동 allowance 거래는 없다.
-5. `npm run erc8004:register`로 Gemini/Nemotron 판매 에이전트를 ERC-8004에 등록한다. deployer가 NFT owner와 가스를 담당하고 각 seller는 자기 agent wallet 지정에 오프체인 서명하며, 검증된 agent ID는 `.env.local`에 저장된다.
-6. API 키가 필요 없는 x402.org testnet Facilitator로 한 요청을 실행한다.
-7. Facilitator 응답과 별개로 RPC receipt의 status, token contract, 정확한 `Transfer(from,to,amount)`를 확인한다.
-8. provider response hash를 기록하고 감사를 실행한다.
-9. 감사 서버가 선택 agent ID·객관적 성공 100 또는 확정 실패 0·audit bundle hash를 먼저 확정한 뒤 ERC-8004 feedback을 제출한다.
-10. 평판 tx의 정확한 `NewFeedback(agentId,value,tags,feedbackHash)`와 EvidenceAnchor event를 receipt에서 확인한 뒤 MongoDB evidence에 기록한다.
-11. 대시보드 거래 상세에서 request→decision→tx→delivery hash→audit→reputation/anchor 링크를 캡처한다.
+신규 구매는 PBLC V2, `assetTransferMethod=eip3009`, 랜덤 `bytes32` nonce만 사용한다. Facilitator 응답과 별개로 RPC receipt의 status, 정확한 `Transfer(from,to,amount)`, 동일 receipt의 `AuthorizationUsed(authorizer,nonce)`를 확인한 뒤 감사와 평판을 기록한다.
 
-### 2026-09-02 실거래 결과
+### 2026-09-02 과거 Permit2 실거래 결과 — 감사 조회 전용
 
 - 성공 구매 ID: `14f37c54-e26c-4ab4-83e6-cbc7c2a7c473`
 - buyer ETH 0 상태의 x402 결제: [`0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680`](https://base-sepolia.blockscout.com/tx/0xe8529c17bb1a4998a4ee75cf7b782a0b465cd286bb9005b0c318f22ddb33b680)
@@ -133,7 +118,7 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - x402 결제 두 건 뒤 buyer 잔액은 `999,999.8 PBLC`, permit nonce는 `2`, Permit2 allowance는 `0`이었다. 그 뒤 평판·앵커 쓰기 전용으로 `0.0001 ETH`를 별도 공급했다([funding tx](https://base-sepolia.blockscout.com/tx/0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336)).
 - 재현 스크립트 `npm run smoke:x402`는 시크릿·원문 prompt·서명·provider 응답 본문을 출력하지 않는다.
 
-## 2026-09-04 canonical 대시보드 거래 결과
+## 2026-09-04 과거 Permit2 canonical 대시보드 거래 결과 — 감사 조회 전용
 
 - 사용자 대시보드와 분리된 발표·개발용 `/experiments` 실행기에서 owner `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3` 범위의 정상 거래를 실행했다.
 - 완료 구매 ID: `378beb23-e352-49f0-b450-87da88791292`
@@ -143,7 +128,7 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - canonical `pbl_audit`에는 `REQUESTED → QUOTED → DECIDED → PAYMENT_INTENT_CLAIMED → PAYMENT_AUTHORIZED → DELIVERY_STAGED → PAYMENT_RECONCILIATION_REQUIRED → PAYMENT_SETTLED → DELIVERED → AUDITED` 10개 이벤트가 연결됐다.
 - hash-chain head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다.
 - provider 응답은 현재 mock Gemini다. 이 실행에서는 새 ERC-8004 feedback이나 EvidenceAnchor 거래를 자동 제출하지 않았다.
-- 이전 시도 `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`는 RPC 제출 오류 뒤 transaction hash 없는 reconciliation 상태로 남았다. 실제 Transfer는 없으며 안전상 예약 `0.1 PBLC`와 append-only 기록을 유지한다.
+- 이전 시도 `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`는 RPC 제출 오류 뒤 transaction hash 없는 reconciliation 상태로 남았다. 실제 Transfer는 없으며 안전상 예약 `0.1 PBLC`와 append-only 기록을 유지한다. Permit2 실행 경로 제거 후에는 이 intent를 다시 정산하지 않는다.
 
 ## 2026-09-04 PBLC V2 ERC-3009 실거래 결과
 

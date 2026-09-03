@@ -26,7 +26,7 @@
 - 기존 PBLC V1: `0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9`
 - 성공 Permit2 거래: `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`
 - 미완결 purchase: `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`
-- 신규 구매 검증 런타임은 `eip3009`; 기존 Permit2 런타임과 증거는 롤백·미완결 복구를 위해 병렬 보존한다.
+- 신규 구매 실행은 `eip3009`만 허용한다. 기존 Permit2 온체인 거래와 MongoDB 증거는 읽기 전용으로 보존하지만 실행·재조정 경로는 비활성화했다.
 
 ## 승인 대상
 
@@ -57,4 +57,4 @@
 7. 동일 nonce 재결제 거부
 8. Audit Evidence API, 대시보드 잔액·거래·감사 결과 반영
 
-실패 시 Facilitator 응답과 원인을 기록하고 기존 Permit2 경로를 그대로 유지한다.
+이 항목은 배포 전 승인 조건이었다. 성공 검증 이후 Permit2 fallback은 제거됐으며 후속 실패는 ERC-3009 reconciliation 증거로만 처리한다.

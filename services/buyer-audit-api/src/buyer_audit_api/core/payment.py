@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import secrets
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -103,10 +102,10 @@ class PaymentIntent:
     amount_units: int
     token: str
     pay_to: str
-    permit2_nonce: str
+    permit2_nonce: str | None
     state: PaymentIntentState
     claimed_at: datetime
-    transfer_method: Literal["permit2", "eip3009"] = "permit2"
+    transfer_method: Literal["permit2", "eip3009"] = "eip3009"
     authorization_nonce: str | None = None
     decision_authorization_hash: str | None = None
     decision_authorization_signature: str | None = None
@@ -206,11 +205,9 @@ class PaymentService:
         *,
         repository: PaymentRepository,
         clock: Clock,
-        transfer_method: Literal["permit2", "eip3009"] = "permit2",
     ) -> None:
         self._repository = repository
         self._clock = clock
-        self._transfer_method = transfer_method
 
     async def configure_wallet_policy(self, policy: WalletPolicy) -> None:
         await self._repository.put_wallet_policy(policy)
@@ -283,8 +280,8 @@ class PaymentService:
             actor={"id": "payment-executor", "type": "service"},
             payload={
                 "authorizationHash": authorization_hash,
+                "authorizationNonce": intent.authorization_nonce,
                 "decisionEventHash": intent.decision_event_hash,
-                "permit2Nonce": intent.permit2_nonce,
                 "quoteId": intent.quote_id,
                 "signatureHash": sha256_bytes(signature.encode("utf-8")),
             },
@@ -692,8 +689,6 @@ class PaymentService:
 
     async def claim(self, purchase_id: str) -> PaymentIntent:
         view = await self.load_payment_view(purchase_id)
-        nonce_material = f"{purchase_id}:{view.quote.quote_id}".encode()
-        permit2_nonce = str(int.from_bytes(hashlib.sha256(nonce_material).digest(), "big"))
         existing = await self._repository.get_payment_intent(purchase_id)
         if existing is not None:
             immutable_binding = (
@@ -704,7 +699,6 @@ class PaymentService:
                 existing.amount_units,
                 existing.token,
                 existing.pay_to,
-                existing.permit2_nonce,
             )
             current_binding = (
                 purchase_id,
@@ -714,7 +708,6 @@ class PaymentService:
                 view.quote.amount_units,
                 view.quote.token,
                 view.quote.pay_to,
-                permit2_nonce,
             )
             if immutable_binding != current_binding:
                 raise PaymentConflictError("payment intent immutable binding changed")
@@ -738,15 +731,11 @@ class PaymentService:
             amount_units=view.quote.amount_units,
             token=view.quote.token,
             pay_to=view.quote.pay_to,
-            permit2_nonce=permit2_nonce,
+            permit2_nonce=None,
             state=PaymentIntentState.CLAIMED,
             claimed_at=now,
-            transfer_method=self._transfer_method,
-            authorization_nonce=(
-                "0x" + secrets.token_hex(32)
-                if self._transfer_method == "eip3009"
-                else None
-            ),
+            transfer_method="eip3009",
+            authorization_nonce="0x" + secrets.token_hex(32),
         )
         return await self._repository.claim_payment_intent(
             intent=intent,
@@ -757,7 +746,6 @@ class PaymentService:
                 "buyerWalletAddress": intent.buyer_wallet_address,
                 "decisionEventHash": intent.decision_event_hash,
                 "payTo": intent.pay_to,
-                "permit2Nonce": intent.permit2_nonce,
                 "transferMethod": intent.transfer_method,
                 "authorizationNonce": intent.authorization_nonce,
                 "quoteId": intent.quote_id,

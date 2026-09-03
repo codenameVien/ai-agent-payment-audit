@@ -161,9 +161,12 @@ async def test_concurrent_claim_is_atomic_idempotent_and_domain_neutral(clock) -
 
     intents = await asyncio.gather(*(service.claim("purchase-payment") for _ in range(12)))
 
-    assert len({intent.permit2_nonce for intent in intents}) == 1
+    assert len({intent.authorization_nonce for intent in intents}) == 1
     assert all(intent.state == PaymentIntentState.CLAIMED for intent in intents)
-    assert intents[0].permit2_nonce.isdecimal()
+    assert intents[0].permit2_nonce is None
+    assert intents[0].transfer_method == "eip3009"
+    assert intents[0].authorization_nonce is not None
+    assert len(intents[0].authorization_nonce) == 66
     events = await repository.list_events("purchase-payment")
     assert [event.type for event in events] == [
         EventType.REQUESTED,
@@ -186,7 +189,7 @@ async def test_erc3009_claim_uses_one_random_bytes32_nonce_and_preserves_idempot
     repository = InMemoryEvidenceRepository()
     await seed_payment_ready(repository, clock, purchase_id="purchase-erc3009")
     await configure_policy(repository, clock)
-    service = PaymentService(repository=repository, clock=clock, transfer_method="eip3009")
+    service = PaymentService(repository=repository, clock=clock)
 
     first, second = await asyncio.gather(
         service.claim("purchase-erc3009"), service.claim("purchase-erc3009")

@@ -149,16 +149,11 @@ export function createSellerTransport(env: NodeJS.ProcessEnv = process.env): Sel
     ? { authorization: env.FACILITATOR_AUTHORIZATION }
     : undefined;
   const quoteTerms = new EvidenceQuoteTermsReader(engine, env);
-  const transferMethod = env.PAYMENT_TRANSFER_METHOD === "eip3009"
-    ? "eip3009"
-    : "permit2";
-  const tokenVersion = transferMethod === "eip3009" ? "2" : "1";
   const gate = new FacilitatorPaymentGate({
     quotes: quoteTerms,
     facilitatorUrl: required(env, "FACILITATOR_URL"),
     ...(facilitatorHeaders === undefined ? {} : { facilitatorHeaders }),
-    transferMethod,
-    tokenVersion,
+    tokenVersion: "2",
   });
   const application = new SellerApplication(
     engine,
@@ -172,8 +167,7 @@ export function createSellerTransport(env: NodeJS.ProcessEnv = process.env): Sel
     application,
     required(env, "PROVIDER_ID"),
     new ExactEvmChallengeProvider(quoteTerms, required(env, "PROVIDER_ID"), {
-      transferMethod,
-      tokenVersion,
+      tokenVersion: "2",
     }),
     required(env, "INTERNAL_SERVICE_TOKEN"),
   );

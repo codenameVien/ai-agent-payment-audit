@@ -290,7 +290,9 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
         intents = await asyncio.gather(
             *(payment_service.claim(payment_purchase_id) for _ in range(12))
         )
-        assert len({intent.permit2_nonce for intent in intents}) == 1
+        assert len({intent.authorization_nonce for intent in intents}) == 1
+        assert intents[0].permit2_nonce is None
+        assert intents[0].transfer_method == "eip3009"
         stored_intent = await repository.get_payment_intent(payment_purchase_id)
         assert stored_intent is not None
         assert stored_intent.decision_event_hash == decided.event_hash

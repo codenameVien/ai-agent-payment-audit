@@ -29,7 +29,7 @@
 - 인증된 `/purchases/{id}/run`으로 요청→선택→결제→전달→감사를 한 번에 실행하는 E2E
 - 판매자 `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` durable journal과 응답 유실·재시작 복구
 - 전달 결과의 seller/provider/model/version을 선택된 서명 견적과 결속하는 무결성 감사
-- 기존 PBLC EIP-2612/Permit2 실거래를 보존하면서 PBLC V2 `exact + ERC-3009`를 병렬 검증하는 전환 경로
+- PBLC V2 x402 v2 `exact + ERC-3009` 단일 신규 결제 경로와 과거 Permit2 감사 기록 읽기 호환성
 - 원자적 예산 예약과 독립 Base Sepolia receipt·정확한 ERC-20 Transfer 검증
 - 결정적 normal/caution/risk 감사와 semantic advisor 권한 제한
 - audit bundle hash에 결합된 ERC-8004 객관 100/0 평판 및 tx evidence
@@ -58,7 +58,7 @@ flowchart LR
   S --> E
   E --> M[(MongoDB)]
   P --> F[x402 Facilitator]
-  F --> C[Base Sepolia\nPBLC V2 ERC-3009 목표]
+  F --> C[Base Sepolia\nPBLC V2 ERC-3009]
   P -. 독립 RPC .-> C
   D --> E
 ```
@@ -80,13 +80,6 @@ Compose 실행과 실제 체인 smoke 순서는 [docs/HANDOFF.md](docs/HANDOFF.m
 로그인 후 `/`와 `/dashboard`는 기록을 읽기만 한다. 구매는 `/request`에서 Base Sepolia
 결제 고지를 확인한 뒤 실행하며, `/experiments`는 `/request`로 이동한다. 현재 기본 `PROVIDER_MODE=mock`에서는 결제·체인 검증·감사
 증거는 실제지만 AI 응답 본문은 mock provider가 만든다.
-
-Base Sepolia 공개 주소·잔액과 x402 testnet Facilitator 지원 상태는 키를 노출하지 않고 확인할 수 있다.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-npm run chain:status
-```
 
 API를 직접 실행하려면 시크릿을 채팅에 붙이지 말고 별도 터미널에서 한 번 생성한다.
 
@@ -128,7 +121,7 @@ SIWE 인증 후 fake domain purchase를 만들면 공개 이벤트에는 정규�
 - RFC 8785 + SHA-256: 동일한 JSON 증거가 동일한 hash를 갖게 함
 - AES-256-GCM envelope encryption: 원문별 data key와 이후 AWS KMS 교체 경계 제공
 - SIWE: MetaMask 소유권과 자율 결제 buyer wallet을 분리
-- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 검증 완료 경로. Base Sepolia `0.1 PBLC` 실거래와 nonce 재사용 거부까지 확인했으며 기존 Permit2는 롤백·과거 복구 경로로 보존
+- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 유일한 신규 결제 경로. 과거 Permit2 거래는 감사 조회용 데이터로만 남고 재실행할 수 없음
 - ERC-8004: provider 단위 판매 에이전트 신원과 객관적 결제 결과 평판
 - Next.js: 공통 감사 shell과 도메인별 renderer를 분리한 대시보드
 

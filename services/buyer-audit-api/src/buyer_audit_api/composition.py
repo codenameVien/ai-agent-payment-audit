@@ -58,7 +58,6 @@ class AppContainer:
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     commerce_gateway: HttpCommerceGatewayClient | None = None
-    payment_transfer_method: str = "permit2"
 
 
 def build_container(settings: Settings) -> AppContainer:
@@ -165,5 +164,4 @@ def build_container(settings: Settings) -> AppContainer:
             base_url=settings.commerce_gateway_url,
             service_token=settings.gateway_service_token,
         ),
-        payment_transfer_method=settings.payment_transfer_method,
     )

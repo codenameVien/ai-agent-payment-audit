@@ -156,7 +156,7 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         amount_units=int(document["amountUnits"]),
         token=str(document["token"]),
         pay_to=str(document["payTo"]),
-        permit2_nonce=str(document["permit2Nonce"]),
+        permit2_nonce=cast(str | None, document.get("permit2Nonce")),
         state=PaymentIntentState(str(document["state"])),
         claimed_at=cast(datetime, document["claimedAt"]),
         transfer_method=cast(
@@ -222,7 +222,7 @@ def _seller_execution_from_document(document: dict[str, Any]) -> SellerExecution
     )
 
 
-def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
+def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
     return (
         left.purchase_id == right.purchase_id
         and left.buyer_wallet_address == right.buyer_wallet_address
@@ -234,7 +234,6 @@ def _same_payment_binding(left: PaymentIntent, right: PaymentIntent) -> bool:
         and left.pay_to == right.pay_to
         and left.permit2_nonce == right.permit2_nonce
         and left.transfer_method == right.transfer_method
-        and left.authorization_nonce == right.authorization_nonce
     )
 
 
@@ -683,11 +682,15 @@ class MongoEvidenceRepository:
                             if event.type == EventType.PAYMENT_INTENT_CLAIMED
                         ]
                         if (
-                            not _same_payment_binding(existing, normalized_intent)
+                            not _same_payment_claim_binding(existing, normalized_intent)
                             or len(claim_events) != 1
                             or claim_events[0].payload.get("quoteId") != existing.quote_id
                             or claim_events[0].payload.get("decisionEventHash")
                             != existing.decision_event_hash
+                            or claim_events[0].payload.get("transferMethod")
+                            != existing.transfer_method
+                            or claim_events[0].payload.get("authorizationNonce")
+                            != existing.authorization_nonce
                         ):
                             raise PaymentConflictError(
                                 "purchase payment intent has different immutable data"

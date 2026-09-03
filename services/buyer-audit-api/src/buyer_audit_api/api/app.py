@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime
-from typing import Literal, cast
+from typing import cast
 
 import httpx
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response, status
@@ -265,9 +265,6 @@ def create_app(container: AppContainer) -> FastAPI:
     payment_service = PaymentService(
         repository=cast(PaymentRepository, container.repository),
         clock=container.clock,
-        transfer_method=cast(
-            Literal["permit2", "eip3009"], container.payment_transfer_method
-        ),
     )
     audit_service = AuditService(
         repository=cast(AuditRepository, container.repository),

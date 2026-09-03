@@ -25,7 +25,7 @@ import {
 } from "./adapters/viem-erc8004.js";
 import { ViemEvidenceAnchorContract } from "./adapters/viem-evidence-anchor.js";
 import { ViemReceiptReader } from "./adapters/viem-receipts.js";
-import { LocalDecisionSigner, LocalErc3009Signer, LocalPermit2Signer } from "./eip712.js";
+import { LocalDecisionSigner, LocalErc3009Signer } from "./eip712.js";
 import {
   BASE_SEPOLIA_ERC8004_IDENTITY,
   BASE_SEPOLIA_ERC8004_REPUTATION,
@@ -94,22 +94,6 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
       chainId: baseSepolia.id,
       verifyingContract: required(env, "DECISION_VERIFYING_CONTRACT") as Address,
     }),
-    permit2Signer: new LocalPermit2Signer(
-      privateKey,
-      baseSepolia.id,
-      async (token, owner) => publicClient.readContract({
-        address: token,
-        abi: [{
-          type: "function",
-          name: "nonces",
-          stateMutability: "view",
-          inputs: [{ name: "owner", type: "address" }],
-          outputs: [{ name: "nonce", type: "uint256" }],
-        }],
-        functionName: "nonces",
-        args: [owner],
-      }),
-    ),
     erc3009Signer: new LocalErc3009Signer(privateKey, baseSepolia.id),
     receipts: new ViemReceiptReader(publicClient as PublicClient),
     identityVerifier: erc8004,

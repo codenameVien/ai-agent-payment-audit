@@ -31,7 +31,7 @@ In one reproducible demonstration, the user can submit an AI request, see the bu
 ### Binding constraints
 
 - Use a project-issued ERC-20 token rather than repeatedly acquiring faucet USDC.
-- Target Base Sepolia x402 v2 `exact` with PBLC V2 ERC-3009. Keep the proven Permit2/EIP-2612 path active until ERC-3009 passes local tests and an explicitly approved real settlement.
+- Target Base Sepolia x402 v2 `exact` with PBLC V2 ERC-3009. New purchases have no Permit2/EIP-2612 fallback; historical Permit2 evidence remains immutable and readable.
 - Place the internal Audit Evidence API between every agent/payment service and MongoDB; Seller Service and Payment Executor never access MongoDB directly.
 - Preserve provider/model portability through adapters.
 - Prove the complete path locally before AWS deployment.
@@ -108,8 +108,9 @@ As a user, I want the buyer's choice and reasoning to be visible so that I can j
 As a user, I want the buyer agent to pay autonomously within strict limits so that the demonstration is useful without allowing uncontrolled spending.
 
 - **AC-05.1:** GIVEN a selected unexpired quote WHEN payment is requested THEN the buyer agent asks the Payment Executor to verify `purchaseId`, amount, token, recipient, quote expiry, seller identity, user budget, transaction limit, and rolling daily limit before signing.
-- **AC-05.2:** GIVEN PBLC V2 is configured for parallel verification WHEN payment is constructed THEN the Seller advertises x402 v2 `exact` with `extra.assetTransferMethod: eip3009`, and the Payment Executor signs an exact `TransferWithAuthorization` payload whose amount, recipient, token, validity window, and random `bytes32` nonce match the selected quote.
-- **AC-05.2a:** GIVEN ERC-3009 has not yet passed the approved real-settlement gate WHEN normal purchases run THEN the existing Permit2/EIP-2612 path remains available and no historic Permit2 evidence is modified.
+- **AC-05.2:** GIVEN PBLC V2 is configured for payment WHEN payment is constructed THEN the Seller advertises x402 v2 `exact` with `extra.assetTransferMethod: eip3009`, and the Payment Executor signs an exact `TransferWithAuthorization` payload whose amount, recipient, token, validity window, and random `bytes32` nonce match the selected quote.
+- **AC-05.2a (완료된 전환 게이트):** GIVEN ERC-3009 had not yet passed the approved real-settlement gate WHEN the migration was being verified THEN Permit2/EIP-2612 stayed available without modifying historic evidence. This temporary migration condition ended after the approved ERC-3009 settlement succeeded.
+- **AC-05.2b:** GIVEN the approved ERC-3009 settlement has succeeded WHEN any new payment or reconciliation is requested THEN only ERC-3009 may execute, while a legacy Permit2 intent is returned for audit display but rejected before contacting a seller or signer.
 - **AC-05.3:** GIVEN any retry for a `purchaseId` that already has a successful settlement WHEN the Payment Executor receives it THEN no second payment is submitted and the existing result is returned or reported.
 - **AC-05.4:** GIVEN an amount above 1 demo token per transaction or a rolling total above 20 demo tokens per day WHEN payment is requested THEN the Gateway rejects it before signing.
 - **AC-05.5:** GIVEN a settled payment followed by service-delivery failure WHEN the workflow handles the failure THEN it creates an alert and does not automatically repurchase or refund.
@@ -257,7 +258,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 ## 10. External Dependencies and Proof Obligations
 
 - Official x402 v2 and Coinbase documentation plus live `/supported` evidence must be captured for Base Sepolia `exact`; custom PBLC V2 EIP-3009 compatibility remains unproven until `/verify`, `/settle`, `AuthorizationUsed`, and exact `Transfer` are observed in an explicitly approved real transaction.
-- The current PBLC/Permit2 real transaction remains the rollback path until the ERC-3009 proof obligation succeeds. A failed ERC-3009 smoke records the Facilitator response and cause without deleting Permit2.
+- The former PBLC/Permit2 transaction remains historical evidence only. ERC-3009 failure records the Facilitator response and cause without enabling a Permit2 fallback.
 - Gemini and Nemotron integrations must be proven with actual provider responses before final demonstration; mocks are acceptable for local development tests only.
 - ERC-8004 registration and feedback must be confirmed with transaction hashes and readable on-chain state.
 - MongoDB persistence claims require a stored record query, not only a connection message.
@@ -268,4 +269,4 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 - **Decision:** Approve and Continue
 - **Approved on:** 2026-09-02; revision explicitly directed by the user on 2026-09-04.
 - This revision supersedes conflicting Permit2-only, Commerce-Gateway-as-owner, `/experiments`, and Evidence-Repository-as-component wording while preserving historic evidence.
-- Next external checkpoint: PBLC V2 deployment approval after local implementation and verification.
+- Next external checkpoints: real Gemini/Nemotron provider proof, AWS deployment approval, and public retention-policy decision.

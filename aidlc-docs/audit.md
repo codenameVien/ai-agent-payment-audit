@@ -1,5 +1,14 @@
 # AI-DLC Audit Log
 
+## 2026-09-04 — ERC-3009를 유일한 신규 결제 경로로 확정
+
+- 사용자는 ERC-3009 실거래 성공 뒤에도 Permit2 실행 경로를 보존한 결정이 지나치게 보수적이라고 판단했고, Permit2를 다시 사용할 계획이 없음을 명확히 했다.
+- 과거 Permit2 온체인 거래와 MongoDB 성공·실패·미완결 기록은 감사 증거로 그대로 보존한다. 삭제·덮어쓰기·재정산은 하지 않는다.
+- `PAYMENT_TRANSFER_METHOD`, Permit2 signer/challenge/payload 분기와 기본 실행 설정을 제거한다. 신규 intent는 ERC-3009 nonce만 생성한다.
+- legacy Permit2 intent는 사용자 화면과 내부 조회에서 읽을 수 있지만 execute/reconcile은 seller 또는 signer 호출 전에 fail-closed한다.
+- 기본 PBLC 주소와 seller 402는 PBLC V2 `exact + eip3009`로 고정하며, 이전 Permit2 배포 스크립트와 실행 중인 로컬 프로세스도 제거·중지한다.
+- 검증 결과: lint/typecheck 통과, Python 75 passed/1 skipped, Seller 30 passed, Payment Executor 34 passed, Solidity 11 passed, native replica-set Mongo 1 passed, dashboard production build 통과. 실제 `pbl_audit`의 과거 Permit2 성공 10-event/미완결 6-event와 ERC-3009 성공 10-event 기록도 변경 없이 확인했다.
+
 ## 2026-09-04 — PBLC V2 ERC-3009 deployment and real settlement approved and completed
 
 - User explicitly approved the previously reported deployer, predicted address, initial holder/supply, gas estimate, and `0.1 PBLC` Base Sepolia smoke.
@@ -8,7 +17,7 @@
 - Added same-UTC-day V1/V2 wallet policy coexistence (`buyerWalletAddress + policyDate + token`), deterministic current-date selection, safe Facilitator error propagation, and a reusable isolated ERC-3009 smoke stack.
 - Successful purchase `451f8657-cbc0-4469-acb6-a7037b4d4865` settled `100000` units to Gemini seller in tx `0x5b555e3c50629430cdee30c528db8f45f56441a3a058888e89ab0fb4797892ee`, block `46349821`; receipt contains `AuthorizationUsed` at log `196` and exact Transfer at log `197`.
 - Independent replay verification returned `invalid_exact_evm_nonce_already_used`. Audit result is `NORMAL`, findings empty, bundle `sha256:3c4d3d5c53dbc275feb8bef02fd7eabd5a3c016468b9d1c2340a947dd17587d5`.
-- Existing Permit2 success and incomplete records were not deleted or rewritten. The legacy runtime remains available while the isolated new-purchase runtime uses ERC-3009.
+- Existing Permit2 success and incomplete records were not deleted or rewritten. This was the migration snapshot; the later ERC-3009-only decision above supersedes its temporary legacy-runtime availability.
 
 ## 2026-09-04 — ERC-3009 local implementation reached deployment approval gate
 
