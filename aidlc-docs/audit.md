@@ -277,3 +277,8 @@
 - 이번 실행 범위는 고정 예산 `100000` raw units (`0.1 PBLC`)의 정상 거래 한 건으로 한정한다. 비정상 시나리오를 가장한 가짜 체인 거래·가짜 경고는 만들지 않는다.
 - 실행 화면은 실제 Base Sepolia PBLC 결제임을 명시하고, 확인 체크 전에는 실행할 수 없으며, 진행 중 재클릭과 요청 생성 후 재시도로 인한 중복 구매를 막는다.
 - 정상 거래의 결제·감사 증거는 canonical `pbl_audit` 데이터베이스와 로그인 owner 범위에 기록해 기존 smoke 데이터베이스를 변경하지 않는다.
+- 사용자는 구현 확인 뒤 실행기가 사용자 대시보드 메뉴 안에 보이는 것이 역할 분리에 맞지 않음을 지적했다. 이를 설계 수정 승인으로 기록하고, 메뉴 링크와 대시보드 공용 셸에서 실행기를 제거해 발표·개발용 화면으로 분리했다.
+- 첫 실행 `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`는 RPC 제출 오류 뒤 transaction hash 없는 `PAYMENT_RECONCILIATION_REQUIRED`에서 중단됐다. 결제는 발생하지 않았고 예약 `0.1 PBLC`는 보수적으로 유지한다. 이 기록은 삭제하지 않는다.
+- 새 탭에서 생성된 두 번째 구매 `378beb23-e352-49f0-b450-87da88791292`는 결제 tx `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`로 완료됐다. block `46341684`, Transfer log index `117`, buyer → Gemini seller, `100000` raw units를 공개 RPC에서 독립 확인했다.
+- 성공 구매는 `REQUESTED`부터 `AUDITED`까지 10개 hash-linked event를 가지며 head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다. buyer 잔액은 `999999700000` raw units, permit nonce는 `3`, Permit2 allowance는 `0`이다.
+- 탭별 `sessionStorage`가 새 탭의 중복 purchase 생성을 막지 못한 실증 결과에 따라 보류 `purchaseId` 저장소를 동일 출처 탭이 공유하는 `localStorage`로 변경했다.

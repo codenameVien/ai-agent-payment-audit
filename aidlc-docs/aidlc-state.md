@@ -1,7 +1,7 @@
 # AI-DLC State
 
-- **Lifecycle:** Construction — approved normal-transaction runner increment
-- **Current stage:** Implementing separate `/experiments` runner and one canonical Base Sepolia normal-payment verification
+- **Lifecycle:** External smoke preparation
+- **Current stage:** Operator-only `/experiments` runner and canonical Base Sepolia normal-payment verification complete; provider and AWS external gates remain
 - **Requirements:** Approved on 2026-09-02
 - **UI mockup checkpoint:** Approved on 2026-09-02
 - **Design:** Approved on 2026-09-02 with domain-reuse boundary

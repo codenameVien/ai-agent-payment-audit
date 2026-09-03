@@ -73,7 +73,7 @@ As a user, I want to submit a prompt with optional budget and priority so that t
 - **AC-02.2:** GIVEN no explicit budget WHEN the request is submitted THEN the configured system limit applies.
 - **AC-02.3:** GIVEN an explicit user budget lower than a system limit WHEN policy is evaluated THEN the lower limit is enforced.
 - **AC-02.4:** GIVEN the priority preset balanced, quality, price, or speed WHEN candidates are scored THEN the documented preset weights are used and stored with the decision.
-- **AC-02.5:** GIVEN the normal-transaction demonstration runner WHEN the presenter starts an experiment THEN the runner requires an explicit real-payment acknowledgement, fixes the budget at `100000` raw units (`0.1 PBLC`), and disables repeated submission while the same run is in progress.
+- **AC-02.5:** GIVEN the normal-transaction demonstration runner WHEN the presenter starts an experiment THEN the runner requires an explicit real-payment acknowledgement, fixes the budget at `100000` raw units (`0.1 PBLC`), and retains the pending `purchaseId` across same-origin tabs so a retry does not silently create another purchase.
 
 ### US-03 — Discover eligible models and obtain live quotes
 
@@ -162,7 +162,7 @@ As an admin, I want a repeatable setup so that the team can reproduce the gradua
 |---|---|---|---|
 | Sign-in | US-01 | SIWE challenge and wallet binding | User enters only records associated with the signed wallet |
 | Overview | US-01, US-09 | Read-only balance, payment, audit, and alert summary | User immediately sees account and evidence health without starting a purchase |
-| Normal-transaction runner | US-02–US-05 | Fixed `0.1 PBLC` budget, balanced priority, explicit acknowledgement, and controlled purchase start | Presenter creates one real normal-path experiment away from the monitoring dashboard |
+| Normal-transaction runner | US-02–US-05 | Fixed `0.1 PBLC` budget, balanced priority, explicit acknowledgement, and controlled purchase start outside the dashboard navigation/shell | Presenter creates one real normal-path experiment without turning the user dashboard into a purchase UI |
 | Transaction list | US-09 | Filterable request/payment/audit summaries | User finds a prior decision quickly |
 | Transaction detail | US-03–US-09 | Evidence comparison and end-to-end timeline | User understands what was chosen, why, paid, delivered, and flagged |
 | Seller reputation | US-03, US-08, US-09 | ERC-8004 identities and objective feedback | User compares seller trust evidence |

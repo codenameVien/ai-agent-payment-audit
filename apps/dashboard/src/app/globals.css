@@ -75,6 +75,26 @@ button, input, textarea, select { font: inherit; }
   white-space: nowrap;
 }
 .topbar nav a:hover, .topbar nav a:focus { color: white; }
+.operatorBar {
+  min-height: 70px;
+  padding: 0 max(24px, calc((100vw - 1280px) / 2));
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  border-bottom: 1px solid #4a3b70;
+  background: #171321;
+}
+.operatorBar div { display: flex; flex-direction: column; gap: 4px; }
+.operatorBar span {
+  color: var(--amber);
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.operatorBar strong { font-size: 16px; }
+.operatorBar a { font-size: 12px; text-decoration: none; }
 .live {
   font-size: 12px;
   display: flex;
@@ -547,6 +567,7 @@ footer {
     padding: 16px 20px;
     gap: 14px;
   }
+  .operatorBar { padding: 16px 20px; align-items: flex-start; }
   .topbar nav { order: 3; width: 100%; overflow: auto; gap: 18px; }
   .live { margin-left: auto; }
   .auditIntro { align-items: start; flex-direction: column; }

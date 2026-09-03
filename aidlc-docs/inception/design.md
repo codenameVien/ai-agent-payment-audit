@@ -106,13 +106,13 @@ FastAPI는 에이전트 자체가 아니라 기존 구매·감사 함수를 HTTP
 |---|---|---|
 | `/login` | MetaMask SIWE | `POST /auth/siwe/nonce`, `POST /auth/siwe/verify` |
 | `/` | 읽기 전용 감사 개요 | `GET /wallet`, `GET /purchases`, `GET /audit-alerts`, SSE |
-| `/experiments` | 정상 거래 실험 실행 | `POST /purchases`, `POST /purchases/{purchaseId}/run` |
+| `/experiments` | 발표·개발용 정상 거래 실행기; 사용자 대시보드 메뉴·공용 셸 미노출 | `POST /purchases`, `POST /purchases/{purchaseId}/run` |
 | `/purchases` | 거래 목록 | `GET /purchases` |
 | `/purchases/[purchaseId]` | 판단·결제·응답·감사 상세 | `GET /purchases/{purchaseId}` |
 | `/agents` | ERC-8004 판매자 평판 | `GET /agents` |
 | `/alerts` | 주의·위험 목록 | `GET /audit-alerts` |
 
-개요 화면은 구매를 실행하지 않는다. PBLC 잔액, 실제 계정 범위의 거래·결제 해시, 감사 등급, 경고, RPC/SSE 상태를 모니터링한다. `/experiments`는 개요와 분리된 실행 화면이며, 현재는 명시적 확인 뒤 `0.1 PBLC` 한도의 정상 거래만 만든다. 요청 생성에 성공한 `purchaseId`를 브라우저 상태에 보존해 실행 실패 후 새 구매를 중복 생성하지 않고 같은 거래의 상세로 이동할 수 있게 한다. 비정상 시나리오 제어는 검증 방법이 확정될 때까지 추가하지 않으며, 가짜 거래나 가짜 경고를 개요 데이터에 섞지 않는다.
+개요 화면은 구매를 실행하지 않는다. PBLC 잔액, 실제 계정 범위의 거래·결제 해시, 감사 등급, 경고, RPC/SSE 상태를 모니터링한다. `/experiments`는 같은 Next.js 배포를 재사용하지만 사용자 대시보드 내비게이션과 공용 셸에서는 제거한 발표·개발용 실행 화면이다. 현재는 명시적 확인 뒤 `0.1 PBLC` 한도의 정상 거래만 만든다. 요청 생성에 성공한 `purchaseId`를 동일 출처의 `localStorage`에 보존해 새 탭이나 실행 실패 후에도 새 구매를 중복 생성하지 않고 같은 거래를 재개한다. 비정상 시나리오 제어는 검증 방법이 확정될 때까지 추가하지 않으며, 가짜 거래나 가짜 경고를 개요 데이터에 섞지 않는다.
 
 ### 3.2 Buyer Orchestrator
 

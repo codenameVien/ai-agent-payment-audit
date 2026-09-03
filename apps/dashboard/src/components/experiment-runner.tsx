@@ -21,7 +21,7 @@ export function ExperimentRunner() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setPurchaseId(window.sessionStorage.getItem(PENDING_PURCHASE_KEY));
+    setPurchaseId(window.localStorage.getItem(PENDING_PURCHASE_KEY));
   }, []);
 
   const busy = phase !== "ready";
@@ -50,14 +50,14 @@ export function ExperimentRunner() {
         });
         currentPurchaseId = created.purchase_id;
         setPurchaseId(currentPurchaseId);
-        window.sessionStorage.setItem(PENDING_PURCHASE_KEY, currentPurchaseId);
+        window.localStorage.setItem(PENDING_PURCHASE_KEY, currentPurchaseId);
       }
 
       setPhase("running");
       await api(`/purchases/${encodeURIComponent(currentPurchaseId)}/run`, {
         method: "POST",
       });
-      window.sessionStorage.removeItem(PENDING_PURCHASE_KEY);
+      window.localStorage.removeItem(PENDING_PURCHASE_KEY);
       router.push(`/purchases/${encodeURIComponent(currentPurchaseId)}`);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "정상 거래 실행에 실패했습니다.");

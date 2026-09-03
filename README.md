@@ -35,7 +35,7 @@
 - audit bundle hash에 결합된 ERC-8004 객관 100/0 평판 및 tx evidence
 - 성공 receipt와 정확한 event 이후에만 기록하는 EvidenceAnchor
 - 지갑·거래·선택 이유·평판·감사 경고를 보여주는 읽기 전용 Next.js 대시보드와 SSE
-- 개요와 분리된 `/experiments` 정상 거래 실행기, 고정 `0.1 PBLC`·명시적 확인·중복 실행 방지
+- 사용자 대시보드 메뉴·공용 셸에서 분리된 `/experiments` 운영자 실행기, 고정 `0.1 PBLC`·명시적 확인·탭 간 중복 방지
 - MongoDB·API·대시보드·두 Seller·Gateway Compose와 비용 기본 차단 AWS Terraform handoff
 
 Base Sepolia x402 결제·ERC-8004 평판·EvidenceAnchor 실거래는 완료했다. 실제 provider API·AWS·대시보드 캡처 등 남은 외부 게이트와 거래 링크는 [인계 문서](docs/HANDOFF.md)에 정리했다.
@@ -103,10 +103,11 @@ python3 scripts/input_provider_keys.py
 현재 빌드에서 수행한 검증:
 
 ```text
-68 passed, 1 skipped  # Python; native Mongo is isolated by default
+71 passed, 1 skipped  # Python; native Mongo is isolated by default
 29 passed             # Seller Service
-29 passed             # Commerce Gateway
-4 passed              # Solidity Foundry
+33 passed             # Commerce Gateway
+6 passed              # Solidity Foundry
+3 passed              # Dashboard runner safety
 1 passed              # Native MongoDB replica-set integration
 Success: no issues found in 43 source files  # strict mypy
 ```

@@ -132,6 +132,18 @@ npm run chain:recover -- <PBLC_ADDRESS> <EVIDENCE_ANCHOR_ADDRESS>
 - x402 결제 두 건 뒤 buyer 잔액은 `999,999.8 PBLC`, permit nonce는 `2`, Permit2 allowance는 `0`이었다. 그 뒤 평판·앵커 쓰기 전용으로 `0.0001 ETH`를 별도 공급했다([funding tx](https://base-sepolia.blockscout.com/tx/0x052ced34cc6affb46d67f0807cbdbb3f2a920c879d6f39ae69d2b7cc44ca3336)).
 - 재현 스크립트 `npm run smoke:x402`는 시크릿·원문 prompt·서명·provider 응답 본문을 출력하지 않는다.
 
+## 2026-09-04 canonical 대시보드 거래 결과
+
+- 사용자 대시보드와 분리된 발표·개발용 `/experiments` 실행기에서 owner `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3` 범위의 정상 거래를 실행했다.
+- 완료 구매 ID: `378beb23-e352-49f0-b450-87da88791292`
+- x402 결제: [`0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`](https://base-sepolia.blockscout.com/tx/0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8)
+  - block `46341684`, Transfer log index `117`, receipt success
+  - buyer `0xa45C...cdaB` → Gemini seller `0xfE4D...A41F`, `100000` raw units = `0.1 PBLC`
+- canonical `pbl_audit`에는 `REQUESTED → QUOTED → DECIDED → PAYMENT_INTENT_CLAIMED → PAYMENT_AUTHORIZED → DELIVERY_STAGED → PAYMENT_RECONCILIATION_REQUIRED → PAYMENT_SETTLED → DELIVERED → AUDITED` 10개 이벤트가 연결됐다.
+- hash-chain head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다.
+- provider 응답은 현재 mock Gemini다. 이 실행에서는 새 ERC-8004 feedback이나 EvidenceAnchor 거래를 자동 제출하지 않았다.
+- 이전 시도 `14b7dd10-fba1-4ea0-afc9-fb44500d6b4b`는 RPC 제출 오류 뒤 transaction hash 없는 reconciliation 상태로 남았다. 실제 Transfer는 없으며 안전상 예약 `0.1 PBLC`와 append-only 기록을 유지한다.
+
 ## AWS 인계
 
 `infra/aws/terraform/`은 ECS Fargate task, CloudWatch, 명시적 Secrets Manager ARN 계약을 정의한다. 기본 `enable_services=false`이므로 실제 서비스와 비용은 생성하지 않는다. ALB/HTTPS/WAF, VPC ingress, ECR 이미지, MongoDB Atlas 네트워크, CloudWatch alarm은 실제 배포 계정 정보가 정해진 뒤 추가한다.

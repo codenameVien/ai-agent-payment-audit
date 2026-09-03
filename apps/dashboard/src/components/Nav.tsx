@@ -11,7 +11,6 @@ export function Nav() {
       </Link>
       <nav aria-label="주요 메뉴">
         <Link href="/">개요</Link>
-        <Link href="/experiments">실험 실행</Link>
         <Link href="/purchases">거래</Link>
         <Link href="/agents">판매 에이전트</Link>
         <Link href="/alerts">감사 경고</Link>
