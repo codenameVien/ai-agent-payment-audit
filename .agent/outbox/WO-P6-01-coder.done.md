@@ -128,10 +128,20 @@ check was run here and is reported below.
 - [x] Canonical history DB was never connected, cloned, seeded, migrated or cleaned. Only
       ephemeral `pbl_phase1_test_*` / `pbl_phase6_*_test_*` databases on the script's loopback
       replica set were used, each dropped in `finally`.
-- [x] Protected diff is zero:
-      `git diff --exit-code -- aidlc-docs/inception/{requirements,design,tasks}.md docs/ERC3009_DEPLOYMENT_GATE.md infra/contracts infra/aws work-orders package.json package-lock.json` → exit 0.
+- [x] Protected diff is zero against the base commit:
+      `git diff --exit-code 685472c..HEAD -- aidlc-docs/inception/{requirements,design,tasks}.md docs/ERC3009_DEPLOYMENT_GATE.md infra/contracts infra/aws work-orders package.json package-lock.json .gitignore .agent/{CURRENT_STATE,DECISIONS,HANDOFF}.md`
+      → exit 0, and `git diff --name-only 685472c..HEAD` lists only the 21 allowed-write paths.
       After-hashes are identical to the start gate: requirements `65824ffa…`, design `e89ab056…`,
       tasks `97eedc61…`, ERC-3009 gate `62fa20da…`.
+
+  **Reviewer note on `merge-base`.** The Work Order's reviewer command uses
+  `$(git merge-base HEAD main)`, which resolves to `8886745` here because `main` does not yet
+  contain the planning baseline commit `685472c` (`git merge-base --is-ancestor 685472c main`
+  exits 1; the Phase 6 planning append lives on `feature/phase6-audit-e2e`). Run against that
+  merge-base the protected-path diff is non-zero, but every byte of it is the Planner's already
+  approved Phase 6 append block plus the `.gitignore`/`.agent` planning commits — none of it comes
+  from this packet. Use `685472c..HEAD` (or integrate the planning baseline into `main` first) to
+  see this packet's true diff.
 - [x] Zero public RPC / facilitator / ERC-8004 / provider / AWS commands or writes. No network
       calls beyond `npm ci --ignore-scripts` (registry, lockfile unchanged) and the loopback Mongo.
 - [x] Native Mongo teardown: after the run `lsof -iTCP:27019 -sTCP:LISTEN` finds nothing,
