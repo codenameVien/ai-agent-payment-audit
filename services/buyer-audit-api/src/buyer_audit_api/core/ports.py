@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from buyer_audit_api.core.models import (
     EventType,
@@ -14,6 +14,56 @@ from buyer_audit_api.core.models import (
     WalletBinding,
 )
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
+
+if TYPE_CHECKING:  # avoid a runtime cycle with the payment and projection cores
+    from buyer_audit_api.core.payment import (
+        ConfirmedMismatchProof,
+        ConfirmedOutflow,
+        NoTransferProof,
+        PaymentIntent,
+        ReconciliationCheck,
+    )
+    from buyer_audit_api.core.projections import PurchaseProjection
+
+
+class EvidenceReadPort(Protocol):
+    """Read-only evidence access for query paths; it exposes no append operation."""
+
+    async def list_events(self, purchase_id: str) -> list[EvidenceEvent]: ...
+
+    async def get_event_head(self, purchase_id: str) -> EvidenceHead | None: ...
+
+    async def list_owner_purchase_ids(self, owner_address: str) -> list[str]: ...
+
+
+class PurchaseProjectionPort(Protocol):
+    """Pure projection contract used by every read model."""
+
+    def project(
+        self,
+        events: list[EvidenceEvent],
+        payment_intent: PaymentIntent | None = None,
+    ) -> PurchaseProjection: ...
+
+
+class TerminalPaymentPort(Protocol):
+    """Atomic append-only terminal payment operations owned by the Evidence API."""
+
+    async def record_reconciliation_check(
+        self, *, purchase_id: str, check: ReconciliationCheck
+    ) -> PaymentIntent: ...
+
+    async def confirm_mismatch(
+        self, *, purchase_id: str, proof: ConfirmedMismatchProof
+    ) -> PaymentIntent: ...
+
+    async def reconcile_no_transfer(
+        self, *, purchase_id: str, proof: NoTransferProof
+    ) -> PaymentIntent: ...
+
+    async def list_confirmed_outflows(
+        self, purchase_id: str
+    ) -> list[ConfirmedOutflow]: ...
 
 
 class Clock(Protocol):

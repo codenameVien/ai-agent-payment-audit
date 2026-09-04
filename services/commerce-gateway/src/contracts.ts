@@ -35,7 +35,102 @@ export type PaymentIntentState =
   | "AUTHORIZED"
   | "RECONCILIATION_REQUIRED"
   | "SETTLED"
-  | "FAILED";
+  | "FAILED"
+  | "MISMATCH_CONFIRMED"
+  | "RECONCILED_NO_TRANSFER";
+
+export const BASE_SEPOLIA_CHAIN_ID = 84532;
+
+export type EvidenceSource =
+  | "BASE_SEPOLIA_VERIFIED"
+  | "HISTORICAL_ON_CHAIN"
+  | "SYNTHETIC_LOCAL";
+
+/** A chain-provable transaction. `localtx:` values can never reach this variant. */
+export interface EvmTransactionRef {
+  kind: "EVM";
+  hash: Hex;
+  chainId: typeof BASE_SEPOLIA_CHAIN_ID;
+  evidenceSource: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+  blockNumber?: number;
+  logIndex?: number;
+}
+
+/** A synthetic local-ledger transaction. It is never rendered as a chain hash. */
+export interface LocalTransactionRef {
+  kind: "LOCAL";
+  id: string;
+  runId: string;
+  evidenceSource: "SYNTHETIC_LOCAL";
+}
+
+export type TransactionRef = EvmTransactionRef | LocalTransactionRef;
+
+export type ReconciliationVerifierOutcome =
+  | "RECEIPT_NOT_FOUND"
+  | "RECEIPT_PENDING_FINALITY"
+  | "RECEIPT_HASH_MISMATCH"
+  | "AMBIGUOUS_TRANSFER_EVIDENCE"
+  | "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"
+  | "AUTHORIZATION_UNUSED_AFTER_EXPIRY"
+  | "MISMATCHED_TRANSFER_CONFIRMED"
+  | "RECEIPT_REVERTED"
+  | "EXACT_TRANSFER_CONFIRMED";
+
+export interface ReconciliationCheck {
+  purchaseId: string;
+  attemptNumber: number;
+  checkedAt: string;
+  checkedChainId: number;
+  submissionRef: string;
+  verifierOutcome: ReconciliationVerifierOutcome;
+  finalityConfirmations: number;
+  proofRef: string;
+  evidenceSource: EvidenceSource;
+  receiptStatus?: 0 | 1;
+  blockNumber?: number;
+  authorizationState?: string;
+}
+
+export interface ActualTransferProof {
+  amountUnits: number;
+  token: Address;
+  from: Address;
+  to: Address;
+}
+
+export interface ConfirmedMismatchProof {
+  purchaseId: string;
+  actualTransfer: ActualTransferProof;
+  transactionRef: TransactionRef;
+  proofRef: string;
+  evidenceSource: EvidenceSource;
+}
+
+export interface NoTransferProof {
+  purchaseId: string;
+  reasonCode: string;
+  checkedChainId: number;
+  attemptCount: number;
+  firstCheckedAt: string;
+  lastCheckedAt: string;
+  authorizationNonceHash: string;
+  finalityEvidence: { confirmations: number };
+  proofRef: string;
+  evidenceSource: EvidenceSource;
+  submissionRef?: string;
+}
+
+/**
+ * Terminal payment operations of the Evidence API. The HTTP adapter that implements
+ * them is delivered with the reputation packet, so `EvidenceApi` keeps them optional
+ * and the gateway requires an explicit capability before emitting a terminal proof.
+ */
+export interface TerminalPaymentEvidenceApi {
+  recordReconciliationCheck(check: ReconciliationCheck): Promise<PaymentIntent>;
+  confirmMismatch(proof: ConfirmedMismatchProof): Promise<PaymentIntent>;
+  reconcileNoTransfer(proof: NoTransferProof): Promise<PaymentIntent>;
+}
 
 export interface PaymentIntent {
   purchase_id: string;
@@ -54,6 +149,17 @@ export interface PaymentIntent {
   decision_authorization_hash?: Hex | null;
   decision_authorization_signature?: Hex | null;
   transaction_hash?: Hex | null;
+  reconciliation_attempt_count?: number;
+  reconciliation_first_checked_at?: string | null;
+  reconciliation_last_checked_at?: string | null;
+  reconciliation_last_outcome?: ReconciliationVerifierOutcome | null;
+  actual_transfer?: ActualTransferProof | null;
+  mismatched_fields?: string[];
+  terminal_outcome_key?: string | null;
+  terminal_proof_ref?: string | null;
+  terminal_evidence_source?: EvidenceSource | null;
+  local_transaction_id?: string | null;
+  no_transfer_reason_code?: string | null;
 }
 
 export interface PaymentRequirements {
@@ -118,7 +224,7 @@ export interface Erc3009DecisionAuthorization {
   authorizationNonce: Hex;
 }
 
-export interface EvidenceApi {
+export interface EvidenceApi extends Partial<TerminalPaymentEvidenceApi> {
   paymentView(purchaseId: string): Promise<PaymentView>;
   claim(purchaseId: string): Promise<PaymentIntent>;
   authorize(args: {
@@ -241,6 +347,10 @@ export interface ReceiptProof {
     nonce: Hex;
     logIndex: number;
   }>;
+  /** Observed finality depth. Absent means "unknown", which can never close a payment. */
+  confirmations?: number;
+  /** Set by attested synthetic verifiers so a local proof never becomes a chain hash. */
+  transactionRef?: TransactionRef;
 }
 
 export interface ReceiptReader {

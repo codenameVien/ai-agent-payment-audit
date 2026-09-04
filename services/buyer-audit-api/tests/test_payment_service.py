@@ -7,6 +7,7 @@ import pytest
 
 from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.audit import (
+    AuditAuthority,
     AuditFinding,
     AuditService,
     AuditSeverity,
@@ -450,6 +451,9 @@ async def test_authorize_reconcile_and_settle_is_exactly_once(clock) -> None:
         EventType.PAYMENT_RECONCILIATION_REQUIRED,
         EventType.PAYMENT_SETTLED,
     ]
+    assert events[-1].payload["terminalOutcomeKey"] == "terminal:purchase-payment"
+    assert settled[0].terminal_outcome_key == "terminal:purchase-payment"
+    assert settled[0].reconciliation_attempt_count == 0
 
 
 @pytest.mark.asyncio
@@ -754,7 +758,7 @@ async def test_semantic_advisor_can_only_add_non_authoritative_warning(clock) ->
                     "invalid",
                     "semantic analysis cannot assert normal authority",
                     (),
-                    authority="semantic",
+                    authority=AuditAuthority.SEMANTIC_ADVISORY,
                 ),
             )
 

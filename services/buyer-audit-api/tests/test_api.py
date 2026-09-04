@@ -686,3 +686,412 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
         assert policy is not None
         assert policy.reserved_units == 0
         assert policy.spent_units == 100_000
+
+
+RUN_ID = "a" * 32
+LOCAL_TX_ID = f"localtx:{RUN_ID}:payment:000001"
+EVM_TX = "0x" + "ab" * 32
+SCENARIO_BODY = {
+    "run_id": RUN_ID,
+    "scenario_id": "P6-A04-WRONG-AMOUNT",
+    "catalog_version": "phase6.v1",
+    "catalog_hash": "sha256:" + "cd" * 32,
+}
+
+
+def reconciling_purchase(container, client: TestClient) -> tuple[str, str]:
+    """Drives a purchase to RECONCILIATION_REQUIRED through the real HTTP boundary."""
+    owner = Account.create()
+    buyer = Account.create()
+    authenticate(client, owner)
+    assert (
+        client.put(
+            "/internal/auth/buyer-wallet",
+            headers=ADMIN_HEADERS,
+            json={"owner_address": owner.address, "buyer_wallet_address": buyer.address},
+        ).status_code
+        == 200
+    )
+    created = client.post(
+        "/purchases",
+        json={
+            "domain": "fake",
+            "request": {"value": "terminal truth"},
+            "budget_units": 250_000,
+            "policy": {},
+        },
+    )
+    assert created.status_code == 201
+    purchase_id = created.json()["purchase_id"]
+    asyncio.run(
+        container.repository.append_event(
+            purchase_id=purchase_id,
+            event_type=EventType.QUOTED,
+            occurred_at=container.clock.now(),
+            actor={"id": "buyer-orchestrator", "type": "service"},
+            payload={
+                "signedQuotes": [
+                    {
+                        "quote_id": "quote-terminal",
+                        "purchase_id": purchase_id,
+                        "seller_agent_id": "seller-terminal",
+                        "provider_id": "gemini",
+                        "model_id": "model-a",
+                        "model_version": "v1",
+                        "amount_units": 100_000,
+                        "token": TOKEN,
+                        "pay_to": SELLER,
+                        "available": True,
+                        "expires_at": (container.clock.now() + timedelta(hours=1)).isoformat(),
+                        "signer_address": SELLER,
+                        "chain_id": 84532,
+                        "verifying_contract": CONTRACT,
+                    }
+                ],
+                "quoteIdentityEvidence": [
+                    {
+                        "quoteId": "quote-terminal",
+                        "erc8004AgentId": "1",
+                        "identityVerified": True,
+                    }
+                ],
+            },
+        )
+    )
+    asyncio.run(
+        container.repository.append_event(
+            purchase_id=purchase_id,
+            event_type=EventType.DECIDED,
+            occurred_at=container.clock.now(),
+            actor={"id": "buyer-agent", "type": "agent"},
+            payload={"winner": {"quote_id": "quote-terminal"}},
+        )
+    )
+    assert (
+        client.put(
+            "/internal/evidence/wallet-policies",
+            headers=INTERNAL_HEADERS,
+            json={
+                "buyer_wallet_address": buyer.address,
+                "policy_date": container.clock.now().date().isoformat(),
+                "token": TOKEN,
+                "per_transaction_limit_units": 250_000,
+                "daily_limit_units": 1_000_000,
+            },
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/internal/evidence/payment-intents/claim",
+            headers=INTERNAL_HEADERS,
+            json={"purchase_id": purchase_id},
+        ).status_code
+        == 200
+    )
+    assert (
+        client.post(
+            "/internal/evidence/payment-intents/authorize",
+            headers=INTERNAL_HEADERS,
+            json={
+                "purchase_id": purchase_id,
+                "authorization_hash": "0xauthorization",
+                "signature": "0xsignature",
+            },
+        ).status_code
+        == 200
+    )
+    reconciled = client.post(
+        "/internal/evidence/payment-intents/reconciliation",
+        headers=INTERNAL_HEADERS,
+        json={
+            "purchase_id": purchase_id,
+            "reason": "facilitator returned submitted transaction",
+            "transaction_hash": EVM_TX,
+        },
+    )
+    assert reconciled.status_code == 200
+    assert reconciled.json()["state"] == "RECONCILIATION_REQUIRED"
+    return purchase_id, buyer.address.lower()
+
+
+def check_body(purchase_id: str, attempt: int, outcome: str) -> dict[str, object]:
+    return {
+        "purchase_id": purchase_id,
+        "attempt_number": attempt,
+        "checked_at": f"2026-09-04T12:0{attempt}:00Z",
+        "checked_chain_id": 84532,
+        "submission_ref": EVM_TX,
+        "verifier_outcome": outcome,
+        "finality_confirmations": 3,
+        "proof_ref": "sha256:" + str(attempt) * 64,
+        "evidence_source": "SYNTHETIC_LOCAL",
+        "receipt_status": 1,
+        "block_number": 46_349_821,
+        "scenario": SCENARIO_BODY,
+    }
+
+
+def mismatch_body(
+    purchase_id: str, buyer_address: str, *, amount_units: int = 200_000
+) -> dict[str, object]:
+    return {
+        "purchase_id": purchase_id,
+        "actual_amount_units": amount_units,
+        "actual_token": TOKEN,
+        "actual_from": buyer_address,
+        "actual_to": SELLER,
+        "transaction_ref": {"kind": "LOCAL", "id": LOCAL_TX_ID, "run_id": RUN_ID},
+        "proof_ref": "sha256:" + "22" * 32,
+        "evidence_source": "SYNTHETIC_LOCAL",
+        "scenario": SCENARIO_BODY,
+    }
+
+
+def no_transfer_body(purchase_id: str, *, attempts: int = 3) -> dict[str, object]:
+    return {
+        "purchase_id": purchase_id,
+        "reason_code": "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
+        "checked_chain_id": 84532,
+        "attempt_count": attempts,
+        "first_checked_at": "2026-09-04T12:01:00Z",
+        "last_checked_at": "2026-09-04T12:09:00Z",
+        "authorization_nonce_hash": "sha256:" + "44" * 32,
+        "finality_evidence": {"confirmations": 3},
+        "proof_ref": "sha256:" + "33" * 32,
+        "evidence_source": "SYNTHETIC_LOCAL",
+        "submission_ref": LOCAL_TX_ID,
+        "scenario": SCENARIO_BODY,
+    }
+
+
+def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> None:
+    app = create_app(container)
+    with TestClient(app) as client:
+        assert (
+            client.post(
+                "/internal/evidence/payment-intents/reconciliation-checks",
+                json=check_body("missing", 1, "RECEIPT_NOT_FOUND"),
+            ).status_code
+            == 401
+        )
+        purchase_id, buyer_address = reconciling_purchase(container, client)
+
+        assert (
+            client.post(
+                "/internal/evidence/payment-intents/confirm-mismatch",
+                headers=INTERNAL_HEADERS,
+                json=mismatch_body("purchase-missing", buyer_address),
+            ).status_code
+            == 404
+        )
+
+        first = client.post(
+            "/internal/evidence/payment-intents/reconciliation-checks",
+            headers=INTERNAL_HEADERS,
+            json=check_body(purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
+        )
+        assert first.status_code == 200
+        assert first.json()["state"] == "RECONCILIATION_REQUIRED"
+        assert first.json()["reconciliation_attempt_count"] == 1
+        repeated = client.post(
+            "/internal/evidence/payment-intents/reconciliation-checks",
+            headers=INTERNAL_HEADERS,
+            json=check_body(purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
+        )
+        assert repeated.status_code == 200
+        assert repeated.json() == first.json()
+        conflicting = client.post(
+            "/internal/evidence/payment-intents/reconciliation-checks",
+            headers=INTERNAL_HEADERS,
+            json=check_body(purchase_id, 1, "RECEIPT_REVERTED"),
+        )
+        assert conflicting.status_code == 409
+
+        stale = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json={
+                **mismatch_body(purchase_id, buyer_address),
+                "expected_head_event_hash": "sha256:" + "ee" * 32,
+            },
+        )
+        assert stale.status_code == 409
+        wrong_state = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json={**mismatch_body(purchase_id, buyer_address), "expected_state": "SETTLED"},
+        )
+        assert wrong_state.status_code == 409
+
+        for confused in (
+            {"kind": "EVM", "hash": LOCAL_TX_ID},
+            {"kind": "LOCAL", "id": EVM_TX, "run_id": RUN_ID},
+            {"kind": "EVM", "hash": EVM_TX, "id": LOCAL_TX_ID},
+            {"kind": "EVM", "hash": "0x" + "AB" * 32},
+        ):
+            response = client.post(
+                "/internal/evidence/payment-intents/confirm-mismatch",
+                headers=INTERNAL_HEADERS,
+                json={
+                    **mismatch_body(purchase_id, buyer_address),
+                    "transaction_ref": confused,
+                },
+            )
+            assert response.status_code == 422, confused
+
+        exact = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json=mismatch_body(purchase_id, buyer_address, amount_units=100_000),
+        )
+        assert exact.status_code == 422
+
+        confirmed = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json=mismatch_body(purchase_id, buyer_address),
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["state"] == "MISMATCH_CONFIRMED"
+        assert confirmed.json()["mismatched_fields"] == ["amount"]
+        assert confirmed.json()["local_transaction_id"] == LOCAL_TX_ID
+        assert confirmed.json()["terminal_evidence_source"] == "SYNTHETIC_LOCAL"
+        again = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json=mismatch_body(purchase_id, buyer_address),
+        )
+        assert again.status_code == 200
+        assert again.json() == confirmed.json()
+        assert (
+            client.post(
+                "/internal/evidence/payment-intents/reconcile-no-transfer",
+                headers=INTERNAL_HEADERS,
+                json=no_transfer_body(purchase_id, attempts=1),
+            ).status_code
+            == 409
+        )
+
+        events = asyncio.run(container.repository.list_events(purchase_id))
+        assert [event.type for event in events].count(
+            EventType.PAYMENT_MISMATCH_CONFIRMED
+        ) == 1
+        assert [event.type for event in events].count(
+            EventType.PAYMENT_RECONCILIATION_CHECKED
+        ) == 1
+        policy = asyncio.run(
+            container.repository.get_wallet_policy(
+                buyer_wallet_address=events[3].payload["buyerWalletAddress"],
+                policy_date=container.clock.now().date().isoformat(),
+                token=TOKEN,
+            )
+        )
+        assert policy is not None
+        assert policy.reserved_units == 0
+        assert policy.spent_units == 200_000
+
+
+def test_bounded_reconciliation_reaches_a_terminal_no_transfer(container) -> None:
+    app = create_app(container)
+    with TestClient(app) as client:
+        purchase_id, _buyer_address = reconciling_purchase(container, client)
+        for attempt in (1, 2, 3):
+            assert (
+                client.post(
+                    "/internal/evidence/payment-intents/reconciliation-checks",
+                    headers=INTERNAL_HEADERS,
+                    json=check_body(
+                        purchase_id, attempt, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"
+                    ),
+                ).status_code
+                == 200
+            )
+
+        intermediate = client.get(f"/purchases/{purchase_id}")
+        assert intermediate.json()["summary"]["payment_status"] == (
+            "PAYMENT_CONFIRMATION_UNKNOWN"
+        )
+        assert intermediate.json()["summary"]["audit_status"] == "PENDING_AUDIT"
+        assert intermediate.json()["audit"] is None
+        assert client.get("/audit-alerts").json() == []
+
+        closed = client.post(
+            "/internal/evidence/payment-intents/reconcile-no-transfer",
+            headers=INTERNAL_HEADERS,
+            json=no_transfer_body(purchase_id),
+        )
+        assert closed.status_code == 200
+        assert closed.json()["state"] == "RECONCILED_NO_TRANSFER"
+
+        audited = client.post(
+            f"/internal/evidence/purchases/{purchase_id}/audit",
+            headers=INTERNAL_HEADERS,
+        )
+        assert audited.status_code == 200
+        assert audited.json()["severity"] == "RISK"
+        assert audited.json()["ruleset_version"] == "phase6.rules.v1"
+        rule_ids = {item["rule_id"] for item in audited.json()["findings"]}
+        assert {
+            "AUD-PAYMENT-RECONCILED-NO-TRANSFER",
+            "AUD-FACILITATOR-SUCCESS-WITHOUT-TRANSFER",
+        }.issubset(rule_ids)
+
+        detail = client.get(f"/purchases/{purchase_id}")
+        summary = detail.json()["summary"]
+        assert summary["payment_status"] == "RECONCILED_NO_TRANSFER"
+        assert summary["audit_status"] == "AUDITED_RISK"
+        assert summary["evidence_source"] == "SYNTHETIC_LOCAL"
+        assert summary["transaction_hash"] is None
+        assert summary["scenario"] == {
+            "run_id": RUN_ID,
+            "scenario_id": "P6-A04-WRONG-AMOUNT",
+            "catalog_version": "phase6.v1",
+        }
+        assert summary["status"] == "AUDITED"
+        alerts = client.get("/audit-alerts").json()
+        assert {item["rule_id"] for item in alerts} == rule_ids
+        assert all(item["evidence_source"] == "SYNTHETIC_LOCAL" for item in alerts)
+        checked = next(
+            item
+            for item in detail.json()["events"]
+            if item["type"] == "PAYMENT_RECONCILIATION_CHECKED"
+        )
+        assert checked["evidence_source"] == "SYNTHETIC_LOCAL"
+        assert checked["transaction_ref"] is None
+
+
+def test_read_paths_never_change_the_evidence_head(container) -> None:
+    app = create_app(container)
+    with TestClient(app) as client:
+        purchase_id, buyer_address = reconciling_purchase(container, client)
+        client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json=mismatch_body(purchase_id, buyer_address),
+        )
+
+        def head() -> dict[str, object]:
+            response = client.get(
+                f"/internal/evidence/purchases/{purchase_id}/head",
+                headers=INTERNAL_HEADERS,
+            )
+            assert response.status_code == 200
+            return response.json()
+
+        before = head()
+        for path in (
+            "/purchases",
+            f"/purchases/{purchase_id}",
+            f"/purchases/{purchase_id}/events",
+            "/audit-alerts",
+            "/agents",
+            "/wallet",
+        ):
+            assert client.get(path).status_code == 200, path
+        after = head()
+
+        assert before == after
+        assert client.get(f"/purchases/{purchase_id}").json()["audit"] is None
+        assert client.get("/audit-alerts").json() == []
+        assert head() == before
