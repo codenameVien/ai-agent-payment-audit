@@ -5,7 +5,12 @@
 - Work Order: `work-orders/WO-P6-01-core-truth-model.md` (SHA-256 `a93814a1e60c5d6c1fcc839365c75acbda3eb753400c3341e13c48a26cc48a6e`, read-only)
 - Branch: `wo/P6-01` (no push, no merge, no rebase, no amend, no main commit)
 - Base SHA: `685472c2178fac1ed1d16fedd4dde4dda7d3ed64`
-- Tip SHA: `TIP_SHA_PLACEHOLDER`
+- Implementation commit SHA: `449090805948f095f1d35373ffb7852f8f43a1c6`
+  (message `feat(phase6): implement canonical truth model`; contains every source, test and
+  handoff change listed below)
+- Branch tip SHA: `TIP_SHA_PLACEHOLDER` — an evidence-only follow-up commit whose sole diff is
+  this file, because the Work Order forbids `amend`/`reset` and the implementation SHA cannot be
+  known before it exists. Review the branch tip; its diff against `main` is the full packet.
 - Commit message: `feat(phase6): implement canonical truth model`
 - Delivery scope: `P6-DES-WO-01` only. No reputation outbox/publisher, no scenario catalog or
   fakes, no dashboard, no Playwright, no AWS readiness.
