@@ -8,9 +8,11 @@
 - Implementation commit SHA: `449090805948f095f1d35373ffb7852f8f43a1c6`
   (message `feat(phase6): implement canonical truth model`; contains every source, test and
   handoff change listed below)
-- Branch tip SHA: `TIP_SHA_PLACEHOLDER` — an evidence-only follow-up commit whose sole diff is
-  this file, because the Work Order forbids `amend`/`reset` and the implementation SHA cannot be
-  known before it exists. Review the branch tip; its diff against `main` is the full packet.
+- Branch tip: the last commit on `wo/P6-01`, an evidence-only follow-up whose entire diff is this
+  report file. A report cannot contain its own commit hash and the Work Order forbids `amend` and
+  `reset`, so the implementation SHA above is the auditable anchor. Verify the tip with
+  `git rev-parse HEAD`; `git diff main..HEAD` is the complete packet
+  (implementation `449090805948f095f1d35373ffb7852f8f43a1c6` plus this evidence file).
 - Commit message: `feat(phase6): implement canonical truth model`
 - Delivery scope: `P6-DES-WO-01` only. No reputation outbox/publisher, no scenario catalog or
   fakes, no dashboard, no Playwright, no AWS readiness.
