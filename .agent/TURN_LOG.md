@@ -233,3 +233,55 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 ### Handoff
 - Reviewer re-verifies `wo/P6-01` independently against `685472c`; the coder evidence report
   carries the round-2 implementation anchor and `READY_FOR_REVIEW`. WO-P6-02 stays blocked.
+
+## 2026-09-05 06:40 KST — coder — WO-P6-02 blocked at the start gate
+
+### Intent
+- Implement `P6-DES-WO-02` (terminal audit → reputation loop) from
+  `work-orders/WO-P6-02-reputation-loop.md` on `wo/P6-02` at base
+  `feb13f94d3a7934dec3a21a56c2cd3477afac179`.
+
+### Files changed
+- `.agent/outbox/WO-P6-02-blocked.md` (new) — blocked report.
+- `.agent/TURN_LOG.md` (this append-only entry).
+- No product source or test file was modified. `git status --porcelain` showed a clean worktree
+  through the whole survey.
+
+### Commands / verification
+- Start gate passed: worktree/branch clean; base contains both the approved integration SHA
+  `feb13f94…` and the predecessor tip `ca037c9…` (`git merge-base --is-ancestor` exit 0 for both);
+  requirements/design/tasks SHA-256 match the WO; `P6-02` task marker present; TCP 27019 free
+  (`lsof` exit 1, no process signalled); predecessor artifact
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-01-review-r3.md` read, verdict `APPROVE`,
+  reviewed tip matches.
+- The WO's fixed verification sequence was not run: there is no implementation to verify.
+- Read-only survey only: `git`, `grep`, `sha256sum`, `wc`, plus two read-only scout agents that
+  mapped the `ai_inference` domain and the commerce-gateway ERC-8004 surface.
+
+### Decisions / assumptions
+- **Blocker:** design §18.6.1 (`design.md:944-953`) requires two new appendable event types,
+  `REPUTATION_DECIDED` and `REPUTATION_PUBLICATION_CONFLICT`, and §18.6.4 (`design.md:1013`) fixes
+  `unique_reputation_decision_per_purchase` as a unique partial index on `REPUTATION_DECIDED`.
+  The only declaration site for appendable event types is `EventType` at
+  `core/models.py:19`, which is absent from the WO-P6-02 allowed-write list
+  (`work-orders/WO-P6-02-reputation-loop.md:64-107`). `EventType` is a closed `StrEnum`
+  (unsubclassable), `EvidenceEvent.type`/`create_event`/`append_event` are all typed on it, and
+  `pyproject.toml:49` sets mypy `strict = true`, so no allowed file can supply the members.
+- Four in-scope workarounds were considered and rejected in the report: a parallel `StrEnum`,
+  overloading `CORRECTION_RECORDED`, keeping decision/conflict as outbox-only mutable state, and
+  editing `core/models.py` regardless. Each either breaks strict typing, contradicts design
+  §18.6.4 line 1022 / WO 설계 결정 5, or violates the allowed-write contract at WO line 107.
+- Stopped per WO line 124 and the assignment's explicit instruction rather than widening scope.
+  Minimum Planner decision requested: add `core/models.py` to the allowed-write list scoped to
+  appending those two enum members. Appending `StrEnum` members changes no existing value and no
+  existing event hash, so it cannot weaken a WO-P6-01 acceptance condition.
+- The rest of the packet was surveyed and is implementable inside the current allowed-write list;
+  the report carries the file:line implementation map, including that `core/terminal.py` can use
+  the pure audit evaluator/reader read-only (so `core/audit.py` needs no edit), that the
+  reputation score component is the single line `selection.py:137`, and that hard filters already
+  `continue` at `selection.py:131` before scoring, which makes `P6-AC-06.4` structural.
+
+### Handoff
+- Branch `wo/P6-02` stays unintegrated with no implementation. WO-P6-03 must not start.
+  Planner decides the one-line allowed-write amendment; on amendment WO-P6-02 is implementable
+  end to end from this same base.
