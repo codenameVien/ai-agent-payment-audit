@@ -234,6 +234,58 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 - Reviewer re-verifies `wo/P6-01` independently against `685472c`; the coder evidence report
   carries the round-2 implementation anchor and `READY_FOR_REVIEW`. WO-P6-02 stays blocked.
 
+## 2026-09-05 06:40 KST — coder — WO-P6-02 blocked at the start gate
+
+### Intent
+- Implement `P6-DES-WO-02` (terminal audit → reputation loop) from
+  `work-orders/WO-P6-02-reputation-loop.md` on `wo/P6-02` at base
+  `feb13f94d3a7934dec3a21a56c2cd3477afac179`.
+
+### Files changed
+- `.agent/outbox/WO-P6-02-blocked.md` (new) — blocked report.
+- `.agent/TURN_LOG.md` (this append-only entry).
+- No product source or test file was modified. `git status --porcelain` showed a clean worktree
+  through the whole survey.
+
+### Commands / verification
+- Start gate passed: worktree/branch clean; base contains both the approved integration SHA
+  `feb13f94…` and the predecessor tip `ca037c9…` (`git merge-base --is-ancestor` exit 0 for both);
+  requirements/design/tasks SHA-256 match the WO; `P6-02` task marker present; TCP 27019 free
+  (`lsof` exit 1, no process signalled); predecessor artifact
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-01-review-r3.md` read, verdict `APPROVE`,
+  reviewed tip matches.
+- The WO's fixed verification sequence was not run: there is no implementation to verify.
+- Read-only survey only: `git`, `grep`, `sha256sum`, `wc`, plus two read-only scout agents that
+  mapped the `ai_inference` domain and the commerce-gateway ERC-8004 surface.
+
+### Decisions / assumptions
+- **Blocker:** design §18.6.1 (`design.md:944-953`) requires two new appendable event types,
+  `REPUTATION_DECIDED` and `REPUTATION_PUBLICATION_CONFLICT`, and §18.6.4 (`design.md:1013`) fixes
+  `unique_reputation_decision_per_purchase` as a unique partial index on `REPUTATION_DECIDED`.
+  The only declaration site for appendable event types is `EventType` at
+  `core/models.py:19`, which is absent from the WO-P6-02 allowed-write list
+  (`work-orders/WO-P6-02-reputation-loop.md:64-107`). `EventType` is a closed `StrEnum`
+  (unsubclassable), `EvidenceEvent.type`/`create_event`/`append_event` are all typed on it, and
+  `pyproject.toml:49` sets mypy `strict = true`, so no allowed file can supply the members.
+- Four in-scope workarounds were considered and rejected in the report: a parallel `StrEnum`,
+  overloading `CORRECTION_RECORDED`, keeping decision/conflict as outbox-only mutable state, and
+  editing `core/models.py` regardless. Each either breaks strict typing, contradicts design
+  §18.6.4 line 1022 / WO 설계 결정 5, or violates the allowed-write contract at WO line 107.
+- Stopped per WO line 124 and the assignment's explicit instruction rather than widening scope.
+  Minimum Planner decision requested: add `core/models.py` to the allowed-write list scoped to
+  appending those two enum members. Appending `StrEnum` members changes no existing value and no
+  existing event hash, so it cannot weaken a WO-P6-01 acceptance condition.
+- The rest of the packet was surveyed and is implementable inside the current allowed-write list;
+  the report carries the file:line implementation map, including that `core/terminal.py` can use
+  the pure audit evaluator/reader read-only (so `core/audit.py` needs no edit), that the
+  reputation score component is the single line `selection.py:137`, and that hard filters already
+  `continue` at `selection.py:131` before scoring, which makes `P6-AC-06.4` structural.
+
+### Handoff
+- Branch `wo/P6-02` stays unintegrated with no implementation. WO-P6-03 must not start.
+  Planner decides the one-line allowed-write amendment; on amendment WO-P6-02 is implementable
+  end to end from this same base.
+
 ## 2026-09-05 14:30 KST — planner — WO-P6-02 bounded allowed-write correction
 
 ### Intent
@@ -267,6 +319,78 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   product-code no-diff checks are required immediately before the coherent planning commit.
 - Orchestrator must bring the resulting planning commit into `wo/P6-02`; Coder may then resume
   the same packet without inventing a new product decision.
+
+## 2026-09-05 09:30 KST — coder — WO-P6-02 reputation loop implemented
+
+### Intent
+- Implement `P6-DES-WO-02` on the amended Work Order: persisted terminal audit → 100/0/DEFER
+  decision, Mongo transaction/CAS + durable outbox, PREPARED/SUBMITTED_UNKNOWN recovery,
+  confirmed-only `REPUTATION_RECORDED` evidence, immutable query provenance, and provider-level
+  reputation as a bounded selection signal.
+
+### Files changed
+- `core/models.py` — exactly the two amended `EventType` members (`REPUTATION_DECIDED`,
+  `REPUTATION_PUBLICATION_CONFLICT`). No other member, value or order touched.
+- `core/reputation.py` (new) — publish identity + identity hash, immutable payload fingerprint,
+  typed `Publish|Defer` policy for `P6-AC-05.2`, outbox state machine, confirmed-feedback proof
+  with agent/tag/value/transaction binding, snapshot + query scope + neutral-mean aggregation.
+- `core/terminal.py` (new) — `TerminalAuditCoordinator.finalize_if_eligible` and the recovery
+  sweep; reuses the pure `AuditEvaluator`/`AuditReportReader` read-only so `core/audit.py` is
+  untouched, and reuses an already-persisted current audit instead of appending a second one.
+- `core/ports.py` — `ReputationOutboxPort`, `ReputationSnapshotPort`, `TerminalOrchestrationPort`.
+- `adapters/repositories/memory.py`, `adapters/repositories/mongo.py` — outbox, snapshots and
+  `finalize_atomic`; Mongo adds `unique_reputation_publish_identity`,
+  `unique_reputation_decision_per_purchase`, the EVM/LOCAL partial unique transaction indexes,
+  `reputation_publish_lease`, `unique_reputation_snapshot_query`, all created only after the
+  read-only M2 collision preflight, which now covers them.
+- `adapters/reputation_gateway.py` (new) — read-only `POST /reputation-query` client and the
+  `SellerReputationProvider` that stores an immutable snapshot; a failed query degrades to a
+  fresh-enough `STALE` snapshot or `NO_EVIDENCE/50`, never to a favourable score.
+- `api/schemas.py`, `api/app.py` — finalize plus the five outbox endpoints with required lease
+  owner and fingerprint, `404/409/422/503` mapping and same-proof `200`.
+- `composition.py` — production wiring of the coordinator, outbox and snapshot store.
+- `domains/ai_inference/{models,ports,workflow,selection}.py` — `SellerReputationProvider`,
+  `ReputationScoreEvidence`, provider-level snapshot cached per seller agent, persisted in
+  `QUOTED.reputationSnapshots` and read back on resume; the `reputation` component now comes from
+  the snapshot (or neutral 50) and never from `benchmark.reputation_score`.
+- Payment Executor `contracts.ts`, `erc8004.ts`, `adapters/http.ts`, `adapters/viem-erc8004.ts`,
+  `main.ts` — the in-process dedupe `Map` is deleted; the publisher drives the durable outbox with
+  find-before-submit, prepare-before-broadcast, bounded recovery, receipt+event confirmation,
+  query provenance, and a writer that defaults to `disabled` and rejects `fake`.
+- Tests: `tests/test_phase6_reputation.py`, `tests/test_phase6_terminal.py`,
+  `tests/phase6-reputation-loop.test.ts` (new) plus `test_api.py`, `test_mongo_repository.py`,
+  `test_ai_inference_workflow.py`, `test_ai_inference_domain.py`, `erc8004.test.ts`,
+  `runtime.test.ts`.
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` strict 0 (47 files), focused pytest 95 passed, gateway build 0,
+  `node --test` erc8004+phase6-reputation-loop+runtime 26/26, `npm run test:mongo:local` 8 passed,
+  `git diff --check` 0.
+- Preservation: full non-mongo pytest 265 passed, full gateway suite 77/77, protected paths
+  unchanged, 27 changed paths all inside the amended allowed-write list, `core/models.py` diff is
+  exactly the two permitted enum members, 27019 free and no mongod/temp left.
+
+### Decisions / assumptions
+- **PREPARED records the payload commitment, not a fabricated reference.** An EVM hash does not
+  exist before broadcast, and inventing a `SYNTHETIC_LOCAL` identifier for a live submission would
+  fake provenance (exactly the confusion WO-P6-01 hardened against). `PREPARED` therefore freezes
+  the feedback hash; the transaction reference is bound exactly once, by whichever step first
+  knows it, and is immutable afterwards. A different reference for a bound job is a conflict.
+- **Failure reasons are derived from the event-backed projection**, not the mutable payment intent
+  document, so a lagging or absent intent cannot change an objective reason code. A terminal state
+  that contradicts the projection is treated as conflicting proof and defers.
+- The coordinator does not take over `AuditService.audit()`; that WO-P6-01-approved read path
+  stays as-is and the coordinator reuses its persisted audit, so `core/audit.py` needed no edit.
+  `P6-AC-03.5` still governs: a stale or wrong-ruleset audit blocks the decision.
+- `settings.py` is not in the allowed-write list, so the Base Sepolia reputation registry is a
+  protocol constant in `core/reputation.py` matching the Payment Executor's compiled-in default.
+- No live ERC-8004, RPC, facilitator, provider, AWS or Atlas call was made; every test uses
+  in-process fakes or the native loopback replica set.
+
+### Handoff
+- Reviewer independently re-runs the fixed order plus native Mongo and both protected checks on
+  the `wo/P6-02` tip; `.agent/outbox/WO-P6-02-coder.done.md` carries the anchors and results.
+  WO-P6-03 must not start before an `APPROVE` and Orchestrator integration.
 
 ## 2026-09-05 16:42 KST — planner — WO-P6-02 payment ordering amendment
 
@@ -303,6 +427,48 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 - Orchestrator applies the resulting planning commit to `wo/P6-02`; Coder then implements and
   re-runs the amended focused suite before Reviewer correction review.
 
+## 2026-09-05 18:10 KST - coder - WO-P6-02 review correction round 2
+
+### Intent
+- Close the independent review `REJECT` in `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`
+  at rejected tip `72e9611f70132bd63b268fd806ada327f4253981` without rewriting history: the
+  implementation commit `c201b39`, the evidence commit `72e9611` and the blocker commit
+  `0c10b91` all stay in the branch.
+- Findings closed: C1 (atomic `CONFIRMED + REPUTATION_RECORDED`, tx-only writer removed),
+  C2 (restarted `PREPARED` fails closed instead of re-broadcasting), H1 (full confirmation
+  binding), H2 (strict query/snapshot provenance), H3 (production wiring plus a bounded
+  latest window), H4 (append-only conflict evidence with reachable call sites),
+  M1 (`unique_reputation_job_id`/`unique_reputation_snapshot` in the preflight and the drift
+  list), M2 (native Mongo atomic, rollback and race probes).
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` 47 files, focused pytest `116 passed`, gateway build 0,
+  `node --test` 34/34, `npm run test:mongo:local` `9 passed`, `git diff --check` 0.
+- Broad: full non-mongo pytest `293 passed, 9 deselected`; full gateway suite 85/85.
+- Independent probe reproduction: all seven Python probes and all five Node probes now fail
+  closed (`/tmp/r2_probe.py`, `/tmp/r2_probe_node.mjs`); no product code was changed to make
+  a probe pass after it was written.
+- Protected diff against packet base `b8f3f3f` is empty and zero protected paths are touched.
+
+### Decisions / assumptions
+- The trusted feedback-client allow-list is read from the `PBL_AUDIT_FEEDBACK_CLIENTS`
+  environment variable and parsed strictly in the composition root. No wallet address is
+  compiled in, and an absent declaration is a valid fail-closed state: the provider answers
+  `NO_EVIDENCE/50` without issuing a call.
+- `core/payment.py` and `tests/test_payment_service.py` were edited under an explicit
+  Orchestrator scope amendment. The post-payment tail is now validated as an ordered,
+  conditional sequence rather than an unordered bag, so `REPUTATION_DECIDED` requires a
+  preceding `AUDITED`, a publication conflict requires a preceding decision and may repeat,
+  and a Phase 5 chain that only ever had `REPUTATION_RECORDED` still loads.
+- `POST /internal/evidence/purchases/{id}/reputation` and its `reputation-intent` companion
+  are removed rather than disabled; the only writer is the outbox confirmed transition.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip against
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`;
+  `.agent/outbox/WO-P6-02-coder-r2.done.md` carries the correction and merge anchors.
+  The original `WO-P6-02-coder.done.md` and the review report are unmodified.
+
 ## 2026-09-05 17:24 KST — reviewer — WO-P6-02 correction round 2
 
 ### Boundary and verification
@@ -332,6 +498,52 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   7 duplicate logical conflict events instead of converging to one.
 - Canonical report: `.agent/outbox/WO-P6-02-review-r2.md`. Verdict: `REJECT`; keep coder branch
   unintegrated and preserve all history for a bounded correction.
+
+## 2026-09-05 21:05 KST - coder - WO-P6-02 review correction round 3
+
+### Intent
+- Close the round-2 independent `REJECT`
+  (`.agent/outbox/WO-P6-02-review-r2.md`, canonical commit `66e7256`) at reviewed tip
+  `f7deffa582d5762ad19783b1872955082a578b7a`, preserving every prior commit and report.
+- R2-H1: payment lifecycle validation now inspects `EvidenceEvent` payloads, not just
+  types. Once a decision exists, every following conflict/recorded event must carry that
+  decision's `publishIdentityHash`, and a conflict must restate its `payloadFingerprint`
+  as `existingFingerprint`; missing or mismatched values fail closed. The Phase 5
+  `REPUTATION_RECORDED`-without-decision branch stays valid as an explicit isolated case.
+  The conflict and publication branches are mutually exclusive in both directions.
+- R2-H2: a restated fingerprint is no longer a conflict. `publication_conflict_payload`
+  and both `record_conflict` implementations refuse `requested == existing` before any
+  write, with typed `OutboxConflictReason`. The API answers a typed conflict with
+  `{"reason", "message"}`, and the Payment Executor requests conflict evidence only for
+  `PAYLOAD_FINGERPRINT_MISMATCH`; every other reason leaves the job to its worker.
+- R2-M1: a deterministic `conflictKey` is part of the conflict payload, looked up inside
+  the Mongo transaction and backed by the unique partial index
+  `unique_reputation_conflict_key`, which is covered by the read-only preflight and the
+  drift list. A duplicate race resolves to the one committed event.
+
+### Commands / verification
+- Fixed order at the merged tip: `ruff` 0, `mypy` 47 files, focused pytest `152 passed`,
+  gateway build 0, `node --test` 37/37, `npm run test:mongo:local` `10 passed`,
+  `git diff --check` 0.
+- Broad: full non-mongo pytest `303 passed, 10 deselected`; full gateway suite 88/88.
+- Probes: 10 Python and 7 Node probes pass, including the reviewer's same-fingerprint CAS
+  probe, the payment-identity probe and the 8-way identical-conflict convergence.
+- Protected diff against canonical `66e7256` is empty; all six prior reports are
+  byte-identical.
+
+### Decisions / assumptions
+- `ReputationOutboxConflict` subclasses `PaymentConflictError` inside `core/reputation.py`,
+  so every existing `except PaymentConflictError` keeps working while callers that need
+  the reason can branch on it. No change to `core/errors.py`.
+- An unrecognised or absent 409 reason parses to `UNSPECIFIED`, which never records
+  evidence: an unknown refusal is treated as contention, never as a payload conflict.
+- The TURN_LOG merge kept every section from both parents byte-for-byte and ordered the
+  canonical reviewer entry before this correction handoff.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip;
+  `.agent/outbox/WO-P6-02-coder-r3.done.md` carries the merge and correction anchors.
+  Prior review and evidence reports are unmodified.
 
 ## 2026-09-05 18:22 KST — reviewer — WO-P6-02 correction round 3
 

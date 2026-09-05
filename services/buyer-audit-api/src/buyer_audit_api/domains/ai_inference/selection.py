@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta
 
+from buyer_audit_api.core.reputation import NEUTRAL_SCORE
 from buyer_audit_api.domains.ai_inference.models import (
     BenchmarkSnapshot,
     Candidate,
@@ -53,6 +54,19 @@ def _price_score(amount_units: int, budget_units: int) -> float:
     if budget_units == 0:
         return 100.0 if amount_units == 0 else 0.0
     return max(0.0, 100.0 * (budget_units - amount_units) / budget_units)
+
+
+def _reputation_score(candidate: Candidate) -> float:
+    """`P6-AC-06.5`: the weighted reputation component is the agent-level snapshot score.
+
+    `BenchmarkSnapshot.reputation_score` is a historical-read field (design 18.5.4) and is
+    never scored. No snapshot means an explicit neutral 50, so a missing or failed query
+    can neither reward nor punish a seller.
+    """
+    if candidate.reputation is None:
+        return NEUTRAL_SCORE
+    return candidate.reputation.derived_score
+
 
 
 def _rejection_reasons(
@@ -134,7 +148,7 @@ class SelectionEngine:
                 "freshness": _freshness_score(candidate.benchmark, now),
                 "price": _price_score(quote.amount_units, budget_units),
                 "quality": candidate.benchmark.quality_score,
-                "reputation": candidate.benchmark.reputation_score,
+                "reputation": _reputation_score(candidate),
                 "speed": candidate.benchmark.speed_score,
             }
             total = sum(components[name] * weight for name, weight in weights.items()) / 100
@@ -146,6 +160,14 @@ class SelectionEngine:
                     total_score=round(total, 6),
                     component_scores={name: round(value, 6) for name, value in components.items()},
                     weights=weights,
+                    reputation_snapshot_id=(
+                        None if candidate.reputation is None else candidate.reputation.snapshot_id
+                    ),
+                    reputation_snapshot_hash=(
+                        None
+                        if candidate.reputation is None
+                        else candidate.reputation.snapshot_hash
+                    ),
                 )
             )
 
@@ -179,4 +201,5 @@ class SelectionEngine:
                 sorted({candidate.benchmark.snapshot_id for candidate in candidates})
             ),
             explanation=explanation,
+            reputation_snapshot_id=winner.reputation_snapshot_id,
         )

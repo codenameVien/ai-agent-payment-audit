@@ -9,6 +9,7 @@ from buyer_audit_api.core.models import (
     BASE_SEPOLIA_CHAIN_ID,
     EvidenceSource,
     EvmTransactionRef,
+    JsonObject,
     LocalTransactionRef,
     ScenarioMetadata,
     TransactionRef,
@@ -21,6 +22,7 @@ from buyer_audit_api.core.payment import (
     ReconciliationCheck,
     ReconciliationVerifierOutcome,
 )
+from buyer_audit_api.core.reputation import ConfirmedFeedbackProof
 
 EVM_TRANSACTION_HASH_REGEX = r"^0x[0-9a-f]{64}$"
 LOCAL_TRANSACTION_ID_REGEX = r"^localtx:[0-9a-f]{32}:(payment|feedback):[0-9]{6}$"
@@ -514,24 +516,6 @@ class DeliveryStageResponse(DeliveryStageRequest):
     response_hash: str
 
 
-class ReputationRecordRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    erc8004_agent_id: str = Field(pattern=r"^[0-9]+$")
-    objective_value: int
-    feedback_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
-    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
-    chain_id: int = Field(ge=1)
-    registry_address: str = Field(min_length=1)
-
-
-class ReputationIntentResponse(BaseModel):
-    erc8004_agent_id: str
-    objective_value: int
-    feedback_hash: str
-    transaction_hash: str | None = None
-
-
 class AuditFindingResponse(BaseModel):
     code: str
     severity: str
@@ -622,3 +606,184 @@ class SellerAgentSummaryResponse(BaseModel):
     reputation_status: str
     objective_feedback_value: int | None
     reputation_transaction_hash: str | None
+
+
+class PublishIdentityResponse(BaseModel):
+    chain_id: int
+    registry_address: str
+    purchase_id: str
+    seller_agent_id: str
+    tag1: str
+    tag2: str
+
+
+class ReputationDecisionResponse(BaseModel):
+    decision: Literal["PUBLISH", "DEFER"]
+    value: int | None
+    reason_codes: list[str]
+    audit_bundle_hash: str
+    ruleset_version: str
+    seller_agent_id: str
+    erc8004_agent_id: str
+
+
+class ReputationJobResponse(BaseModel):
+    job_id: str
+    status: Literal[
+        "PENDING",
+        "LEASED",
+        "PREPARED",
+        "SUBMITTED_UNKNOWN",
+        "CONFIRMED",
+        "DEFERRED",
+        "CONFLICT",
+    ]
+    publish_identity: PublishIdentityResponse
+    publish_identity_hash: str
+    payload_fingerprint: str
+    decision: ReputationDecisionResponse
+    attempt_count: int
+    worker_id: str | None
+    lease_expires_at: datetime | None
+    feedback_hash: str | None
+    client_address: str | None
+    feedback_uri: str | None
+    transaction_ref: EvmTransactionRefModel | LocalTransactionRefModel | None
+    receipt_proof_ref: str | None
+    block_number: int | None
+    log_index: int | None
+    evidence_source: EvidenceSource | None
+    confirmed_proof: JsonObject | None
+    created_at: datetime
+    updated_at: datetime
+
+
+class InternalAuditFinalizeRequest(BaseModel):
+    """Design 18.12.2: the finalize caller states the head it observed."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    expected_event_count: int = Field(ge=1)
+    expected_head_event_hash: str = Field(pattern=SHA256_REGEX)
+
+
+class AuditFinalizeResponse(BaseModel):
+    purchase_id: str
+    finalized: bool
+    reason: str
+    audit: AuditReportResponse | None
+    decision: ReputationDecisionResponse | None
+    job: ReputationJobResponse | None
+
+
+class InternalReputationClaimRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1)
+    lease_seconds: int = Field(ge=1, le=3_600)
+
+
+class InternalReputationTransitionRequest(BaseModel):
+    """Every outbox transition proves the lease owner and the immutable fingerprint."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    worker_id: str = Field(min_length=1)
+    payload_fingerprint: str = Field(pattern=SHA256_REGEX)
+
+
+class InternalReputationPreparedRequest(InternalReputationTransitionRequest):
+    """`PREPARED` is the whole pre-broadcast commitment, not just a hash."""
+
+    transaction_ref: TransactionRefModel | None = None
+    feedback_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    client_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
+    feedback_uri: str = Field(min_length=1)
+
+
+class InternalReputationSubmittedUnknownRequest(InternalReputationTransitionRequest):
+    """A submission whose outcome is unknown may not even have a nameable reference."""
+
+    transaction_ref: TransactionRefModel | None = None
+    reason: str = Field(min_length=1)
+
+
+class InternalReputationConflictRequest(BaseModel):
+    """Design 18.6.1: a conflict is recorded, never silently dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_fingerprint: str = Field(pattern=SHA256_REGEX)
+    reason_code: str = Field(min_length=1, max_length=64)
+
+
+class ConfirmedFeedbackProofModel(BaseModel):
+    """`P6-AC-05.5`: a receipt reference plus the matching feedback event coordinates."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    transaction_ref: TransactionRefModel
+    receipt_proof_ref: str = Field(pattern=SHA256_REGEX)
+    registry_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
+    client_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
+    erc8004_agent_id: str = Field(pattern=r"^[0-9]+$")
+    value: Literal[0, 100]
+    value_decimals: Literal[0]
+    feedback_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    block_number: int = Field(ge=0)
+    log_index: int = Field(ge=0)
+    tag1: str = Field(min_length=1)
+    tag2: str = Field(min_length=1)
+    feedback_uri: str = Field(min_length=1)
+
+    def to_core(self) -> ConfirmedFeedbackProof:
+        return ConfirmedFeedbackProof(
+            transaction_ref=self.transaction_ref.to_core(),
+            receipt_proof_ref=self.receipt_proof_ref,
+            registry_address=self.registry_address,
+            client_address=self.client_address,
+            erc8004_agent_id=self.erc8004_agent_id,
+            value=self.value,
+            value_decimals=self.value_decimals,
+            feedback_hash=self.feedback_hash,
+            block_number=self.block_number,
+            log_index=self.log_index,
+            tag1=self.tag1,
+            tag2=self.tag2,
+            feedback_uri=self.feedback_uri,
+        )
+
+
+class InternalReputationConfirmedRequest(InternalReputationTransitionRequest):
+    proof: ConfirmedFeedbackProofModel
+
+
+class ReputationOutboxEventResponse(BaseModel):
+    """The atomic unit as one answer: the job moved *and* the evidence was appended."""
+
+    job: ReputationJobResponse
+    event: EventResponse
+
+
+class ReputationSnapshotResponse(BaseModel):
+    """`P6-AC-06.1`/`P6-AC-06.2`: the number never travels without its provenance."""
+
+    snapshot_id: str
+    seller_agent_id: str
+    erc8004_agent_id: str
+    chain_id: int
+    registry_address: str
+    trusted_clients: list[str]
+    tag1: str
+    tag2: str
+    from_block: int
+    to_block: int
+    queried_at: datetime
+    event_count: int
+    raw_values: list[JsonObject]
+    aggregation_method: str
+    derived_score: float
+    freshness_status: str
+    freshness_age_seconds: int | None
+    evidence_source: str
+    snapshot_hash: str

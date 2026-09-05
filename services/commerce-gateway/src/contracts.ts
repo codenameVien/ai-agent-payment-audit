@@ -399,3 +399,152 @@ export interface QuoteIdentityVerifier {
 export interface Clock {
   nowSeconds(): bigint;
 }
+
+/** The only tag pair PBL ever writes to or reads from the ERC-8004 reputation registry. */
+export const FEEDBACK_TAG1 = "pbl-audit";
+export const FEEDBACK_TAG2 = "payment-outcome";
+
+export type ReputationOutboxStatus =
+  | "PENDING"
+  | "LEASED"
+  | "PREPARED"
+  | "SUBMITTED_UNKNOWN"
+  | "CONFIRMED"
+  | "DEFERRED"
+  | "CONFLICT";
+
+/** The immutable target of a reputation publication. Its hash is the outbox dedupe key. */
+export interface ReputationPublishIdentity {
+  chainId: number;
+  registryAddress: Address;
+  purchaseId: string;
+  sellerAgentId: string;
+  tag1: string;
+  tag2: string;
+}
+
+export interface ReputationDecisionView {
+  decision: "PUBLISH" | "DEFER";
+  value: number | null;
+  reasonCodes: string[];
+  auditBundleHash: string;
+  rulesetVersion: string;
+  sellerAgentId: string;
+  erc8004AgentId: string;
+}
+
+/** Durable outbox state. The publisher owns no state of its own. */
+export interface ReputationPublishJob {
+  jobId: string;
+  status: ReputationOutboxStatus;
+  identity: ReputationPublishIdentity;
+  identityHash: string;
+  payloadFingerprint: string;
+  decision: ReputationDecisionView;
+  attemptCount: number;
+  workerId: string | null;
+  leaseExpiresAt: string | null;
+  feedbackHash: Hex | null;
+  transactionRef: TransactionRef | null;
+  receiptProofRef: string | null;
+  /** The feedback client and audit-bundle URI committed at PREPARED, before any broadcast. */
+  clientAddress: string | null;
+  feedbackUri: string | null;
+  blockNumber: number | null;
+  logIndex: number | null;
+  evidenceSource: EvidenceSource | null;
+  confirmedProof: ConfirmedFeedbackProof | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * A publication is only confirmed by a receipt plus a decoded `NewFeedback` event.
+ * A bare transaction hash can never construct this proof.
+ */
+export interface ConfirmedFeedbackProof {
+  transactionRef: TransactionRef;
+  /** The registry the receipt was actually read against, so a proof cannot float between registries. */
+  registryAddress: Address;
+  receiptProofRef: string;
+  clientAddress: Address;
+  erc8004AgentId: string;
+  value: 0 | 100;
+  valueDecimals: 0;
+  feedbackHash: Hex;
+  blockNumber: number;
+  logIndex: number;
+  tag1: string;
+  tag2: string;
+  feedbackUri: string;
+}
+
+export interface FeedbackQueryScope {
+  chainId: number;
+  registryAddress: Address;
+  erc8004AgentId: string;
+  trustedClients: readonly Address[];
+  tag1: string;
+  tag2: string;
+  fromBlock: number;
+  toBlock: number;
+}
+
+export interface RawFeedbackEvent {
+  value: number;
+  valueDecimals: number;
+  clientAddress: Address;
+  blockNumber: number;
+  logIndex: number;
+  transactionRef: TransactionRef;
+  tag1: string;
+  tag2: string;
+}
+
+export interface FeedbackQueryResult {
+  scope: FeedbackQueryScope;
+  /** The head the gateway resolved the range against. */
+  latestBlock: number;
+  queriedAt: string;
+  events: RawFeedbackEvent[];
+}
+
+/** Durable exactly-once state for reputation publication. Leases and status live here, never in memory. */
+export interface ReputationOutboxApi {
+  claim(args: { workerId: string; leaseSeconds: number }): Promise<ReputationPublishJob | null>;
+  get(jobId: string): Promise<ReputationPublishJob | null>;
+  markPrepared(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    /** Absent before broadcast: an EVM hash only exists once the submission does. */
+    transactionRef?: TransactionRef;
+    feedbackHash: Hex;
+    /** PREPARED is the full pre-broadcast commitment, not just the hash. */
+    clientAddress: Address;
+    feedbackUri: string;
+  }): Promise<ReputationPublishJob>;
+  markSubmittedUnknown(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    /**
+     * Absent when an external effect may exist and cannot be named: the fail-closed
+     * reconciliation state records the doubt instead of inventing a reference.
+     */
+    transactionRef?: TransactionRef;
+    reason: string;
+  }): Promise<ReputationPublishJob>;
+  markConfirmed(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    proof: ConfirmedFeedbackProof;
+  }): Promise<ReputationPublishJob>;
+  /** Records that a second payload claimed one publish identity. Terminal for the loser. */
+  recordConflict(args: {
+    identityHash: string;
+    requestedFingerprint: string;
+    reasonCode: string;
+  }): Promise<ReputationPublishJob>;
+}

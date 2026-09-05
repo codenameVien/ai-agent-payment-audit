@@ -16,7 +16,7 @@ import { baseSepolia } from "viem/chains";
 import {
   EvidenceAnchorHttpClient,
   EvidenceHttpClient,
-  ReputationEvidenceHttpClient,
+  ReputationOutboxHttpClient,
   RoutingSellerHttpClient,
 } from "./adapters/http.js";
 import {
@@ -44,7 +44,25 @@ function required(env: NodeJS.ProcessEnv, name: string): string {
 interface RuntimeComponents {
   gateway: CommerceGateway;
   reputation: Erc8004ReputationPublisher;
+  erc8004: Erc8004Service;
+  reputationRegistry: Address;
   anchor?: EvidenceAnchorService;
+}
+
+/**
+ * The reputation writer is irreversible, so it is off unless an operator turns it on.
+ * A production root never accepts a simulated chain.
+ */
+function resolveWriteMode(env: NodeJS.ProcessEnv): "disabled" | "live" {
+  const mode = env.ERC8004_WRITE_MODE?.trim();
+  if (!mode) return "disabled";
+  if (mode === "fake") {
+    throw new Error("ERC8004_WRITE_MODE=fake is not allowed: production roots never fake a chain");
+  }
+  if (mode !== "disabled" && mode !== "live") {
+    throw new Error("ERC8004_WRITE_MODE must be disabled or live");
+  }
+  return mode;
 }
 
 export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComponents {
@@ -101,13 +119,15 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
   });
   const reputation = new Erc8004ReputationPublisher({
     service: erc8004,
-    evidence: new ReputationEvidenceHttpClient({
+    outbox: new ReputationOutboxHttpClient({
       baseUrl: evidenceApiUrl,
       internalServiceToken,
     }),
     receipts: new ViemReputationReceiptConfirmer(publicClient as PublicClient),
     chainId: baseSepolia.id,
     registryAddress: reputationRegistry,
+    workerId: env.REPUTATION_WORKER_ID?.trim() || `gateway-${process.pid}`,
+    writeMode: resolveWriteMode(env),
   });
   const anchorAddress = env.EVIDENCE_ANCHOR_ADDRESS?.trim() as Address | undefined;
   const anchor = anchorAddress
@@ -125,7 +145,13 @@ export function createRuntime(env: NodeJS.ProcessEnv = process.env): RuntimeComp
         contractAddress: anchorAddress,
       })
     : undefined;
-  return { gateway, reputation, ...(anchor === undefined ? {} : { anchor }) };
+  return {
+    gateway,
+    reputation,
+    erc8004,
+    reputationRegistry,
+    ...(anchor === undefined ? {} : { anchor }),
+  };
 }
 
 export function createCommerceGateway(env: NodeJS.ProcessEnv = process.env): CommerceGateway {
@@ -153,18 +179,67 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
       }
       const chunks: Buffer[] = [];
       for await (const chunk of request) chunks.push(Buffer.from(chunk));
-      const body = JSON.parse(Buffer.concat(chunks).toString("utf8")) as {
+      const raw = Buffer.concat(chunks).toString("utf8");
+      const body = (raw.length === 0 ? {} : JSON.parse(raw)) as {
         purchaseId?: unknown;
         prompt?: unknown;
         resourceBody?: unknown;
         transactionHash?: unknown;
-        agentId?: unknown;
+        jobId?: unknown;
+        erc8004AgentId?: unknown;
+        trustedClients?: unknown;
+        lookbackBlocks?: unknown;
       };
-      if (typeof body.purchaseId !== "string" || body.purchaseId.length === 0) {
-        throw new Error("purchaseId is required");
-      }
       let result;
-      if (request.method === "POST" && request.url === "/execute") {
+      if (request.method === "POST" && request.url === "/reputation") {
+        if (body.jobId !== undefined && typeof body.jobId !== "string") {
+          throw new Error("jobId must be a string");
+        }
+        result = {
+          job: body.jobId === undefined || body.jobId.length === 0
+            ? await runtime.reputation.publishClaimed()
+            : await runtime.reputation.publishJob(body.jobId),
+        };
+      } else if (request.method === "POST" && request.url === "/reputation-query") {
+        if (typeof body.erc8004AgentId !== "string" || body.erc8004AgentId.length === 0) {
+          throw new Error("erc8004AgentId is required");
+        }
+        if (
+          !Array.isArray(body.trustedClients) ||
+          !body.trustedClients.every((client) => typeof client === "string")
+        ) {
+          throw new Error("trustedClients must be an array of addresses");
+        }
+        // The caller names a window size, never a window: the head is resolved server-side
+        // so a query cannot pin a stale range or scan the whole chain.
+        if (typeof body.lookbackBlocks !== "number") {
+          throw new Error("lookbackBlocks is required");
+        }
+        const query = await runtime.erc8004.queryObjectiveFeedback({
+          chainId: baseSepolia.id,
+          registryAddress: runtime.reputationRegistry,
+          erc8004AgentId: body.erc8004AgentId,
+          trustedClients: (body.trustedClients as string[]).map(
+            (client) => client.toLowerCase() as Address,
+          ),
+          lookbackBlocks: body.lookbackBlocks,
+        });
+        result = {
+          chainId: query.scope.chainId,
+          registryAddress: query.scope.registryAddress.toLowerCase(),
+          erc8004AgentId: query.scope.erc8004AgentId,
+          trustedClients: query.scope.trustedClients.map((client) => client.toLowerCase()),
+          tag1: query.scope.tag1,
+          tag2: query.scope.tag2,
+          fromBlock: query.scope.fromBlock,
+          toBlock: query.scope.toBlock,
+          latestBlock: query.latestBlock,
+          queriedAt: query.queriedAt,
+          events: query.events,
+        };
+      } else if (typeof body.purchaseId !== "string" || body.purchaseId.length === 0) {
+        throw new Error("purchaseId is required");
+      } else if (request.method === "POST" && request.url === "/execute") {
         result = await runtime.gateway.execute(
           body.purchaseId,
           body.resourceBody ?? { prompt: body.prompt ?? "" },
@@ -175,15 +250,6 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
         typeof body.transactionHash === "string"
       ) {
         result = await runtime.gateway.reconcile(body.purchaseId, body.transactionHash as Hex);
-      } else if (
-        request.method === "POST" &&
-        request.url === "/reputation" &&
-        (typeof body.agentId === "string" || typeof body.agentId === "number")
-      ) {
-        result = { transactionHash: await runtime.reputation.publish({
-          purchaseId: body.purchaseId,
-          agentId: BigInt(body.agentId),
-        }) };
       } else if (request.method === "POST" && request.url === "/anchor") {
         if (runtime.anchor === undefined) {
           throw new Error("EVIDENCE_ANCHOR_ADDRESS is not configured");

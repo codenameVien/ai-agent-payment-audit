@@ -5,6 +5,8 @@ from enum import StrEnum
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from buyer_audit_api.core.reputation import ReputationSnapshot
+
 
 class PriorityPreset(StrEnum):
     BALANCED = "balanced"
@@ -81,6 +83,43 @@ class SellerIdentityEvidence(BaseModel):
     identity_verified: bool = Field(alias="identityVerified")
 
 
+class ReputationScoreEvidence(BaseModel):
+    """`P6-AC-06.4`: the agent-level ERC-8004 signal, kept apart from model benchmarks.
+
+    A benchmark snapshot describes one model; this describes the seller agent that offers
+    it. `P6-AC-06.6` keeps them separate so one provider's reputation is shared by every
+    model it quotes instead of being re-derived per model.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    snapshot_id: str
+    seller_agent_id: str
+    erc8004_agent_id: str
+    derived_score: float = Field(ge=0, le=100)
+    event_count: int = Field(ge=0)
+    freshness: str
+    evidence_source: str
+    queried_at: datetime
+    snapshot_hash: str
+    aggregation_method: str
+
+    @classmethod
+    def from_snapshot(cls, snapshot: ReputationSnapshot) -> ReputationScoreEvidence:
+        return cls(
+            snapshot_id=snapshot.snapshot_id,
+            seller_agent_id=snapshot.seller_agent_id,
+            erc8004_agent_id=snapshot.scope.erc8004_agent_id,
+            derived_score=snapshot.derived_score,
+            event_count=snapshot.event_count,
+            freshness=snapshot.freshness_status.value,
+            evidence_source=snapshot.evidence_source.value,
+            queried_at=snapshot.queried_at,
+            snapshot_hash=snapshot.snapshot_hash,
+            aggregation_method=snapshot.aggregation_method,
+        )
+
+
 class Clarification(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +132,7 @@ class Candidate(BaseModel):
 
     quote: SellerQuote
     benchmark: BenchmarkSnapshot
+    reputation: ReputationScoreEvidence | None = None
 
 
 class ScoredCandidate(BaseModel):
@@ -104,6 +144,8 @@ class ScoredCandidate(BaseModel):
     total_score: float
     component_scores: dict[str, float]
     weights: dict[str, int]
+    reputation_snapshot_id: str | None = None
+    reputation_snapshot_hash: str | None = None
 
 
 class RejectedCandidate(BaseModel):
@@ -124,3 +166,4 @@ class SelectionDecision(BaseModel):
     rejected: tuple[RejectedCandidate, ...]
     benchmark_snapshot_ids: tuple[str, ...]
     explanation: str
+    reputation_snapshot_id: str | None = None

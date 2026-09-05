@@ -1,14 +1,21 @@
 import type { Address, Hex } from "viem";
 
-import type {
-  EvidenceApi,
-  PaymentIntent,
-  PaymentView,
-  SellerClient,
-  SellerResponse,
-  StagedDelivery,
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  type ConfirmedFeedbackProof,
+  type EvidenceApi,
+  type EvidenceSource,
+  type PaymentIntent,
+  type PaymentView,
+  type ReputationOutboxApi,
+  type ReputationOutboxStatus,
+  type ReputationPublishJob,
+  type SellerClient,
+  type SellerResponse,
+  type StagedDelivery,
+  type TransactionRef,
 } from "../contracts.js";
-import type { ReputationEvidenceApi } from "../erc8004.js";
+import { ReputationOutboxConflictError, type OutboxConflictReason } from "../erc8004.js";
 import type {
   EvidenceAnchorApi,
   EvidenceHeadCheckpoint,
@@ -379,7 +386,204 @@ export class EvidenceAnchorHttpClient implements EvidenceAnchorApi {
   }
 }
 
-export class ReputationEvidenceHttpClient implements ReputationEvidenceApi {
+type TransactionRefJson =
+  | {
+      kind: "EVM";
+      hash: Hex;
+      chain_id: number;
+      evidence_source: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+      block_number?: number | null;
+      log_index?: number | null;
+    }
+  | {
+      kind: "LOCAL";
+      id: string;
+      run_id: string;
+      evidence_source: "SYNTHETIC_LOCAL";
+    };
+
+/**
+ * The confirmed-feedback proof as the Evidence API stores it. `registry_address` binds the
+ * proof to the registry the receipt was read against, so it cannot float between chains.
+ */
+interface ReputationProofJson {
+  transaction_ref: TransactionRefJson;
+  registry_address: string;
+  receipt_proof_ref: string;
+  client_address: string;
+  erc8004_agent_id: string;
+  value: 0 | 100;
+  value_decimals: 0;
+  feedback_hash: Hex;
+  block_number: number;
+  log_index: number;
+  tag1: string;
+  tag2: string;
+  feedback_uri: string;
+}
+
+interface ReputationJobJson {
+  job_id: string;
+  status: ReputationOutboxStatus;
+  publish_identity: {
+    chain_id: number;
+    registry_address: Address;
+    purchase_id: string;
+    seller_agent_id: string;
+    tag1: string;
+    tag2: string;
+  };
+  publish_identity_hash: string;
+  payload_fingerprint: string;
+  decision: {
+    decision: "PUBLISH" | "DEFER";
+    value: number | null;
+    reason_codes: string[];
+    audit_bundle_hash: string;
+    ruleset_version: string;
+    seller_agent_id: string;
+    erc8004_agent_id: string;
+  };
+  attempt_count: number;
+  worker_id: string | null;
+  lease_expires_at: string | null;
+  feedback_hash: Hex | null;
+  transaction_ref: TransactionRefJson | null;
+  receipt_proof_ref: string | null;
+  client_address: string | null;
+  feedback_uri: string | null;
+  block_number: number | null;
+  log_index: number | null;
+  evidence_source: EvidenceSource | null;
+  confirmed_proof: ReputationProofJson | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function encodeTransactionRef(reference: TransactionRef): TransactionRefJson {
+  if (reference.kind === "LOCAL") {
+    return {
+      kind: "LOCAL",
+      id: reference.id,
+      run_id: reference.runId,
+      evidence_source: "SYNTHETIC_LOCAL",
+    };
+  }
+  return {
+    kind: "EVM",
+    hash: reference.hash,
+    chain_id: reference.chainId,
+    evidence_source: reference.evidenceSource,
+    ...(reference.blockNumber === undefined ? {} : { block_number: reference.blockNumber }),
+    ...(reference.logIndex === undefined ? {} : { log_index: reference.logIndex }),
+  };
+}
+
+function decodeTransactionRef(body: TransactionRefJson): TransactionRef {
+  if (body.kind === "LOCAL") {
+    return {
+      kind: "LOCAL",
+      id: body.id,
+      runId: body.run_id,
+      evidenceSource: "SYNTHETIC_LOCAL",
+    };
+  }
+  if (body.chain_id !== BASE_SEPOLIA_CHAIN_ID) {
+    throw new Error(`reputation outbox returned an off-chain-id transaction: ${body.chain_id}`);
+  }
+  return {
+    kind: "EVM",
+    hash: body.hash,
+    chainId: BASE_SEPOLIA_CHAIN_ID,
+    evidenceSource: body.evidence_source,
+    ...(body.block_number == null ? {} : { blockNumber: body.block_number }),
+    ...(body.log_index == null ? {} : { logIndex: body.log_index }),
+  };
+}
+
+function encodeProof(proof: ConfirmedFeedbackProof): ReputationProofJson {
+  return {
+    transaction_ref: encodeTransactionRef(proof.transactionRef),
+    registry_address: proof.registryAddress.toLowerCase(),
+    receipt_proof_ref: proof.receiptProofRef,
+    client_address: proof.clientAddress.toLowerCase(),
+    erc8004_agent_id: proof.erc8004AgentId,
+    value: proof.value,
+    value_decimals: proof.valueDecimals,
+    feedback_hash: proof.feedbackHash,
+    block_number: proof.blockNumber,
+    log_index: proof.logIndex,
+    tag1: proof.tag1,
+    tag2: proof.tag2,
+    feedback_uri: proof.feedbackUri,
+  };
+}
+
+function decodeProof(body: ReputationProofJson): ConfirmedFeedbackProof {
+  return {
+    transactionRef: decodeTransactionRef(body.transaction_ref),
+    registryAddress: body.registry_address.toLowerCase() as Address,
+    receiptProofRef: body.receipt_proof_ref,
+    clientAddress: body.client_address.toLowerCase() as Address,
+    erc8004AgentId: body.erc8004_agent_id,
+    value: body.value,
+    valueDecimals: body.value_decimals,
+    feedbackHash: body.feedback_hash,
+    blockNumber: body.block_number,
+    logIndex: body.log_index,
+    tag1: body.tag1,
+    tag2: body.tag2,
+    feedbackUri: body.feedback_uri,
+  };
+}
+
+function decodeJob(body: ReputationJobJson): ReputationPublishJob {
+  return {
+    jobId: body.job_id,
+    status: body.status,
+    identity: {
+      chainId: body.publish_identity.chain_id,
+      registryAddress: body.publish_identity.registry_address,
+      purchaseId: body.publish_identity.purchase_id,
+      sellerAgentId: body.publish_identity.seller_agent_id,
+      tag1: body.publish_identity.tag1,
+      tag2: body.publish_identity.tag2,
+    },
+    identityHash: body.publish_identity_hash,
+    payloadFingerprint: body.payload_fingerprint,
+    decision: {
+      decision: body.decision.decision,
+      value: body.decision.value,
+      reasonCodes: body.decision.reason_codes,
+      auditBundleHash: body.decision.audit_bundle_hash,
+      rulesetVersion: body.decision.ruleset_version,
+      sellerAgentId: body.decision.seller_agent_id,
+      erc8004AgentId: body.decision.erc8004_agent_id,
+    },
+    attemptCount: body.attempt_count,
+    workerId: body.worker_id,
+    leaseExpiresAt: body.lease_expires_at,
+    feedbackHash: body.feedback_hash,
+    transactionRef: body.transaction_ref === null
+      ? null
+      : decodeTransactionRef(body.transaction_ref),
+    receiptProofRef: body.receipt_proof_ref,
+    clientAddress: body.client_address ?? null,
+    feedbackUri: body.feedback_uri ?? null,
+    blockNumber: body.block_number ?? null,
+    logIndex: body.log_index ?? null,
+    evidenceSource: body.evidence_source ?? null,
+    confirmedProof: body.confirmed_proof == null ? null : decodeProof(body.confirmed_proof),
+    createdAt: body.created_at,
+    updatedAt: body.updated_at,
+  };
+}
+
+/**
+ * Durable reputation state over HTTP. Every lease, transition and recorded transaction
+ * belongs to the Evidence API, so exactly-once survives a process restart.
+ */
+export class ReputationOutboxHttpClient implements ReputationOutboxApi {
   readonly #baseUrl: string;
   readonly #authorization: string;
   readonly #fetch: typeof fetch;
@@ -394,59 +598,167 @@ export class ReputationEvidenceHttpClient implements ReputationEvidenceApi {
     this.#fetch = args.fetchImpl ?? fetch;
   }
 
-  async prepare(purchaseId: string, agentId: bigint): Promise<{
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash?: Hex;
-  }> {
+  async claim(args: { workerId: string; leaseSeconds: number }): Promise<ReputationPublishJob | null> {
     const response = await this.#fetch(
-      `${this.#baseUrl}/internal/evidence/purchases/${encodeURIComponent(purchaseId)}/reputation-intent?erc8004_agent_id=${agentId}`,
-      { headers: { authorization: this.#authorization } },
-    );
-    const body = await decodeJson<{
-      erc8004_agent_id: string;
-      objective_value: 0 | 100;
-      feedback_hash: Hex;
-      transaction_hash?: Hex | null;
-    }>(response);
-    return {
-      agentId: BigInt(body.erc8004_agent_id),
-      objectiveValue: body.objective_value,
-      feedbackHash: body.feedback_hash,
-      ...(body.transaction_hash == null
-        ? {}
-        : { transactionHash: body.transaction_hash }),
-    };
-  }
-
-  async record(args: {
-    purchaseId: string;
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash: Hex;
-    chainId: number;
-    registryAddress: Address;
-  }): Promise<void> {
-    const response = await this.#fetch(
-      `${this.#baseUrl}/internal/evidence/purchases/${encodeURIComponent(args.purchaseId)}/reputation`,
+      `${this.#baseUrl}/internal/evidence/reputation-outbox/claim`,
       {
         method: "POST",
         headers: {
           authorization: this.#authorization,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          erc8004_agent_id: args.agentId.toString(),
-          objective_value: args.objectiveValue,
-          feedback_hash: args.feedbackHash,
-          transaction_hash: args.transactionHash,
-          chain_id: args.chainId,
-          registry_address: args.registryAddress,
-        }),
+        body: JSON.stringify({ worker_id: args.workerId, lease_seconds: args.leaseSeconds }),
       },
     );
-    await decodeJson<unknown>(response);
+    if (response.status === 404) return null;
+    return decodeJob(await this.#decode<ReputationJobJson>(response));
   }
+
+  async get(jobId: string): Promise<ReputationPublishJob | null> {
+    const response = await this.#fetch(
+      `${this.#baseUrl}/internal/evidence/reputation-outbox/${encodeURIComponent(jobId)}`,
+      { headers: { authorization: this.#authorization } },
+    );
+    if (response.status === 404) return null;
+    return decodeJob(await this.#decode<ReputationJobJson>(response));
+  }
+
+  /** PREPARED is the whole pre-broadcast commitment: client and audit bundle included. */
+  async markPrepared(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    transactionRef?: TransactionRef;
+    feedbackHash: Hex;
+    clientAddress: Address;
+    feedbackUri: string;
+  }): Promise<ReputationPublishJob> {
+    return decodeJob(
+      await this.#post<ReputationJobJson>(
+        `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/prepared`,
+        {
+          worker_id: args.workerId,
+          payload_fingerprint: args.payloadFingerprint,
+          feedback_hash: args.feedbackHash,
+          client_address: args.clientAddress.toLowerCase(),
+          feedback_uri: args.feedbackUri,
+          ...(args.transactionRef === undefined
+            ? {}
+            : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
+        },
+      ),
+    );
+  }
+
+  async markSubmittedUnknown(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    transactionRef?: TransactionRef;
+    reason: string;
+  }): Promise<ReputationPublishJob> {
+    return decodeJob(
+      await this.#post<ReputationJobJson>(
+        `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/submitted-unknown`,
+        {
+          worker_id: args.workerId,
+          payload_fingerprint: args.payloadFingerprint,
+          reason: args.reason,
+          // The key is omitted, never sent as null: "no transaction can be named" is the
+          // state itself, and a null field would look like a resolved absence.
+          ...(args.transactionRef === undefined
+            ? {}
+            : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
+        },
+      ),
+    );
+  }
+
+  /** The confirmation and its append-only REPUTATION_RECORDED event are one atomic unit. */
+  async markConfirmed(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    proof: ConfirmedFeedbackProof;
+  }): Promise<ReputationPublishJob> {
+    const recorded = await this.#post<{ job: ReputationJobJson }>(
+      `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/confirmed`,
+      {
+        worker_id: args.workerId,
+        payload_fingerprint: args.payloadFingerprint,
+        proof: encodeProof(args.proof),
+      },
+    );
+    return decodeJob(recorded.job);
+  }
+
+  async recordConflict(args: {
+    identityHash: string;
+    requestedFingerprint: string;
+    reasonCode: string;
+  }): Promise<ReputationPublishJob> {
+    // `sha256:<hex>` is one path segment. Percent-encoding the colon would address a
+    // different identity than the one the outbox keys on.
+    const recorded = await this.#post<{ job: ReputationJobJson }>(
+      `/internal/evidence/reputation-outbox/identity/${args.identityHash}/conflict`,
+      { requested_fingerprint: args.requestedFingerprint, reason_code: args.reasonCode },
+    );
+    return decodeJob(recorded.job);
+  }
+
+  async #post<T>(path: string, body: unknown): Promise<T> {
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        authorization: this.#authorization,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    return this.#decode<T>(response);
+  }
+
+  /**
+   * A 409 is a durable-state refusal, never a transport failure worth retrying.
+   *
+   * The Evidence API answers a typed conflict with `{"detail": {"reason", "message"}}`.
+   * The reason is what lets the publisher tell ordinary lease/CAS contention apart from
+   * a real immutable payload conflict, so it is parsed rather than flattened to text.
+   */
+  async #decode<T>(response: Response): Promise<T> {
+    if (response.status === 409) {
+      const body = await response.text();
+      throw new ReputationOutboxConflictError(
+        body.slice(0, 300),
+        parseConflictReason(body),
+      );
+    }
+    return decodeJson<T>(response);
+  }
+}
+
+const CONFLICT_REASONS: readonly OutboxConflictReason[] = [
+  "PAYLOAD_FINGERPRINT_MISMATCH",
+  "LEASE_MOVED",
+  "STALE_STATUS",
+  "ALREADY_TERMINAL",
+  "TRANSACTION_ALREADY_BOUND",
+  "DIFFERENT_CONFIRMATION",
+  "PREPARED_COMMITMENT_CHANGED",
+  "SAME_FINGERPRINT_NOT_A_CONFLICT",
+];
+
+/** An unrecognised or absent reason is `UNSPECIFIED`, which never records evidence. */
+export function parseConflictReason(body: string): OutboxConflictReason {
+  try {
+    const parsed = JSON.parse(body) as { detail?: { reason?: unknown } };
+    const reason = parsed.detail?.reason;
+    if (typeof reason === "string") {
+      const known = CONFLICT_REASONS.find((item) => item === reason);
+      if (known !== undefined) return known;
+    }
+  } catch {
+    // A non-JSON body carries no reason.
+  }
+  return "UNSPECIFIED";
 }

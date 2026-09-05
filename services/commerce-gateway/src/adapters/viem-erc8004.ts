@@ -1,14 +1,28 @@
+import { createHash } from "node:crypto";
+
 import { decodeEventLog, type Address, type Hex, type PublicClient, type WalletClient } from "viem";
 
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  FEEDBACK_TAG1,
+  FEEDBACK_TAG2,
+  type ConfirmedFeedbackProof,
+  type RawFeedbackEvent,
+} from "../contracts.js";
 import {
   ERC8004_IDENTITY_ABI,
   ERC8004_REPUTATION_ABI,
   type AgentIdentity,
   type Erc8004Contracts,
+  type FeedbackSubmissionRef,
   type ReputationSummary,
   type ReputationReceiptConfirmer,
 } from "../erc8004.js";
 import { recentRpcLogFromBlock } from "./rpc-log-range.js";
+
+const NEW_FEEDBACK_EVENT = ERC8004_REPUTATION_ABI.find(
+  (item) => item.type === "event" && item.name === "NewFeedback",
+);
 
 export class ViemErc8004Contracts implements Erc8004Contracts {
   readonly #publicClient: PublicClient;
@@ -100,27 +114,91 @@ export class ViemErc8004Contracts implements Erc8004Contracts {
     tag1: string;
     tag2: string;
     feedbackHash: Hex;
-  }): Promise<Hex | null> {
-    const event = ERC8004_REPUTATION_ABI.find(
-      (item) => item.type === "event" && item.name === "NewFeedback",
-    );
-    if (event === undefined) throw new Error("NewFeedback ABI is missing");
+  }): Promise<FeedbackSubmissionRef | null> {
+    if (NEW_FEEDBACK_EVENT === undefined) throw new Error("NewFeedback ABI is missing");
     const latestBlock = await this.#publicClient.getBlockNumber();
     const logs = await this.#publicClient.getLogs({
       address: this.#reputationRegistry,
-      event,
+      event: NEW_FEEDBACK_EVENT,
       args: { agentId: args.agentId, clientAddress: args.clientAddress },
       fromBlock: recentRpcLogFromBlock(latestBlock),
       toBlock: latestBlock,
     });
-    const match = logs.find((log) =>
-      log.args.value === args.value &&
-      log.args.valueDecimals === args.valueDecimals &&
-      log.args.tag1 === args.tag1 &&
-      log.args.tag2 === args.tag2 &&
-      log.args.feedbackHash?.toLowerCase() === args.feedbackHash.toLowerCase()
-    );
-    return match?.transactionHash ?? null;
+    for (const log of logs) {
+      if (
+        log.args.value !== args.value ||
+        log.args.valueDecimals !== args.valueDecimals ||
+        log.args.tag1 !== args.tag1 ||
+        log.args.tag2 !== args.tag2 ||
+        log.args.feedbackHash?.toLowerCase() !== args.feedbackHash.toLowerCase()
+      ) continue;
+      // Provenance without coordinates is not provenance: an incomplete log is skipped
+      // rather than completed with zeros.
+      if (log.transactionHash === null || log.blockNumber === null || log.logIndex === null) {
+        continue;
+      }
+      return {
+        transactionHash: log.transactionHash,
+        blockNumber: Number(log.blockNumber),
+        logIndex: log.logIndex,
+      };
+    }
+    return null;
+  }
+
+  async queryFeedback(args: {
+    agentId: bigint;
+    trustedClients: readonly Address[];
+    tag1: string;
+    tag2: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }): Promise<RawFeedbackEvent[]> {
+    if (NEW_FEEDBACK_EVENT === undefined) throw new Error("NewFeedback ABI is missing");
+    const trusted = new Set(args.trustedClients.map((client) => client.toLowerCase()));
+    const logs = await this.#publicClient.getLogs({
+      address: this.#reputationRegistry,
+      event: NEW_FEEDBACK_EVENT,
+      args: { agentId: args.agentId },
+      fromBlock: args.fromBlock,
+      toBlock: args.toBlock,
+    });
+    const events: RawFeedbackEvent[] = [];
+    for (const log of logs) {
+      const clientAddress = log.args.clientAddress;
+      if (clientAddress === undefined || !trusted.has(clientAddress.toLowerCase())) continue;
+      if (log.args.tag1 !== args.tag1 || log.args.tag2 !== args.tag2) continue;
+      if (
+        log.args.value === undefined ||
+        log.args.valueDecimals === undefined ||
+        log.transactionHash === null ||
+        log.blockNumber === null ||
+        log.logIndex === null
+      ) continue;
+      const blockNumber = Number(log.blockNumber);
+      events.push({
+        value: Number(log.args.value),
+        valueDecimals: log.args.valueDecimals,
+        clientAddress: clientAddress.toLowerCase() as Address,
+        blockNumber,
+        logIndex: log.logIndex,
+        transactionRef: {
+          kind: "EVM",
+          hash: log.transactionHash,
+          chainId: BASE_SEPOLIA_CHAIN_ID,
+          evidenceSource: "BASE_SEPOLIA_VERIFIED",
+          blockNumber,
+          logIndex: log.logIndex,
+        },
+        tag1: log.args.tag1,
+        tag2: log.args.tag2,
+      });
+    }
+    return events;
+  }
+
+  latestBlock(): Promise<bigint> {
+    return this.#publicClient.getBlockNumber();
   }
 }
 
@@ -137,34 +215,67 @@ export class ViemReputationReceiptConfirmer implements ReputationReceiptConfirme
     agentId: bigint;
     objectiveValue: 0 | 100;
     feedbackHash: Hex;
-  }): Promise<boolean> {
+    evidenceSource: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+  }): Promise<ConfirmedFeedbackProof | null> {
     const receipt = await this.#publicClient.waitForTransactionReceipt({
       hash: args.transactionHash,
     });
+    // No receipt, a failed receipt, or a receipt against another contract is not a
+    // publication: the caller gets nothing rather than a proof-shaped object.
+    if (!receipt) return null;
     if (
       receipt.status !== "success" ||
       receipt.to?.toLowerCase() !== args.registryAddress.toLowerCase()
-    ) return false;
-    return receipt.logs.some((log) => {
-      if (log.address.toLowerCase() !== args.registryAddress.toLowerCase()) return false;
+    ) return null;
+    for (const log of receipt.logs) {
+      if (log.address.toLowerCase() !== args.registryAddress.toLowerCase()) continue;
+      let decoded;
       try {
-        const decoded = decodeEventLog({
+        decoded = decodeEventLog({
           abi: ERC8004_REPUTATION_ABI,
           eventName: "NewFeedback",
           topics: log.topics,
           data: log.data,
         });
-        return (
-          decoded.args.agentId === args.agentId &&
-          decoded.args.value === BigInt(args.objectiveValue) &&
-          decoded.args.valueDecimals === 0 &&
-          decoded.args.tag1 === "pbl-audit" &&
-          decoded.args.tag2 === "payment-outcome" &&
-          decoded.args.feedbackHash.toLowerCase() === args.feedbackHash.toLowerCase()
-        );
       } catch {
-        return false;
+        continue;
       }
-    });
+      if (
+        decoded.args.agentId !== args.agentId ||
+        decoded.args.value !== BigInt(args.objectiveValue) ||
+        decoded.args.valueDecimals !== 0 ||
+        decoded.args.tag1 !== FEEDBACK_TAG1 ||
+        decoded.args.tag2 !== FEEDBACK_TAG2 ||
+        decoded.args.feedbackHash.toLowerCase() !== args.feedbackHash.toLowerCase()
+      ) continue;
+      if (log.blockNumber === null || log.logIndex === null) continue;
+      const blockNumber = Number(log.blockNumber);
+      const receiptProofRef = `sha256:${createHash("sha256")
+        .update(`${args.transactionHash}:${log.logIndex}:feedback`)
+        .digest("hex")}`;
+      return {
+        registryAddress: log.address.toLowerCase() as Address,
+        transactionRef: {
+          kind: "EVM",
+          hash: args.transactionHash,
+          chainId: BASE_SEPOLIA_CHAIN_ID,
+          evidenceSource: args.evidenceSource,
+          blockNumber,
+          logIndex: log.logIndex,
+        },
+        receiptProofRef,
+        clientAddress: decoded.args.clientAddress.toLowerCase() as Address,
+        erc8004AgentId: decoded.args.agentId.toString(),
+        value: args.objectiveValue,
+        valueDecimals: 0,
+        feedbackHash: decoded.args.feedbackHash,
+        blockNumber,
+        logIndex: log.logIndex,
+        tag1: decoded.args.tag1,
+        tag2: decoded.args.tag2,
+        feedbackUri: decoded.args.feedbackURI,
+      };
+    }
+    return null;
   }
 }

@@ -11,8 +11,14 @@ from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceReposit
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import EvidenceIntegrityError, EvidenceTransitionError
 from buyer_audit_api.core.events import verify_event_chain
-from buyer_audit_api.core.models import EventType
+from buyer_audit_api.core.models import EventType, EvidenceSource, EvmTransactionRef
 from buyer_audit_api.core.purchase_service import PurchaseService
+from buyer_audit_api.core.reputation import (
+    RawFeedbackEvent,
+    ReputationAggregationPolicy,
+    ReputationQueryScope,
+    ReputationSnapshot,
+)
 from buyer_audit_api.domains.ai_inference.models import (
     BenchmarkSnapshot,
     NormalizedAiRequest,
@@ -146,6 +152,76 @@ class AcceptingIdentityVerifier:
 class RejectingQuoteVerifier:
     def verify(self, quote: SellerQuote) -> bool:
         return not bool(quote.signature)
+
+
+REPUTATION_REGISTRY = "0x8004b663056a597dffe9eccc1965a193b7388713"
+REPUTATION_CLIENT = "0x0000000000000000000000000000000000000009"
+REPUTATION_TX = "0x" + "ab" * 32
+
+
+class FixedReputation:
+    """A `SellerReputationProvider` that answers from a fixed per-agent score table."""
+
+    def __init__(self, clock, scores: dict[str, int] | None = None) -> None:
+        self.clock = clock
+        self.scores = {"gemini-agent": 96, "nemotron-agent": 4} if scores is None else scores
+        self.calls: list[tuple[str, str]] = []
+        self.policy = ReputationAggregationPolicy()
+
+    async def snapshot(
+        self, *, seller_agent_id: str, erc8004_agent_id: str
+    ) -> ReputationSnapshot | None:
+        self.calls.append((seller_agent_id, erc8004_agent_id))
+        value = self.scores.get(seller_agent_id)
+        if value is None:
+            return None
+        return self.policy.aggregate(
+            snapshot_id=f"reputation-{seller_agent_id}",
+            seller_agent_id=seller_agent_id,
+            scope=ReputationQueryScope(
+                chain_id=84532,
+                registry_address=REPUTATION_REGISTRY,
+                erc8004_agent_id=erc8004_agent_id,
+                trusted_clients=(REPUTATION_CLIENT,),
+                from_block=1,
+                to_block=100,
+            ),
+            queried_at=self.clock.now(),
+            events=(
+                RawFeedbackEvent(
+                    value=value,
+                    value_decimals=0,
+                    client_address=REPUTATION_CLIENT,
+                    block_number=50,
+                    log_index=1,
+                    transaction_ref=EvmTransactionRef(
+                        hash=REPUTATION_TX, block_number=50, log_index=1
+                    ),
+                ),
+            ),
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            now=self.clock.now(),
+        )
+
+
+class ExplodingReputation:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def snapshot(
+        self, *, seller_agent_id: str, erc8004_agent_id: str
+    ) -> ReputationSnapshot | None:
+        del seller_agent_id, erc8004_agent_id
+        self.calls += 1
+        raise RuntimeError("reputation registry unavailable")
+
+
+class SharedAgentQuoteClient(SignedQuoteClient):
+    """Two models quoted by one provider-level seller agent (`P6-AC-06.6`)."""
+
+    async def quote(self, **kwargs) -> SellerQuote:
+        quote = await super().quote(**kwargs)
+        return quote.model_copy(update={"seller_agent_id": "shared-agent"})
 
 
 @pytest.mark.asyncio
@@ -481,6 +557,180 @@ async def test_concurrent_decisions_commit_one_quoted_decided_transition(clock) 
     assert len(failures) == 1
     assert isinstance(failures[0], EvidenceTransitionError)
     assert [event.type for event in await repository.list_events("purchase-1")] == [
+        EventType.REQUESTED,
+        EventType.QUOTED,
+        EventType.DECIDED,
+    ]
+
+
+@pytest.mark.asyncio
+async def test_provider_reputation_is_persisted_and_changes_the_winner(clock) -> None:
+    """`P6-AC-06.5`: under the quality preset nemotron wins on benchmarks alone.
+
+    `test_request_to_decision_creates_reproducible_evidence` is the control: the same
+    quality-preset request without a reputation provider selects nemotron. A high
+    agent-level score for gemini and a low one for nemotron must flip that.
+    """
+    repository = InMemoryEvidenceRepository()
+    persisted = normalized_request().model_copy(update={"priority": PriorityPreset.QUALITY})
+    request = await seed_requested(repository, clock, request=persisted)
+    reputation = FixedReputation(clock)
+    workflow = AiInferenceDecisionWorkflow(
+        repository=repository,
+        clock=clock,
+        benchmarks=FixedBenchmarks(clock),
+        quotes=SignedQuoteClient(),
+        quote_verifier=AcceptingQuoteVerifier(),
+        identity_verifier=AcceptingIdentityVerifier(),
+        explanation=DeterministicExplanationAdapter(),
+        reputation=reputation,
+    )
+
+    decision = await workflow.decide(
+        purchase_id="purchase-1",
+        normalized_request=request,
+        budget_units=250_000,
+    )
+
+    events = await repository.list_events("purchase-1")
+    snapshots = events[1].payload["reputationSnapshots"]
+    assert sorted(item["seller_agent_id"] for item in snapshots) == [
+        "gemini-agent",
+        "nemotron-agent",
+    ]
+    gemini = next(item for item in snapshots if item["seller_agent_id"] == "gemini-agent")
+    assert gemini["derived_score"] == 96.0
+    assert gemini["event_count"] == 1
+    assert gemini["freshness"] == "FRESH"
+    assert "reputation-gemini-agent" in events[1].evidence_refs
+    assert "reputation-nemotron-agent" in events[1].evidence_refs
+
+    assert decision.winner.quote_id == "quote-gemini"
+    assert decision.winner.component_scores["reputation"] == 96.0
+    assert decision.winner.weights["reputation"] == 10
+    assert decision.winner.reputation_snapshot_id == "reputation-gemini-agent"
+    assert decision.winner.reputation_snapshot_hash == gemini["snapshot_hash"]
+    assert decision.reputation_snapshot_id == "reputation-gemini-agent"
+
+    decided = events[2].payload
+    assert decided["reputation_snapshot_id"] == "reputation-gemini-agent"
+    assert decided["winner"]["reputation_snapshot_id"] == "reputation-gemini-agent"
+    assert decided["winner"]["reputation_snapshot_hash"] == gemini["snapshot_hash"]
+    verify_event_chain(events)
+
+
+@pytest.mark.asyncio
+async def test_one_seller_agent_yields_one_snapshot_for_all_its_models(clock) -> None:
+    """`P6-AC-06.6`: reputation is provider-level, so it is queried once per agent."""
+    repository = InMemoryEvidenceRepository()
+    request = await seed_requested(repository, clock)
+    reputation = FixedReputation(clock, scores={"shared-agent": 70})
+    workflow = AiInferenceDecisionWorkflow(
+        repository=repository,
+        clock=clock,
+        benchmarks=FixedBenchmarks(clock),
+        quotes=SharedAgentQuoteClient(),
+        quote_verifier=AcceptingQuoteVerifier(),
+        identity_verifier=AcceptingIdentityVerifier(),
+        explanation=DeterministicExplanationAdapter(),
+        reputation=reputation,
+    )
+
+    decision = await workflow.decide(
+        purchase_id="purchase-1",
+        normalized_request=request,
+        budget_units=250_000,
+    )
+
+    assert reputation.calls == [("shared-agent", "1")]
+    events = await repository.list_events("purchase-1")
+    assert [item["snapshot_id"] for item in events[1].payload["reputationSnapshots"]] == [
+        "reputation-shared-agent"
+    ]
+    assert len(decision.eligible) == 2
+    assert {item.reputation_snapshot_id for item in decision.eligible} == {
+        "reputation-shared-agent"
+    }
+    assert {item.component_scores["reputation"] for item in decision.eligible} == {70.0}
+
+
+@pytest.mark.asyncio
+async def test_resuming_after_quoted_scores_from_the_persisted_snapshot(clock) -> None:
+    class FailOnceExplanation(DeterministicExplanationAdapter):
+        calls = 0
+
+        async def explain(self, *, deterministic_explanation: str) -> str:
+            self.calls += 1
+            if self.calls == 1:
+                raise RuntimeError("injected crash after QUOTED")
+            return deterministic_explanation
+
+    repository = InMemoryEvidenceRepository()
+    request = await seed_requested(repository, clock)
+    reputation = FixedReputation(clock)
+    workflow = AiInferenceDecisionWorkflow(
+        repository=repository,
+        clock=clock,
+        benchmarks=FixedBenchmarks(clock),
+        quotes=SignedQuoteClient(),
+        quote_verifier=AcceptingQuoteVerifier(),
+        identity_verifier=AcceptingIdentityVerifier(),
+        explanation=FailOnceExplanation(),
+        reputation=reputation,
+    )
+    with pytest.raises(RuntimeError, match="injected crash"):
+        await workflow.decide(
+            purchase_id="purchase-1",
+            normalized_request=request,
+            budget_units=250_000,
+        )
+    assert reputation.calls == [("gemini-agent", "1"), ("nemotron-agent", "1")]
+
+    reputation.calls.clear()
+    decision = await workflow.decide(
+        purchase_id="purchase-1",
+        normalized_request=request,
+        budget_units=250_000,
+    )
+
+    # The committed QUOTED snapshot is the evidence; the registry is never re-queried.
+    assert reputation.calls == []
+    assert decision.winner.quote_id == "quote-gemini"
+    assert decision.winner.component_scores["reputation"] == 96.0
+    assert decision.winner.reputation_snapshot_id == "reputation-gemini-agent"
+    nemotron = next(item for item in decision.eligible if item.quote_id == "quote-nemotron")
+    assert nemotron.component_scores["reputation"] == 4.0
+
+
+@pytest.mark.asyncio
+async def test_a_failing_reputation_provider_falls_back_to_neutral_fifty(clock) -> None:
+    repository = InMemoryEvidenceRepository()
+    request = await seed_requested(repository, clock)
+    reputation = ExplodingReputation()
+    workflow = AiInferenceDecisionWorkflow(
+        repository=repository,
+        clock=clock,
+        benchmarks=FixedBenchmarks(clock),
+        quotes=SignedQuoteClient(),
+        quote_verifier=AcceptingQuoteVerifier(),
+        identity_verifier=AcceptingIdentityVerifier(),
+        explanation=DeterministicExplanationAdapter(),
+        reputation=reputation,
+    )
+
+    decision = await workflow.decide(
+        purchase_id="purchase-1",
+        normalized_request=request,
+        budget_units=250_000,
+    )
+
+    assert reputation.calls == 2
+    events = await repository.list_events("purchase-1")
+    assert events[1].payload["reputationSnapshots"] == []
+    assert [item.component_scores["reputation"] for item in decision.eligible] == [50.0, 50.0]
+    assert decision.winner.reputation_snapshot_id is None
+    assert decision.reputation_snapshot_id is None
+    assert [event.type for event in events] == [
         EventType.REQUESTED,
         EventType.QUOTED,
         EventType.DECIDED,

@@ -37,6 +37,100 @@ _AUXILIARY_EVENT_TYPES = {
     EventType.PAYMENT_ATTEMPT_REJECTED,
 }
 
+# Post-payment singletons: each may appear at most once, and only after a terminal
+# payment event.
+_POST_PAYMENT_SINGLETONS = {
+    EventType.DELIVERED,
+    EventType.AUDITED,
+    EventType.REPUTATION_DECIDED,
+    EventType.REPUTATION_RECORDED,
+    EventType.EVIDENCE_ANCHORED,
+}
+
+
+def _publish_identity_hash(event: EvidenceEvent) -> str | None:
+    value = event.payload.get("publishIdentityHash")
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _payload_string(event: EvidenceEvent, key: str) -> str | None:
+    value = event.payload.get(key)
+    return value if isinstance(value, str) and value.strip() else None
+
+
+def _post_payment_tail_is_valid(rest: list[EvidenceEvent]) -> bool:
+    """Design 18.6.1/18.8: the ordered, identity-bound post-payment tail of one purchase.
+
+    The tail is neither an unordered bag nor a type-only sequence. Checking types alone
+    admitted a conflict or a publication that belongs to a *different* publish identity
+    into this purchase's payment history, so every reputation event is compared against
+    the decision it claims to follow.
+
+    - every member is a known post-payment event and the singletons appear at most once;
+    - `REPUTATION_DECIDED` requires a preceding `AUDITED` and must name its own publish
+      identity and payload fingerprint;
+    - once a decision exists, every following `REPUTATION_PUBLICATION_CONFLICT` and
+      `REPUTATION_RECORDED` must carry that decision's `publishIdentityHash`, and a
+      conflict must also restate that decision's fingerprint as `existingFingerprint`.
+      A missing or mismatched value fails closed;
+    - a conflict requires a preceding decision and may then repeat, because it is an
+      append-only finding;
+    - the publication branch and the conflict branch are exclusive: a purchase that has
+      recorded a conflict can never later record a publication, and a purchase that has
+      recorded a publication can never later record a conflict;
+    - a Phase 5 purchase whose tail has `REPUTATION_RECORDED` and **no** decision at all
+      is an isolated legacy branch: it keeps loading exactly as written, with no identity
+      binding to compare against, and it is never backfilled.
+    """
+    seen: set[EventType] = set()
+    decision: EvidenceEvent | None = None
+    conflicted = False
+    recorded = False
+    for event in rest:
+        event_type = event.type
+        if event_type is EventType.REPUTATION_PUBLICATION_CONFLICT:
+            if decision is None or recorded:
+                return False
+            if not _conflict_follows_decision(event, decision):
+                return False
+            conflicted = True
+            continue
+        if event_type not in _POST_PAYMENT_SINGLETONS or event_type in seen:
+            return False
+        if event_type is EventType.REPUTATION_DECIDED:
+            if EventType.AUDITED not in seen or recorded or conflicted:
+                # A decision that arrives after its own publication or conflict is not a
+                # legacy chain, it is an impossible ordering.
+                return False
+            if (
+                _publish_identity_hash(event) is None
+                or _payload_string(event, "payloadFingerprint") is None
+            ):
+                return False
+            decision = event
+        if event_type is EventType.REPUTATION_RECORDED:
+            if conflicted:
+                return False
+            if decision is not None and _publish_identity_hash(
+                event
+            ) != _publish_identity_hash(decision):
+                # A publication of another identity is not this purchase's outcome.
+                return False
+            recorded = True
+        seen.add(event_type)
+    return True
+
+
+def _conflict_follows_decision(event: EvidenceEvent, decision: EvidenceEvent) -> bool:
+    """A conflict names the decision it conflicts with, or it is not that decision's."""
+    if _publish_identity_hash(event) != _publish_identity_hash(decision):
+        return False
+    existing = _payload_string(event, "existingFingerprint")
+    return existing is not None and existing == _payload_string(
+        decision, "payloadFingerprint"
+    )
+
+
 # H1: a new EIP-3009 execution submits to Base Sepolia. Historical on-chain evidence is
 # read-only and can never prove an active submission, so it is not a valid submitted source.
 _ACTIVE_EVM_SOURCE = EvidenceSource.BASE_SEPOLIA_VERIFIED
@@ -1389,12 +1483,7 @@ class PaymentService:
             ),
         )
         tail = business_types[3:]
-        post_payment_types = {
-            EventType.DELIVERED,
-            EventType.AUDITED,
-            EventType.REPUTATION_RECORDED,
-            EventType.EVIDENCE_ANCHORED,
-        }
+        tail_events = business_events[3:]
         lifecycle_valid = any(
             tail[: len(payment_prefix)] == payment_prefix
             and (
@@ -1404,8 +1493,7 @@ class PaymentService:
                     and payment_prefix[-1] in TERMINAL_PAYMENT_EVENT_TYPES
                 )
             )
-            and all(item in post_payment_types for item in tail[len(payment_prefix) :])
-            and len(tail[len(payment_prefix) :]) == len(set(tail[len(payment_prefix) :]))
+            and _post_payment_tail_is_valid(tail_events[len(payment_prefix) :])
             for payment_prefix in allowed_payment_prefixes
         )
         if business_types[:3] != prefix or not lifecycle_valid:
