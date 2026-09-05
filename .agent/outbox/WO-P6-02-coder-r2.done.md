@@ -20,11 +20,19 @@
   (`merge: integrate canonical phase6 planner amendment into wo/P6-02`)
   parents `2d53185` (correction) and `411e475f728344bad728c81c72bb7437a30da15e` (canonical
   `feature/phase6-audit-e2e`, planner payment-ordering amendment)
+- **Evidence commit:** `7afe4655d77ceb38c52db2433baeca541ea2ee87`
+  (`docs(phase6): record WO-P6-02 round-2 correction evidence`) — this file only; its
+  diff against `b2597049` excluding this file is empty.
+- **Post-merge acceptance commit:** the last commit on `wo/P6-02`. It carries the amended
+  acceptance strengthening of `tests/test_payment_service.py` (stage-(a) view/claim right
+  after the finalize, plus the explicit "no new claim, reservation, spend or event" checks)
+  together with this anchor paragraph. It was made after the merge because the amended
+  acceptance list arrived with the canonical merge parent, and `amend` is forbidden. Verify
+  with `git rev-parse HEAD` and
+  `git diff --name-only 7afe4655..HEAD` → exactly
+  `.agent/outbox/WO-P6-02-coder-r2.done.md` and
+  `services/buyer-audit-api/tests/test_payment_service.py`.
 - Branch: `wo/P6-02`. No push, no rebase, no reset, no stash, no amend, no main commit.
-- Branch tip: the last commit on `wo/P6-02`. A report cannot contain its own hash, so if an
-  evidence-only follow-up exists its entire diff is this file; the merge SHA above is the
-  auditable anchor. Verify with `git rev-parse HEAD` and
-  `git diff b2597049..HEAD -- . ':(exclude).agent/outbox/WO-P6-02-coder-r2.done.md'`.
 
 ### History preserved
 

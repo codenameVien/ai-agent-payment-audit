@@ -843,15 +843,41 @@ async def append_reputation(
 
 @pytest.mark.asyncio
 async def test_the_payment_view_survives_a_decision_and_a_publication(clock) -> None:
-    """A finalized, published purchase still loads its payment view and re-claims."""
-    repository, payment = await settled_purchase(clock)
-    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
-    await append_reputation(repository, clock, EventType.REPUTATION_RECORDED)
+    """Amended AC: view and existing-intent claim work at each post-payment stage.
 
+    (a) right after the finalize appends `REPUTATION_DECIDED`, (b) after the confirmed
+    `REPUTATION_RECORDED`, and neither adds a claim, a reservation, spend or an event.
+    """
+    repository, payment = await settled_purchase(clock)
+    baseline = await payment.load_payment_view("purchase-payment")
+    before_events = len(await repository.list_events("purchase-payment"))
+    policy_before = await repository.get_latest_wallet_policy(BUYER)
+    assert policy_before is not None
+
+    # (a) finalize appended the decision.
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    decided_view = await payment.load_payment_view("purchase-payment")
+    assert decided_view.purchase_id == baseline.purchase_id
+    assert decided_view.quote.amount_units == baseline.quote.amount_units
+    assert (await payment.claim("purchase-payment")).state is PaymentIntentState.SETTLED
+
+    # (b) the confirmed publication is recorded.
+    await append_reputation(repository, clock, EventType.REPUTATION_RECORDED)
     view = await payment.load_payment_view("purchase-payment")
     assert view.purchase_id == "purchase-payment"
     resumed = await payment.claim("purchase-payment")
     assert resumed.state is PaymentIntentState.SETTLED
+    assert resumed.transaction_hash == "0x" + "ab" * 32
+
+    # Reading never wrote: only the two reputation events were appended, and the wallet
+    # policy counters are untouched.
+    events = await repository.list_events("purchase-payment")
+    assert len(events) == before_events + 2
+    assert [event.type for event in events].count(EventType.PAYMENT_INTENT_CLAIMED) == 1
+    policy_after = await repository.get_latest_wallet_policy(BUYER)
+    assert policy_after is not None
+    assert policy_after.spent_units == policy_before.spent_units
+    assert policy_after.reserved_units == policy_before.reserved_units
 
 
 @pytest.mark.asyncio
