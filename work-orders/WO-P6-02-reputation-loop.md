@@ -67,6 +67,7 @@ persisted terminal `AUDITED`에서 seller-attributed 100/0 또는 DEFER를 결�
 
 - NEW `services/buyer-audit-api/src/buyer_audit_api/core/reputation.py`
 - NEW `services/buyer-audit-api/src/buyer_audit_api/core/terminal.py`
+- MODIFY `services/buyer-audit-api/src/buyer_audit_api/core/models.py` — `EventType`에 `REPUTATION_DECIDED = "REPUTATION_DECIDED"`와 `REPUTATION_PUBLICATION_CONFLICT = "REPUTATION_PUBLICATION_CONFLICT"` 두 멤버만 추가
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/core/ports.py`
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/memory.py`
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py`
@@ -197,6 +198,7 @@ Reviewer는 exact tip에서 독립 재실행 후 `.agent/outbox/WO-P6-02-review.
 ## 금지 사항
 
 - canonical planning/Work Order 수정
+- 중앙 `EventType` 밖의 별도 parallel event enum 추가 또는 `REPUTATION_DECIDED`/`REPUTATION_PUBLICATION_CONFLICT` 대신 기존 event type을 overload
 - live ERC-8004 feedback/query 성공 주장 또는 transaction 제출
 - 실제 RPC/provider/facilitator/AWS/Atlas 접속
 - production root의 fake mode/injection 허용

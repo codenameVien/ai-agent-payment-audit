@@ -285,3 +285,37 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 - Branch `wo/P6-02` stays unintegrated with no implementation. WO-P6-03 must not start.
   Planner decides the one-line allowed-write amendment; on amendment WO-P6-02 is implementable
   end to end from this same base.
+
+## 2026-09-05 14:30 KST — planner — WO-P6-02 bounded allowed-write correction
+
+### Intent
+- Resolve only the packet-boundary omission proven by blocker commit
+  `0c10b91ce1067ffe3f245a3aef11b032cff9f249`; do not revise approved product requirements,
+  design, tasks, implementation steps, acceptance criteria, or security constraints.
+
+### Evidence and decision
+- Design §18.6.1 requires append-only `REPUTATION_DECIDED` and
+  `REPUTATION_PUBLICATION_CONFLICT`; §18.6.4 names the former in the singleton index and keeps
+  decision/conflict evidence in the purchase event chain.
+- `services/buyer-audit-api/src/buyer_audit_api/core/models.py` owns the single closed
+  `EventType(StrEnum)` used by `EvidenceEvent`, `create_event`, and repository ports. The two
+  required values were absent, and the original WO-P6-02 allow-list omitted this declaration file.
+- Amend WO-P6-02 Buyer/Audit allowed writes with that file, scoped to adding exactly those two
+  members. Explicitly forbid a parallel event enum or overloading an existing event type.
+
+### Files changed
+- `work-orders/WO-P6-02-reputation-loop.md` — bounded allow-list correction and matching
+  anti-workaround prohibition.
+- `.agent/TURN_LOG.md` — this append-only planner record.
+- `.agent/outbox/WO-P6-02-planner-amendment.done.md` — handoff evidence.
+- No requirements/design/tasks, WO-P6-01/03/04, product source/test, or `.githooks` file changed.
+
+### Verification and handoff
+- Canonical start gate: `feature/phase6-audit-e2e` at
+  `feb13f94d3a7934dec3a21a56c2cd3477afac179`; only pre-existing untracked
+  `.githooks/pre-commit` and `.githooks/pre-push` were present.
+- Upstream requirements/design/tasks hashes remain the approved Phase 6 hashes.
+- `git diff --check`, exact allowed-path diff, protected-path diff, required-line uniqueness, and
+  product-code no-diff checks are required immediately before the coherent planning commit.
+- Orchestrator must bring the resulting planning commit into `wo/P6-02`; Coder may then resume
+  the same packet without inventing a new product decision.
