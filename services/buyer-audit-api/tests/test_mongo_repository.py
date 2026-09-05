@@ -46,14 +46,17 @@ from buyer_audit_api.core.payment import (
 from buyer_audit_api.core.reputation import (
     ConfirmedFeedbackProof,
     DecisionKind,
+    OutboxConflictReason,
     OutboxStatus,
     PublishIdentity,
     RawFeedbackEvent,
     ReputationAggregationPolicy,
     ReputationDecision,
+    ReputationOutboxConflict,
     ReputationPublishJob,
     ReputationQueryScope,
     ReputationReason,
+    conflict_key,
 )
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 from buyer_audit_api.core.terminal import TerminalAuditCoordinator
@@ -1234,6 +1237,7 @@ PHASE6_NEW_UNIQUE_INDEXES = (
     "unique_phase6_terminal_outcome",
     "unique_phase6_reconciliation_attempt",
     "unique_phase6_rejected_attempt",
+    "unique_reputation_conflict_key",
     "unique_confirmed_outflow_terminal",
     "unique_confirmed_outflow_transaction",
     "unique_confirmed_outflow_transaction_local",
@@ -1877,6 +1881,139 @@ async def test_real_mongo_terminal_finalize_and_publication_are_atomic(
             {"purchaseId": raced_purchase}
         )
         assert jobs == 1
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_concurrent_identical_conflicts_are_one_event(
+    mongo_uri, clock
+) -> None:
+    """R2-M1: one logical conflict is one append-only event on a real replica set.
+
+    The reviewer called the same `(identity, requestedFingerprint, reasonCode)` eight
+    times concurrently and observed seven duplicate events, because the dedupe read ran
+    outside the transaction. The deterministic conflict key is now looked up inside the
+    transaction and backed by a unique partial index, so the duplicate race resolves to
+    the one committed event. A *different* conflict still appends its own finding, and a
+    restated fingerprint is refused outright.
+    """
+    database = f"pbl_phase6_conflict_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    purchase_id = "purchase-native-conflict"
+    try:
+        await repository.ensure_indexes()
+        await repository.bind_buyer_wallet(
+            owner_address=PHASE6_OWNER,
+            buyer_wallet_address=PHASE6_BUYER,
+            bound_at=clock.now(),
+        )
+        await repository.put_wallet_policy(
+            WalletPolicy(
+                buyer_wallet_address=PHASE6_BUYER,
+                policy_date=clock.now().date().isoformat(),
+                token=PHASE6_TOKEN,
+                per_transaction_limit_units=250_000,
+                daily_limit_units=1_000_000,
+            )
+        )
+        for event_type, payload in native_purchase_events(
+            purchase_id, settlement_hash="0x" + "7a" * 32
+        ):
+            await repository.append_event(
+                purchase_id=purchase_id,
+                event_type=event_type,
+                occurred_at=clock.now(),
+                actor=(
+                    {"id": PHASE6_OWNER, "type": "user"}
+                    if event_type is EventType.REQUESTED
+                    else {"id": "seeder", "type": "service"}
+                ),
+                payload=payload,
+            )
+        result = await TerminalAuditCoordinator(
+            orchestration=repository,
+            outbox=repository,
+            clock=clock,
+            chain_id=84532,
+            registry_address=REPUTATION_REGISTRY,
+        ).finalize_if_eligible(purchase_id)
+        job = result.job
+        assert job is not None
+
+        # A restated fingerprint is refused with a typed reason and writes nothing.
+        before = len(await repository.list_events(purchase_id))
+        with pytest.raises(ReputationOutboxConflict) as same:
+            await repository.record_conflict(
+                identity_hash=job.identity_hash,
+                requested_fingerprint=job.payload_fingerprint,
+                reason_code="OUTBOX_TRANSITION_CONFLICT",
+                now=clock.now(),
+            )
+        assert same.value.reason is OutboxConflictReason.SAME_FINGERPRINT_NOT_A_CONFLICT
+        assert len(await repository.list_events(purchase_id)) == before
+
+        requested = "sha256:" + "5c" * 32
+        results = await asyncio.gather(
+            *(
+                repository.record_conflict(
+                    identity_hash=job.identity_hash,
+                    requested_fingerprint=requested,
+                    reason_code="OUTBOX_TRANSITION_CONFLICT",
+                    now=clock.now(),
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+        settled = [item for item in results if not isinstance(item, BaseException)]
+        assert len(settled) == 8, [
+            repr(item) for item in results if isinstance(item, BaseException)
+        ]
+        assert len({event.event_hash for event, _ in settled}) == 1
+
+        stored = await cleanup[database]["purchaseEvents"].count_documents(
+            {
+                "purchaseId": purchase_id,
+                "type": EventType.REPUTATION_PUBLICATION_CONFLICT.value,
+            }
+        )
+        assert stored == 1
+        expected_key = conflict_key(
+            identity_hash=job.identity_hash,
+            existing_fingerprint=job.payload_fingerprint,
+            requested_fingerprint=requested,
+            reason_code="OUTBOX_TRANSITION_CONFLICT",
+        )
+        assert settled[0][0].payload["conflictKey"] == expected_key
+        assert settled[0][1].status is OutboxStatus.CONFLICT
+
+        # A different conflict is preserved next to it, and the chain still verifies.
+        other, _ = await repository.record_conflict(
+            identity_hash=job.identity_hash,
+            requested_fingerprint="sha256:" + "6d" * 32,
+            reason_code="FINGERPRINT_MISMATCH",
+            now=clock.now(),
+        )
+        assert other.payload["conflictKey"] != expected_key
+        events = await repository.list_events(purchase_id)
+        assert [item.type for item in events].count(
+            EventType.REPUTATION_PUBLICATION_CONFLICT
+        ) == 2
+        head = await repository.get_event_head(purchase_id)
+        assert head is not None
+        verify_event_chain(
+            events,
+            expected_event_count=head.event_count,
+            expected_head_event_hash=head.head_event_hash,
+        )
+
+        indexes = await cleanup[database]["purchaseEvents"].index_information()
+        assert indexes["unique_reputation_conflict_key"]["unique"] is True
+        assert not await repository.phase6_index_collision_report()
     finally:
         await repository.close()
         await cleanup.drop_database(database)

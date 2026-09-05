@@ -115,6 +115,39 @@ class OutboxStatus(StrEnum):
     CONFLICT = "CONFLICT"
 
 
+class OutboxConflictReason(StrEnum):
+    """Why a durable-state transition was refused.
+
+    A publisher has to tell an ordinary race apart from a real payload conflict. Losing
+    a lease or arriving at a status somebody else already moved is normal contention:
+    another worker continues the job and **no** evidence is appended. Only an immutable
+    payload fingerprint that differs from the persisted one is a publication conflict.
+    """
+
+    PAYLOAD_FINGERPRINT_MISMATCH = "PAYLOAD_FINGERPRINT_MISMATCH"
+    LEASE_MOVED = "LEASE_MOVED"
+    STALE_STATUS = "STALE_STATUS"
+    ALREADY_TERMINAL = "ALREADY_TERMINAL"
+    TRANSACTION_ALREADY_BOUND = "TRANSACTION_ALREADY_BOUND"
+    DIFFERENT_CONFIRMATION = "DIFFERENT_CONFIRMATION"
+    PREPARED_COMMITMENT_CHANGED = "PREPARED_COMMITMENT_CHANGED"
+    SAME_FINGERPRINT_NOT_A_CONFLICT = "SAME_FINGERPRINT_NOT_A_CONFLICT"
+
+
+class ReputationOutboxConflict(PaymentConflictError):
+    """A `PaymentConflictError` that also names *why*, so callers can branch on it."""
+
+    def __init__(self, reason: OutboxConflictReason, message: str) -> None:
+        super().__init__(message)
+        self.reason = reason
+
+
+def outbox_conflict(
+    reason: OutboxConflictReason, message: str
+) -> ReputationOutboxConflict:
+    return ReputationOutboxConflict(reason, message)
+
+
 TERMINAL_OUTBOX_STATUSES: frozenset[OutboxStatus] = frozenset(
     {OutboxStatus.CONFIRMED, OutboxStatus.DEFERRED, OutboxStatus.CONFLICT}
 )
@@ -1021,6 +1054,42 @@ def reputation_recorded_payload(
     return payload
 
 
+def conflict_key(
+    *, identity_hash: str, existing_fingerprint: str, requested_fingerprint: str, reason_code: str
+) -> str:
+    """The deterministic identity of one logical publication conflict.
+
+    Two callers describing the same conflict compute the same key, which is what makes a
+    concurrent retry converge on a single append-only event instead of one event per
+    caller. It is the unique key of the conflict index.
+    """
+    return sha256_json(
+        {
+            "existingFingerprint": existing_fingerprint,
+            "publishIdentityHash": identity_hash,
+            "reasonCode": reason_code,
+            "requestedFingerprint": requested_fingerprint,
+        }
+    )
+
+
+def assert_is_payload_conflict(
+    *, existing_fingerprint: str, requested_fingerprint: str
+) -> None:
+    """`P6-AC-05.3`: only a *different* immutable fingerprint is a publication conflict.
+
+    A worker that lost a lease, or an idempotent retry of the same payload, restates the
+    fingerprint it already holds. Recording that as a conflict would terminalize a job
+    another worker is still legitimately driving, and could leave a real external effect
+    with no `REPUTATION_RECORDED`. It is refused with no state change and no evidence.
+    """
+    if existing_fingerprint == requested_fingerprint:
+        raise outbox_conflict(
+            OutboxConflictReason.SAME_FINGERPRINT_NOT_A_CONFLICT,
+            "the requested payload fingerprint is the recorded one: not a conflict",
+        )
+
+
 def publication_conflict_payload(
     *,
     identity_hash: str,
@@ -1031,7 +1100,17 @@ def publication_conflict_payload(
     """Design 18.6.1: the append-only `REPUTATION_PUBLICATION_CONFLICT` payload."""
     if not reason_code.strip():
         raise ValueError("a publication conflict requires a reason code")
+    assert_is_payload_conflict(
+        existing_fingerprint=existing_fingerprint,
+        requested_fingerprint=requested_fingerprint,
+    )
     return {
+        "conflictKey": conflict_key(
+            identity_hash=identity_hash,
+            existing_fingerprint=existing_fingerprint,
+            requested_fingerprint=requested_fingerprint,
+            reason_code=reason_code,
+        ),
         "existingFingerprint": existing_fingerprint,
         "publishIdentityHash": identity_hash,
         "reasonCode": reason_code,
@@ -1040,9 +1119,8 @@ def publication_conflict_payload(
 
 
 def conflict_is_identical(payload: JsonObject, candidate: JsonObject) -> bool:
-    """Same identity, same requested fingerprint, same reason: one conflict, recorded once."""
-    keys = ("publishIdentityHash", "requestedFingerprint", "reasonCode")
-    return all(payload.get(key) == candidate.get(key) for key in keys)
+    """One logical conflict, recorded once: the deterministic key decides."""
+    return payload.get("conflictKey") == candidate.get("conflictKey")
 
 
 def proof_from_payload(value: object) -> ConfirmedFeedbackProof:

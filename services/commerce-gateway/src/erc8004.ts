@@ -95,11 +95,29 @@ export class Erc8004PolicyError extends Error {
   }
 }
 
-/** A durable-state rejection: the lease moved on, or the fingerprint changed. Never retried. */
+/**
+ * A durable-state rejection. `reason` says whether it was ordinary contention - a lease
+ * that moved, a status somebody else already advanced - or a genuine immutable payload
+ * conflict. Only `PAYLOAD_FINGERPRINT_MISMATCH` may ever produce conflict evidence.
+ */
+export type OutboxConflictReason =
+  | "PAYLOAD_FINGERPRINT_MISMATCH"
+  | "LEASE_MOVED"
+  | "STALE_STATUS"
+  | "ALREADY_TERMINAL"
+  | "TRANSACTION_ALREADY_BOUND"
+  | "DIFFERENT_CONFIRMATION"
+  | "PREPARED_COMMITMENT_CHANGED"
+  | "SAME_FINGERPRINT_NOT_A_CONFLICT"
+  | "UNSPECIFIED";
+
 export class ReputationOutboxConflictError extends Error {
-  constructor(message: string) {
+  readonly reason: OutboxConflictReason;
+
+  constructor(message: string, reason: OutboxConflictReason = "UNSPECIFIED") {
     super(message);
     this.name = "ReputationOutboxConflictError";
+    this.reason = reason;
   }
 }
 
@@ -481,24 +499,36 @@ export class Erc8004ReputationPublisher {
     );
   }
 
-  /** A durable-state conflict is terminal for this attempt: never retried with a new write. */
+  /**
+   * A durable-state conflict is terminal for this attempt: never retried with a new write.
+   *
+   * Only an immutable payload-fingerprint mismatch is a publication conflict. Losing a
+   * lease, or arriving at a status another worker already advanced, is ordinary
+   * contention: another worker continues the job, so requesting conflict evidence would
+   * terminalize a still-valid job and could leave a real external effect with no
+   * `REPUTATION_RECORDED`.
+   */
   async #guard<T>(job: ReputationPublishJob, operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
     } catch (error) {
       if (error instanceof ReputationOutboxConflictError) {
-        // The losing payload is itself evidence, so it is recorded against the publish
-        // identity. That write must never be able to hide the conflict that caused it.
-        try {
-          await this.#outbox.recordConflict({
-            identityHash: job.identityHash,
-            requestedFingerprint: job.payloadFingerprint,
-            reasonCode: OUTBOX_CONFLICT_REASON_CODE,
-          });
-        } catch {
-          // Deliberately swallowed: the original conflict is the error that matters.
+        if (error.reason === "PAYLOAD_FINGERPRINT_MISMATCH") {
+          // The losing payload is itself evidence, so it is recorded against the publish
+          // identity. That write must never be able to hide the conflict that caused it.
+          try {
+            await this.#outbox.recordConflict({
+              identityHash: job.identityHash,
+              requestedFingerprint: job.payloadFingerprint,
+              reasonCode: OUTBOX_CONFLICT_REASON_CODE,
+            });
+          } catch {
+            // Deliberately swallowed: the original conflict is the error that matters.
+          }
         }
-        throw new Erc8004PolicyError(`reputation outbox conflict: ${error.message}`);
+        throw new Erc8004PolicyError(
+          `reputation outbox conflict (${error.reason}): ${error.message}`,
+        );
       }
       throw error;
     }

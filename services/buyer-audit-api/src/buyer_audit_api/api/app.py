@@ -110,6 +110,7 @@ from buyer_audit_api.core.ports import ReputationOutboxPort
 from buyer_audit_api.core.projections import PurchaseProjection, PurchaseProjectionService
 from buyer_audit_api.core.reputation import (
     ReputationDecision,
+    ReputationOutboxConflict,
     ReputationPublishJob,
     ReputationSnapshot,
 )
@@ -278,9 +279,19 @@ _OUTBOX_ERRORS = (
 
 
 def _outbox_error(exc: Exception) -> HTTPException:
-    """Design 18.12.2: stale lease/fingerprint 409, malformed proof 422, missing 404."""
+    """Design 18.12.2: stale lease/fingerprint 409, malformed proof 422, missing 404.
+
+    A typed durable-state conflict answers with `{"reason", "message"}` so the Payment
+    Executor can tell an ordinary lease/CAS race apart from a real immutable payload
+    conflict. Only the latter may ever request conflict evidence.
+    """
     if isinstance(exc, PaymentEvidenceError) and "not found" in str(exc):
         return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(exc, ReputationOutboxConflict):
+        return HTTPException(
+            status_code=409,
+            detail={"reason": exc.reason.value, "message": str(exc)},
+        )
     if isinstance(
         exc, (PaymentConflictError, EvidenceIntegrityError, EvidenceTransitionError)
     ):

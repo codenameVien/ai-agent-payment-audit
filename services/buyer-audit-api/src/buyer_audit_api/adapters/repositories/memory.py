@@ -32,6 +32,7 @@ from buyer_audit_api.core.payment import (
 )
 from buyer_audit_api.core.reputation import (
     ConfirmedFeedbackProof,
+    OutboxConflictReason,
     OutboxStatus,
     PublishIdentity,
     ReputationDecision,
@@ -40,6 +41,7 @@ from buyer_audit_api.core.reputation import (
     assert_prepared_commitment,
     assert_proof_matches_job,
     conflict_is_identical,
+    outbox_conflict,
     publication_conflict_payload,
     reputation_recorded_payload,
     submission_identity,
@@ -670,8 +672,9 @@ class InMemoryEvidenceRepository:
         key = self._transaction_key(reference)
         owner = self._outbox_transactions.get(key)
         if owner is not None and owner != job_id:
-            raise PaymentConflictError(
-                "reputation transaction reference is already recorded"
+            raise outbox_conflict(
+                OutboxConflictReason.TRANSACTION_ALREADY_BOUND,
+                "reputation transaction reference is already recorded",
             )
         self._outbox_transactions[key] = job_id
 
@@ -688,13 +691,20 @@ class InMemoryEvidenceRepository:
         if job is None:
             raise PaymentEvidenceError("reputation job not found")
         if job.payload_fingerprint != payload_fingerprint:
-            raise PaymentConflictError("reputation job has a different payload fingerprint")
+            raise outbox_conflict(
+                OutboxConflictReason.PAYLOAD_FINGERPRINT_MISMATCH,
+                "reputation job has a different payload fingerprint",
+            )
         if job.status not in allowed:
-            raise PaymentConflictError(
-                f"reputation job cannot move from {job.status.value}"
+            raise outbox_conflict(
+                OutboxConflictReason.STALE_STATUS,
+                f"reputation job cannot move from {job.status.value}",
             )
         if job.worker_id != worker_id or not job.lease_held_at(now):
-            raise PaymentConflictError("reputation job lease is not held by this worker")
+            raise outbox_conflict(
+                OutboxConflictReason.LEASE_MOVED,
+                "reputation job lease is not held by this worker",
+            )
         return job
 
     async def get_job(self, job_id: str) -> ReputationPublishJob | None:
@@ -751,8 +761,9 @@ class InMemoryEvidenceRepository:
             self._bind_transaction_locked(job.job_id, reference)
             return reference
         if submission_identity(job.transaction_ref) != submission_identity(reference):
-            raise PaymentConflictError(
-                "reputation job is already bound to another submitted transaction"
+            raise outbox_conflict(
+                OutboxConflictReason.TRANSACTION_ALREADY_BOUND,
+                "reputation job is already bound to another submitted transaction",
             )
         return job.transaction_ref
 
@@ -844,8 +855,9 @@ class InMemoryEvidenceRepository:
             if job is None:
                 raise PaymentEvidenceError("reputation job not found")
             if job.payload_fingerprint != payload_fingerprint:
-                raise PaymentConflictError(
-                    "reputation job has a different payload fingerprint"
+                raise outbox_conflict(
+                    OutboxConflictReason.PAYLOAD_FINGERPRINT_MISMATCH,
+                    "reputation job has a different payload fingerprint",
                 )
             if job.status is OutboxStatus.CONFIRMED:
                 # Retrying the *same* proof is idempotent; anything else is a conflict,
@@ -853,14 +865,19 @@ class InMemoryEvidenceRepository:
                 stored = job.confirmed_proof
                 if stored is not None and stored.proof_hash == proof.proof_hash:
                     return self._recorded_event_locked(job), deepcopy(job)
-                raise PaymentConflictError("reputation job has a different confirmation")
+                raise outbox_conflict(
+                    OutboxConflictReason.DIFFERENT_CONFIRMATION,
+                    "reputation job has a different confirmation",
+                )
             if job.is_terminal:
-                raise PaymentConflictError(
-                    f"reputation job is already {job.status.value}"
+                raise outbox_conflict(
+                    OutboxConflictReason.ALREADY_TERMINAL,
+                    f"reputation job is already {job.status.value}",
                 )
             if job.worker_id != worker_id or not job.lease_held_at(now):
-                raise PaymentConflictError(
-                    "reputation job lease is not held by this worker"
+                raise outbox_conflict(
+                    OutboxConflictReason.LEASE_MOVED,
+                    "reputation job lease is not held by this worker",
                 )
             assert_proof_matches_job(job=job, proof=proof)
             purchase_id = job.identity.purchase_id
@@ -923,16 +940,24 @@ class InMemoryEvidenceRepository:
         reason_code: str,
         now: datetime,
     ) -> tuple[EvidenceEvent, ReputationPublishJob]:
-        """One atomic unit: `CONFLICT` plus its append-only conflict finding."""
+        """One atomic unit: `CONFLICT` plus its append-only conflict finding.
+
+        Only a *different* immutable payload fingerprint is a conflict. A restated
+        fingerprint - an ordinary lease loss, or an idempotent retry of the same payload -
+        is refused before anything is written, so a job another worker is still driving is
+        never terminalized by a race.
+        """
         async with self._lock:
             job_id = self._outbox_by_identity.get(identity_hash)
             if job_id is None:
                 raise PaymentEvidenceError("reputation job not found")
             job = self._outbox[job_id]
             if job.status is OutboxStatus.CONFIRMED:
-                raise PaymentConflictError(
-                    "a confirmed publication cannot be turned into a conflict"
+                raise outbox_conflict(
+                    OutboxConflictReason.ALREADY_TERMINAL,
+                    "a confirmed publication cannot be turned into a conflict",
                 )
+            # Raises `SAME_FINGERPRINT_NOT_A_CONFLICT` with no state change and no event.
             payload = publication_conflict_payload(
                 identity_hash=identity_hash,
                 existing_fingerprint=job.payload_fingerprint,

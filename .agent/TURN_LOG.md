@@ -498,3 +498,49 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   7 duplicate logical conflict events instead of converging to one.
 - Canonical report: `.agent/outbox/WO-P6-02-review-r2.md`. Verdict: `REJECT`; keep coder branch
   unintegrated and preserve all history for a bounded correction.
+
+## 2026-09-05 21:05 KST - coder - WO-P6-02 review correction round 3
+
+### Intent
+- Close the round-2 independent `REJECT`
+  (`.agent/outbox/WO-P6-02-review-r2.md`, canonical commit `66e7256`) at reviewed tip
+  `f7deffa582d5762ad19783b1872955082a578b7a`, preserving every prior commit and report.
+- R2-H1: payment lifecycle validation now inspects `EvidenceEvent` payloads, not just
+  types. Once a decision exists, every following conflict/recorded event must carry that
+  decision's `publishIdentityHash`, and a conflict must restate its `payloadFingerprint`
+  as `existingFingerprint`; missing or mismatched values fail closed. The Phase 5
+  `REPUTATION_RECORDED`-without-decision branch stays valid as an explicit isolated case.
+  The conflict and publication branches are mutually exclusive in both directions.
+- R2-H2: a restated fingerprint is no longer a conflict. `publication_conflict_payload`
+  and both `record_conflict` implementations refuse `requested == existing` before any
+  write, with typed `OutboxConflictReason`. The API answers a typed conflict with
+  `{"reason", "message"}`, and the Payment Executor requests conflict evidence only for
+  `PAYLOAD_FINGERPRINT_MISMATCH`; every other reason leaves the job to its worker.
+- R2-M1: a deterministic `conflictKey` is part of the conflict payload, looked up inside
+  the Mongo transaction and backed by the unique partial index
+  `unique_reputation_conflict_key`, which is covered by the read-only preflight and the
+  drift list. A duplicate race resolves to the one committed event.
+
+### Commands / verification
+- Fixed order at the merged tip: `ruff` 0, `mypy` 47 files, focused pytest `152 passed`,
+  gateway build 0, `node --test` 37/37, `npm run test:mongo:local` `10 passed`,
+  `git diff --check` 0.
+- Broad: full non-mongo pytest `303 passed, 10 deselected`; full gateway suite 88/88.
+- Probes: 10 Python and 7 Node probes pass, including the reviewer's same-fingerprint CAS
+  probe, the payment-identity probe and the 8-way identical-conflict convergence.
+- Protected diff against canonical `66e7256` is empty; all six prior reports are
+  byte-identical.
+
+### Decisions / assumptions
+- `ReputationOutboxConflict` subclasses `PaymentConflictError` inside `core/reputation.py`,
+  so every existing `except PaymentConflictError` keeps working while callers that need
+  the reason can branch on it. No change to `core/errors.py`.
+- An unrecognised or absent 409 reason parses to `UNSPECIFIED`, which never records
+  evidence: an unknown refusal is treated as contention, never as a payload conflict.
+- The TURN_LOG merge kept every section from both parents byte-for-byte and ordered the
+  canonical reviewer entry before this correction handoff.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip;
+  `.agent/outbox/WO-P6-02-coder-r3.done.md` carries the merge and correction anchors.
+  Prior review and evidence reports are unmodified.

@@ -14,6 +14,7 @@ from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import EventType
 from buyer_audit_api.core.payment import WalletPolicy
 from buyer_audit_api.core.purchase_service import PurchaseService
+from buyer_audit_api.core.reputation import conflict_key
 from buyer_audit_api.core.terminal import TerminalAuditCoordinator
 from buyer_audit_api.domains.ai_inference.module import AiInferenceDomainModule
 
@@ -1770,6 +1771,12 @@ def test_a_publication_conflict_is_recorded_over_http(container) -> None:
         event = recorded.json()["event"]
         assert event["type"] == "REPUTATION_PUBLICATION_CONFLICT"
         assert event["payload"] == {
+            "conflictKey": conflict_key(
+                identity_hash=job["publish_identity_hash"],
+                existing_fingerprint=job["payload_fingerprint"],
+                requested_fingerprint="sha256:" + "00" * 32,
+                reason_code="OUTBOX_TRANSITION_CONFLICT",
+            ),
             "existingFingerprint": job["payload_fingerprint"],
             "publishIdentityHash": job["publish_identity_hash"],
             "reasonCode": "OUTBOX_TRANSITION_CONFLICT",
@@ -1804,6 +1811,102 @@ def test_a_publication_conflict_is_recorded_over_http(container) -> None:
         )
         assert claim.status_code == 200, claim.text
         assert claim.json()["state"] == "MISMATCH_CONFIRMED"
+
+        # R2-H2: restating the recorded fingerprint is not a payload conflict. It is a
+        # typed 409 that the Payment Executor can tell apart from a real one, and it
+        # neither appends evidence nor terminalizes anything.
+        same = client.post(
+            path,
+            headers=INTERNAL_HEADERS,
+            json={
+                "requested_fingerprint": job["payload_fingerprint"],
+                "reason_code": "OUTBOX_TRANSITION_CONFLICT",
+            },
+        )
+        assert same.status_code == 409
+        assert same.json()["detail"]["reason"] == "SAME_FINGERPRINT_NOT_A_CONFLICT"
+        assert (
+            [
+                item.type
+                for item in asyncio.run(container.repository.list_events(purchase_id))
+            ].count(EventType.REPUTATION_PUBLICATION_CONFLICT)
+            == 2
+        )
+
+
+def test_ordinary_outbox_races_answer_with_a_distinguishable_reason(container) -> None:
+    """R2-H2: `LEASE_MOVED`/`STALE_STATUS` never look like a payload conflict."""
+    wired = reputation_container(container)
+    app = create_app(wired)  # type: ignore[arg-type]
+    with TestClient(app) as client:
+        purchase_id, buyer_address = reconciling_purchase(container, client)
+        assert (
+            client.post(
+                "/internal/evidence/payment-intents/confirm-mismatch",
+                headers=INTERNAL_HEADERS,
+                json=mismatch_body(client, purchase_id, buyer_address),
+            ).status_code
+            == 200
+        )
+        finalized = client.post(
+            f"/internal/evidence/purchases/{purchase_id}/audit/finalize",
+            headers=INTERNAL_HEADERS,
+            json=head_guards(client, purchase_id),
+        )
+        assert finalized.status_code == 200
+        job = finalized.json()["job"]
+        claimed = client.post(
+            "/internal/evidence/reputation-outbox/claim",
+            headers=INTERNAL_HEADERS,
+            json={"worker_id": "worker-a", "lease_seconds": 30},
+        )
+        assert claimed.status_code == 200
+        prepared_path = (
+            f"/internal/evidence/reputation-outbox/{job['job_id']}/prepared"
+        )
+        commitment = {
+            "feedback_hash": "0x" + "ee" * 32,
+            "client_address": FEEDBACK_CLIENT,
+            "feedback_uri": job["decision"]["audit_bundle_hash"],
+        }
+
+        lost_lease = client.post(
+            prepared_path,
+            headers=INTERNAL_HEADERS,
+            json={
+                "worker_id": "worker-b",
+                "payload_fingerprint": job["payload_fingerprint"],
+                **commitment,
+            },
+        )
+        assert lost_lease.status_code == 409
+        assert lost_lease.json()["detail"]["reason"] == "LEASE_MOVED"
+
+        wrong_payload = client.post(
+            prepared_path,
+            headers=INTERNAL_HEADERS,
+            json={
+                "worker_id": "worker-a",
+                "payload_fingerprint": "sha256:" + "00" * 32,
+                **commitment,
+            },
+        )
+        assert wrong_payload.status_code == 409
+        assert (
+            wrong_payload.json()["detail"]["reason"] == "PAYLOAD_FINGERPRINT_MISMATCH"
+        )
+
+        # Neither race produced conflict evidence or moved the job off PENDING/LEASED.
+        types = [
+            item.type
+            for item in asyncio.run(container.repository.list_events(purchase_id))
+        ]
+        assert types.count(EventType.REPUTATION_PUBLICATION_CONFLICT) == 0
+        current = client.get(
+            f"/internal/evidence/reputation-outbox/{job['job_id']}",
+            headers=INTERNAL_HEADERS,
+        )
+        assert current.json()["status"] == "LEASED"
 
 
 def test_reputation_outbox_is_disabled_without_a_configured_store(container) -> None:

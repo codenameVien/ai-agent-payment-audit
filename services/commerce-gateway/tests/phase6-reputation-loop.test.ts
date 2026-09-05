@@ -11,8 +11,10 @@ import {
   FEEDBACK_TAG2,
   ReputationOutboxConflictError,
   ViemErc8004Contracts,
+  parseConflictReason,
   type ConfirmedFeedbackProof,
   type Erc8004Contracts,
+  type OutboxConflictReason,
   type RawFeedbackEvent,
   type ReputationOutboxApi,
   type ReputationPublishJob,
@@ -146,6 +148,8 @@ function fakeOutbox(args: {
   initial: ReputationPublishJob;
   journal: string[];
   conflictOn?: "prepared" | "confirmed" | "submitted-unknown";
+  /** Ordinary contention by default; only a payload mismatch may record evidence. */
+  conflictReason?: OutboxConflictReason;
 }) {
   const calls: { name: string; args: unknown }[] = [];
   let current = args.initial;
@@ -167,7 +171,10 @@ function fakeOutbox(args: {
       args.journal.push("markPrepared");
       calls.push({ name: "markPrepared", args: call });
       if (args.conflictOn === "prepared") {
-        throw new ReputationOutboxConflictError("lease expired");
+        throw new ReputationOutboxConflictError(
+          "lease expired",
+          args.conflictReason ?? "LEASE_MOVED",
+        );
       }
       current = {
         ...current,
@@ -181,7 +188,10 @@ function fakeOutbox(args: {
       args.journal.push("markSubmittedUnknown");
       calls.push({ name: "markSubmittedUnknown", args: call });
       if (args.conflictOn === "submitted-unknown") {
-        throw new ReputationOutboxConflictError("lease expired");
+        throw new ReputationOutboxConflictError(
+          "lease expired",
+          args.conflictReason ?? "LEASE_MOVED",
+        );
       }
       current = {
         ...current,
@@ -194,7 +204,10 @@ function fakeOutbox(args: {
       args.journal.push("markConfirmed");
       calls.push({ name: "markConfirmed", args: call });
       if (args.conflictOn === "confirmed") {
-        throw new ReputationOutboxConflictError("payload fingerprint changed");
+        throw new ReputationOutboxConflictError(
+          "payload fingerprint changed",
+          args.conflictReason ?? "PAYLOAD_FINGERPRINT_MISMATCH",
+        );
       }
       current = {
         ...current,
@@ -510,8 +523,9 @@ test("a 409 on markPrepared is a policy failure with zero writes", async () => {
     },
   );
   assert.equal(chain.giveFeedback.length, 0);
-  // The conflict itself is recorded before the policy error surfaces.
-  assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared", "recordConflict"]);
+  // R2-H2: a lease that moved is ordinary contention. Another worker continues the job,
+  // so no conflict evidence is requested and nothing is terminalized.
+  assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared"]);
 });
 
 test("a 409 on markConfirmed is a policy failure and is never retried", async () => {
@@ -812,12 +826,17 @@ test("a LEASED job commits the whole intent once and broadcasts exactly once", a
 test("an outbox conflict is recorded against the publish identity exactly once", async () => {
   const journal: string[] = [];
   const chain = fakeContracts({ journal });
-  const { outbox, calls } = fakeOutbox({ initial: job(), journal, conflictOn: "prepared" });
+  const { outbox, calls } = fakeOutbox({
+    initial: job(),
+    journal,
+    conflictOn: "prepared",
+    conflictReason: "PAYLOAD_FINGERPRINT_MISMATCH",
+  });
   await assert.rejects(
     () => publisher({ ...chain, outbox, journal, confirm: () => proof() }).publishClaimed(),
     (error: unknown) => {
       assert.ok(error instanceof Erc8004PolicyError);
-      assert.match(error.message, /reputation outbox conflict/);
+      assert.match(error.message, /PAYLOAD_FINGERPRINT_MISMATCH/);
       return true;
     },
   );
@@ -834,7 +853,12 @@ test("an outbox conflict is recorded against the publish identity exactly once",
 test("a failed conflict recording never hides the conflict that caused it", async () => {
   const journal: string[] = [];
   const chain = fakeContracts({ journal });
-  const base = fakeOutbox({ initial: job(), journal, conflictOn: "prepared" });
+  const base = fakeOutbox({
+    initial: job(),
+    journal,
+    conflictOn: "prepared",
+    conflictReason: "PAYLOAD_FINGERPRINT_MISMATCH",
+  });
   const outbox: ReputationOutboxApi = {
     ...base.outbox,
     async recordConflict() {
@@ -852,4 +876,88 @@ test("a failed conflict recording never hides the conflict that caused it", asyn
   );
   assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared", "recordConflict"]);
   assert.equal(chain.giveFeedback.length, 0);
+});
+
+test("ordinary lease and status races never request conflict evidence", async () => {
+  // R2-H2 permanent probe: the reviewer drove a `markPrepared` 409 and observed
+  // `recordConflict` being called with `requestedFingerprint === job.payloadFingerprint`.
+  // Every non-payload reason must now leave the durable state to the winning worker.
+  const races: OutboxConflictReason[] = [
+    "LEASE_MOVED",
+    "STALE_STATUS",
+    "ALREADY_TERMINAL",
+    "TRANSACTION_ALREADY_BOUND",
+    "DIFFERENT_CONFIRMATION",
+    "SAME_FINGERPRINT_NOT_A_CONFLICT",
+    "UNSPECIFIED",
+  ];
+  for (const reason of races) {
+    const journal: string[] = [];
+    const chain = fakeContracts({ journal });
+    const { outbox, calls } = fakeOutbox({
+      initial: job(),
+      journal,
+      conflictOn: "prepared",
+      conflictReason: reason,
+    });
+    await assert.rejects(
+      () => publisher({ ...chain, outbox, journal, confirm: () => proof() }).publishClaimed(),
+      (error: unknown) => {
+        assert.ok(error instanceof Erc8004PolicyError);
+        assert.match(error.message, new RegExp(reason));
+        return true;
+      },
+    );
+    assert.equal(
+      calls.filter((call) => call.name === "recordConflict").length,
+      0,
+      reason,
+    );
+    assert.equal(chain.giveFeedback.length, 0, reason);
+    assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared"], reason);
+  }
+});
+
+test("only a differing immutable fingerprint requests conflict evidence", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const { outbox, calls } = fakeOutbox({
+    initial: job(),
+    journal,
+    conflictOn: "confirmed",
+    conflictReason: "PAYLOAD_FINGERPRINT_MISMATCH",
+  });
+  await assert.rejects(
+    () => publisher({ ...chain, outbox, journal, confirm: () => proof() }).publishClaimed(),
+    Erc8004PolicyError,
+  );
+  const conflicts = calls.filter((call) => call.name === "recordConflict");
+  assert.equal(conflicts.length, 1);
+  assert.deepEqual(conflicts[0]?.args, {
+    identityHash: `sha256:${"11".repeat(32)}`,
+    requestedFingerprint: FINGERPRINT,
+    reasonCode: "OUTBOX_TRANSITION_CONFLICT",
+  });
+});
+
+test("a typed 409 body is parsed into its reason, and anything else is unspecified", () => {
+  assert.equal(
+    parseConflictReason(
+      JSON.stringify({ detail: { reason: "LEASE_MOVED", message: "lease moved" } }),
+    ),
+    "LEASE_MOVED",
+  );
+  assert.equal(
+    parseConflictReason(JSON.stringify({ detail: { reason: "PAYLOAD_FINGERPRINT_MISMATCH" } })),
+    "PAYLOAD_FINGERPRINT_MISMATCH",
+  );
+  for (const body of [
+    "reputation job lease is not held by this worker",
+    JSON.stringify({ detail: "a plain string detail" }),
+    JSON.stringify({ detail: { reason: "MADE_UP" } }),
+    JSON.stringify({}),
+    "",
+  ]) {
+    assert.equal(parseConflictReason(body), "UNSPECIFIED", body);
+  }
 });

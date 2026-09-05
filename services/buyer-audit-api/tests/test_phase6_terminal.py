@@ -33,10 +33,14 @@ from buyer_audit_api.core.reputation import (
     FEEDBACK_TAG2,
     ConfirmedFeedbackProof,
     DecisionKind,
+    OutboxConflictReason,
     OutboxStatus,
     PublishIdentity,
+    ReputationOutboxConflict,
     ReputationReason,
+    conflict_key,
     decision_from_event,
+    publication_conflict_payload,
 )
 from buyer_audit_api.core.terminal import TerminalAuditCoordinator
 
@@ -989,6 +993,12 @@ async def test_a_conflict_stops_the_job_and_leaves_append_only_evidence(clock) -
     assert conflicted.transaction_ref is None
     assert event.type is EventType.REPUTATION_PUBLICATION_CONFLICT
     assert event.payload == {
+        "conflictKey": conflict_key(
+            identity_hash=job.identity_hash,
+            existing_fingerprint=job.payload_fingerprint,
+            requested_fingerprint="sha256:" + "00" * 32,
+            reason_code="FINGERPRINT_MISMATCH",
+        ),
         "existingFingerprint": job.payload_fingerprint,
         "publishIdentityHash": job.identity_hash,
         "reasonCode": "FINGERPRINT_MISMATCH",
@@ -1050,6 +1060,148 @@ async def test_the_same_conflict_is_recorded_once_and_a_different_one_is_kept(
         events,
         expected_event_count=len(events),
         expected_head_event_hash=events[-1].event_hash,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_same_fingerprint_is_never_a_publication_conflict(clock) -> None:
+    """R2-H2: a restated fingerprint is contention, not a payload conflict.
+
+    The reviewer reproduced a lease-loss 409 being recorded as a terminal `CONFLICT`
+    with `existingFingerprint == requestedFingerprint`. That terminalizes a job another
+    worker is still legitimately driving, so it is refused before anything is written.
+    """
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+    before = len(await repository.list_events(PURCHASE_ID))
+
+    with pytest.raises(ReputationOutboxConflict) as caught:
+        await repository.record_conflict(
+            identity_hash=job.identity_hash,
+            requested_fingerprint=job.payload_fingerprint,
+            reason_code="OUTBOX_TRANSITION_CONFLICT",
+            now=DECIDED_AT,
+        )
+    assert caught.value.reason is OutboxConflictReason.SAME_FINGERPRINT_NOT_A_CONFLICT
+
+    # No evidence, no terminalization: the job is still claimable by a recovery worker.
+    assert len(await repository.list_events(PURCHASE_ID)) == before
+    stored = await repository.get_job(job.job_id)
+    assert stored is not None
+    assert stored.status is OutboxStatus.PENDING
+    assert [item.job_id for item in await repository.list_recoverable_jobs(now=DECIDED_AT)] == [
+        job.job_id
+    ]
+
+    # The payload builder refuses on its own, so no caller can construct the evidence.
+    with pytest.raises(ReputationOutboxConflict, match="not a conflict"):
+        publication_conflict_payload(
+            identity_hash=job.identity_hash,
+            existing_fingerprint=job.payload_fingerprint,
+            requested_fingerprint=job.payload_fingerprint,
+            reason_code="OUTBOX_TRANSITION_CONFLICT",
+        )
+
+
+@pytest.mark.asyncio
+async def test_ordinary_lease_and_status_races_are_typed_but_leave_no_evidence(
+    clock,
+) -> None:
+    """R2-H2: the reason tells a publisher whether a conflict is real."""
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+    await repository.claim_job(
+        worker_id="worker-a",
+        lease_until=DECIDED_AT + timedelta(seconds=30),
+        now=DECIDED_AT,
+    )
+    before = len(await repository.list_events(PURCHASE_ID))
+    assert before > 0
+
+    with pytest.raises(ReputationOutboxConflict) as lease_moved:
+        await prepare(repository, job, worker_id="worker-b")
+    assert lease_moved.value.reason is OutboxConflictReason.LEASE_MOVED
+
+    with pytest.raises(ReputationOutboxConflict) as fingerprint:
+        await repository.mark_prepared(
+            job_id=job.job_id,
+            worker_id="worker-a",
+            payload_fingerprint="sha256:" + "00" * 32,
+            transaction_ref=None,
+            feedback_hash="0x" + "ee" * 32,
+            client_address=CLIENT,
+            feedback_uri=job.decision.audit_bundle_hash,
+            now=DECIDED_AT,
+        )
+    assert fingerprint.value.reason is OutboxConflictReason.PAYLOAD_FINGERPRINT_MISMATCH
+
+    await prepare(repository, job)
+    await repository.mark_submitted_unknown(
+        job_id=job.job_id,
+        worker_id="worker-a",
+        payload_fingerprint=job.payload_fingerprint,
+        transaction_ref=None,
+        reason="unresolved",
+        now=DECIDED_AT,
+    )
+    # `SUBMITTED_UNKNOWN` is not a state a prepare may move from: stale, not a conflict.
+    with pytest.raises(ReputationOutboxConflict) as stale:
+        await repository.mark_prepared(
+            job_id=job.job_id,
+            worker_id="worker-a",
+            payload_fingerprint=job.payload_fingerprint,
+            transaction_ref=None,
+            feedback_hash="0x" + "ee" * 32,
+            client_address=CLIENT,
+            feedback_uri=job.decision.audit_bundle_hash,
+            now=DECIDED_AT,
+        )
+    assert stale.value.reason is OutboxConflictReason.STALE_STATUS
+
+    # None of the races appended evidence.
+    conflicts = [
+        event
+        for event in await repository.list_events(PURCHASE_ID)
+        if event.type == EventType.REPUTATION_PUBLICATION_CONFLICT
+    ]
+    assert conflicts == []
+
+
+@pytest.mark.asyncio
+async def test_concurrent_identical_conflicts_converge_on_one_event(clock) -> None:
+    """R2-M1: one logical conflict is one append-only event, however many callers race."""
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+
+    results = await asyncio.gather(
+        *(
+            repository.record_conflict(
+                identity_hash=job.identity_hash,
+                requested_fingerprint="sha256:" + "33" * 32,
+                reason_code="OUTBOX_TRANSITION_CONFLICT",
+                now=DECIDED_AT,
+            )
+            for _ in range(8)
+        ),
+        return_exceptions=True,
+    )
+    settled = [item for item in results if not isinstance(item, BaseException)]
+    assert len(settled) == 8
+    assert len({event.event_hash for event, _ in settled}) == 1
+    conflicts = [
+        event
+        for event in await repository.list_events(PURCHASE_ID)
+        if event.type == EventType.REPUTATION_PUBLICATION_CONFLICT
+    ]
+    assert len(conflicts) == 1
+    assert conflicts[0].payload["conflictKey"] == conflict_key(
+        identity_hash=job.identity_hash,
+        existing_fingerprint=job.payload_fingerprint,
+        requested_fingerprint="sha256:" + "33" * 32,
+        reason_code="OUTBOX_TRANSITION_CONFLICT",
     )
 
 

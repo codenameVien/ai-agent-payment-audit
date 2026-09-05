@@ -15,7 +15,7 @@ import {
   type StagedDelivery,
   type TransactionRef,
 } from "../contracts.js";
-import { ReputationOutboxConflictError } from "../erc8004.js";
+import { ReputationOutboxConflictError, type OutboxConflictReason } from "../erc8004.js";
 import type {
   EvidenceAnchorApi,
   EvidenceHeadCheckpoint,
@@ -718,12 +718,47 @@ export class ReputationOutboxHttpClient implements ReputationOutboxApi {
     return this.#decode<T>(response);
   }
 
-  /** A 409 is a durable-state refusal, never a transport failure worth retrying. */
+  /**
+   * A 409 is a durable-state refusal, never a transport failure worth retrying.
+   *
+   * The Evidence API answers a typed conflict with `{"detail": {"reason", "message"}}`.
+   * The reason is what lets the publisher tell ordinary lease/CAS contention apart from
+   * a real immutable payload conflict, so it is parsed rather than flattened to text.
+   */
   async #decode<T>(response: Response): Promise<T> {
     if (response.status === 409) {
-      const detail = await response.text();
-      throw new ReputationOutboxConflictError(detail.slice(0, 300));
+      const body = await response.text();
+      throw new ReputationOutboxConflictError(
+        body.slice(0, 300),
+        parseConflictReason(body),
+      );
     }
     return decodeJson<T>(response);
   }
+}
+
+const CONFLICT_REASONS: readonly OutboxConflictReason[] = [
+  "PAYLOAD_FINGERPRINT_MISMATCH",
+  "LEASE_MOVED",
+  "STALE_STATUS",
+  "ALREADY_TERMINAL",
+  "TRANSACTION_ALREADY_BOUND",
+  "DIFFERENT_CONFIRMATION",
+  "PREPARED_COMMITMENT_CHANGED",
+  "SAME_FINGERPRINT_NOT_A_CONFLICT",
+];
+
+/** An unrecognised or absent reason is `UNSPECIFIED`, which never records evidence. */
+export function parseConflictReason(body: string): OutboxConflictReason {
+  try {
+    const parsed = JSON.parse(body) as { detail?: { reason?: unknown } };
+    const reason = parsed.detail?.reason;
+    if (typeof reason === "string") {
+      const known = CONFLICT_REASONS.find((item) => item === reason);
+      if (known !== undefined) return known;
+    }
+  } catch {
+    // A non-JSON body carries no reason.
+  }
+  return "UNSPECIFIED";
 }
