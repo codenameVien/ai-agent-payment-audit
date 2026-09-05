@@ -6,14 +6,17 @@
 - Branch: `wo/P6-01` (no push, no merge, no rebase, no amend, no main commit)
 - Base SHA: `685472c2178fac1ed1d16fedd4dde4dda7d3ed64`
 - Implementation commit SHA: `449090805948f095f1d35373ffb7852f8f43a1c6`
-  (message `feat(phase6): implement canonical truth model`; contains every source, test and
-  handoff change listed below)
+  (message `feat(phase6): implement canonical truth model`)
+- Correction commit SHA: `16451a7817236e7b708835db7349a4557287de31`
+  (message `fix(phase6): harden terminal truth model per review`; resolves every finding in
+  `.agent/outbox/WO-P6-01-review.md` and contains the source, test and TURN_LOG changes for the
+  correction round)
 - Branch tip: the last commit on `wo/P6-01`, an evidence-only follow-up whose entire diff is this
   report file. A report cannot contain its own commit hash and the Work Order forbids `amend` and
-  `reset`, so the implementation SHA above is the auditable anchor. Verify the tip with
-  `git rev-parse HEAD`; `git diff main..HEAD` is the complete packet
-  (implementation `449090805948f095f1d35373ffb7852f8f43a1c6` plus this evidence file).
-- Commit message: `feat(phase6): implement canonical truth model`
+  `reset`, so the correction SHA above is the auditable anchor. Verify the tip with
+  `git rev-parse HEAD`; `git diff main..HEAD` is the complete packet.
+- Review status: `REJECT` on the implementation commit; the findings C1, H1, H2, H3, H4, M1 and
+  M2 are resolved in the correction commit with direct regressions for each.
 - Delivery scope: `P6-DES-WO-01` only. No reputation outbox/publisher, no scenario catalog or
   fakes, no dashboard, no Playwright, no AWS readiness.
 
@@ -75,16 +78,16 @@
 |---|---|---|---|
 | 1 | `uv run --project services/buyer-audit-api ruff check services/buyer-audit-api/src services/buyer-audit-api/tests` | 0 | `All checks passed!` |
 | 2 | `uv run --project services/buyer-audit-api mypy services/buyer-audit-api/src` | 0 | `no issues found in 44 source files` |
-| 3 | `uv run --project services/buyer-audit-api pytest .../test_phase6_projections.py .../test_phase6_audit.py .../test_phase6_payment_terminal.py .../test_payment_service.py .../test_api.py -q` | 0 | `109 passed` (37 projection, 19 audit, 25 terminal, 19 payment-service, 9 API) |
+| 3 | `uv run --project services/buyer-audit-api pytest .../test_phase6_projections.py .../test_phase6_audit.py .../test_phase6_payment_terminal.py .../test_payment_service.py .../test_api.py -q` | 0 | `134 passed` (44 projection, 21 audit, 40 terminal, 19 payment-service, 10 API) |
 | 4 | `npm run build --workspace @pbl/commerce-gateway` | 0 | `tsc` clean |
-| 5 | `node --test services/commerce-gateway/dist/tests/gateway.test.js services/commerce-gateway/dist/tests/phase6-truth-model.test.js` | 0 | `# tests 37 / # pass 37 / # fail 0` (20 legacy + 17 new) |
+| 5 | `node --test services/commerce-gateway/dist/tests/gateway.test.js services/commerce-gateway/dist/tests/phase6-truth-model.test.js` | 0 | `# tests 41 / # pass 41 / # fail 0` |
 | 6 | `npm run test:mongo:local` | 0 | `4 passed` |
 | 7 | `git diff --check` | 0 | no whitespace errors |
 
 Additional regression sweeps (not required by the WO, run for safety, no assertions weakened):
 
-- `pytest services/buyer-audit-api/tests -q -m 'not mongo'` → exit 0, `159 passed, 4 deselected`.
-- `npm test --workspace @pbl/commerce-gateway` (full gateway suite) → exit 0, `# pass 52`.
+- `pytest services/buyer-audit-api/tests -q -m 'not mongo'` → exit 0, `184 passed, 4 deselected`.
+- `npm test --workspace @pbl/commerce-gateway` (full gateway suite) → exit 0, `# pass 56`.
 
 Reviewer re-verification commands were left to the Reviewer at the same SHA; the protected-path
 check was run here and is reported below.
@@ -206,18 +209,38 @@ check was run here and is reported below.
    `AUD-DUPLICATE-PAYMENT-ATTEMPT` / `AUD-ERC3009-NONCE-REUSE` rules that read it are here because
    the deterministic ruleset is this WO's; the scenario-only writer
    (`recordRejectedPaymentAttempt`) remains WO-P6-03's.
-4. **`SENSITIVE_PAYLOAD_ACCESSED`.** `GET /purchases/{id}/sensitive/{payloadId}` still appends its
-   access record. `P6-AC-03.3` forbids read handlers from appending audit, reconciliation and
-   feedback events; this is a pre-existing security access log on the encrypted-payload boundary,
-   and removing it would weaken an AGENTS.md high-assurance control. The zero-write test therefore
-   covers list/detail/events/alerts/agents/wallet and excludes that one deliberate write. Flagging
-   it for an explicit Planner ruling rather than changing it silently.
+4. **Sensitive payload access — resolved, no longer an open question.** Reading encrypted material
+   is now an explicit mutation: `POST /purchases/{id}/sensitive/{payloadId}/access` (201) appends
+   `SENSITIVE_PAYLOAD_ACCESSED`, and the GET is gone (405). Every GET on the service is therefore
+   zero-write with no carve-out, and the security access record is preserved in full. No other
+   caller referenced the old GET (`apps/dashboard/src`, `services/commerce-gateway/src`,
+   `services/seller-service/src` contain no `sensitive` reference), so nothing outside the
+   allowed-write list needed changing.
 5. **`WalletPolicy` invariant.** Per design §18.6.4 the constructor no longer rejects
    `spent + reserved > dailyLimit`, so a proof-confirmed mismatch stays readable; the claim guard
    still rejects every further payment in that state
    (`test_confirmed_mismatch_over_the_daily_limit_stays_readable_and_blocks_new_claims`).
 6. **Report filename.** The Work Order's allowed-write list names
    `.agent/outbox/WO-P6-01-coder.done.md`, so this report uses that exact path.
+
+## Review findings and their resolutions
+
+| Finding | Resolution | Direct regression |
+|---|---|---|
+| **C1** gateway must treat all four terminal states as terminal before any seller/signing/submission call | `TERMINAL_PAYMENT_INTENT_STATE` record checked immediately after `claim`; SETTLED still finishes a staged delivery, the other three return unchanged | `phase6-truth-model.test.ts` — parameterised `C1: a <state> intent stops before any seller, signing or submission call`, asserting `seller.calls === 0`, zero signatures and no write call |
+| **H1** true LOCAL/EVM receipt/proof union with full cross-validation; reject unknown sources, negative coordinates, source contradictions, fabricated hashes | `ReceiptProof` split into mutually exclusive `EvmReceiptProof \| LocalReceiptProof`; `evmTransactionRef` rejects `SYNTHETIC_LOCAL`, non-canonical hashes, foreign chains and negative coordinates; the projection cross-checks the resolved evidence source against the terminal transaction reference | `test_phase6_projections.py` — unknown source rejected not coerced, nested unknown source, negative coordinates, foreign run, source-vs-ref contradiction; `phase6-truth-model.test.ts` — `a local receipt can never answer an EVM submission or alias its hash` |
+| **H2** mismatch proof bound to quote, submitted transaction/authorization, source, scenario and canonical proof; same-proof retry compares the full proof and aliases conflict | `confirm_mismatch` binds the submission identity, quote fields, scenario run, chain id and a `_proof_fingerprint` over the whole immutable proof; a retry with an equal fingerprint returns the committed intent, any alias raises `PaymentConflictError` | `test_phase6_payment_terminal.py` — proof-not-of-this-purchase, alias-is-not-enough fingerprint conflict, cross-purchase reuse; `test_mongo_repository.py` — native cross-purchase reuse and same-proof retry |
+| **H3** no-transfer proof bound to the persisted reconciliation series, source/scenario, chain, submission, nonce hash, timestamps and configured finality | `reconcile_no_transfer` validates the recorded check series (count, order, window, submission, chain, scenario), the authorization nonce hash and `policy.minimum_finality_confirmations`; the gateway will not close below the configured depth | `test_phase6_payment_terminal.py` — series/nonce/window/finality parametrised rejections; `phase6-truth-model.test.ts` — `unknown finality never closes a payment, even at the attempt bound` |
+| **H4** all-GET zero-write while preserving sensitive access auditing | sensitive read converted to `POST .../access`; the audit reader is head-aware and re-audit fails closed once evidence passes the audited head | `test_api.py` — GET is 405, POST is 201 and appends, cross-owner 404; `test_phase6_audit.py` — head-coverage projection, stale persisted audit and post-audit head both fail closed |
+| **M1** expected state/event count/head required; malformed non-hex hashes rejected at schema and core | the three guards are required fields on every terminal mutation; canonical `^0x[0-9a-f]{64}$` in the schemas and `normalized_evm_hash` in the core; replay-aware CAS keeps approved idempotency intact | `test_api.py` — `test_terminal_mutations_require_the_state_and_head_they_observed` (missing → 422, stale → 409, uppercase/short/non-hex → 422, honest proof still 200) |
+| **M2** read-only pre-index collision report | `phase6_index_collision_report()` aggregates duplicate Phase 6 keys and performs no writes; run before `ensure_indexes()` | `test_mongo_repository.py` — empty report, duplicate detection with `count`/`index`, and an unchanged document count proving zero writes |
+
+Two pre-review gateway tests asserted the looser behaviour that the review rejected (a synthetic
+proof closing an EVM submission, and unknown finality closing a payment at the attempt bound).
+They were rewritten to the reviewed contract; no assertion was weakened and no requirement was
+relaxed. The Phase 6 Mongo fixtures were made internally coherent for the same reason: a local
+submission is only ever closed by synthetic proofs, so the native terminal race now uses three
+synthetic writers instead of a chain-shaped failure.
 
 ## Background processes and ports
 
