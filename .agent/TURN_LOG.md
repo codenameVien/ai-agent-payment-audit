@@ -392,6 +392,40 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   the `wo/P6-02` tip; `.agent/outbox/WO-P6-02-coder.done.md` carries the anchors and results.
   WO-P6-03 must not start before an `APPROVE` and Orchestrator integration.
 
+## 2026-09-05 16:42 KST — planner — WO-P6-02 payment ordering amendment
+
+### Intent
+- Correct only the second packet-boundary omission uncovered while resolving the independent
+  WO-P6-02 review: append-only reputation events must not make payment view/existing claim fail,
+  while illegal event orderings remain fail closed.
+
+### Evidence and decision
+- `PaymentService.claim()` always calls `load_payment_view()` before returning an existing intent.
+  The payment lifecycle parser predates `REPUTATION_DECIDED` and
+  `REPUTATION_PUBLICATION_CONFLICT`, so a valid post-terminal append can otherwise invalidate both
+  payment read and idempotent claim surfaces.
+- Add `core/payment.py` to the WO-P6-02 allow-list only for post-payment ordering recognition, and
+  add `test_payment_service.py` for direct view/claim and illegal-order regression coverage.
+- Both events may be excluded from payment state reconstruction only after a verified terminal
+  payment and their audit/decision prerequisites. An unconditional/global auxiliary filter is
+  forbidden because it would accept forged pre-terminal or out-of-order evidence.
+
+### Acceptance delta
+- After terminal finalize, confirmed `REPUTATION_RECORDED`, or one-or-more append-only publication
+  conflicts, `load_payment_view()` and an existing-intent `claim()` return the same payment binding
+  without adding a claim, reservation, spend, or event.
+- Pre-terminal reputation events, decision-before-audit, duplicate decision, and
+  conflict-before-decision remain `PaymentEvidenceError` with no payment/policy mutation.
+- The focused pytest command now includes `test_payment_service.py`; existing
+  `test_phase6_terminal.py` and `test_api.py` retain end-to-end/service ownership.
+
+### Scope and handoff
+- Planning writes only: `work-orders/WO-P6-02-reputation-loop.md`, append-only
+  `.agent/TURN_LOG.md`, and `.agent/outbox/WO-P6-02-planner-amendment-r2.done.md`.
+- Requirements/design/tasks, WO-P6-01/03/04, product source/tests, historical evidence/data, and
+  existing untracked `.githooks` remain untouched by Planner.
+- Orchestrator applies the resulting planning commit to `wo/P6-02`; Coder then implements and
+  re-runs the amended focused suite before Reviewer correction review.
 ## 2026-09-05 18:10 KST - coder - WO-P6-02 review correction round 2
 
 ### Intent

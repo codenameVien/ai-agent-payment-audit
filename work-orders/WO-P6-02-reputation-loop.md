@@ -37,6 +37,7 @@ persisted terminal `AUDITED`에서 seller-attributed 100/0 또는 DEFER를 결�
 9. snapshot은 raw values, decimals, trusted clients, tags, from/to block, query time, freshness, aggregation version/hash를 포함한다. matching evidence가 없으면 `50 + NO_EVIDENCE`다.
 10. 동일 seller agent의 여러 model은 provider-level snapshot을 공유한다. model benchmark와 agent reputation은 별도 필드다.
 11. reputation은 budget/capability/availability/identity/quote validity hard filter 뒤에만 score에 들어간다. reputation 100도 hard-ineligible 후보를 복원하지 못한다.
+12. `REPUTATION_DECIDED`와 `REPUTATION_PUBLICATION_CONFLICT`는 payment state transition이 아니라 **검증된 terminal payment 뒤의 post-payment auxiliary event**로만 payment view가 수용한다. 전자는 terminal `AUDITED` 뒤 singleton이고, 후자는 해당 decision/outbox identity 뒤 반복 가능한 append-only conflict다. terminal 전, audit/decision 전, 또는 다른 불법 순서에서는 기존 `PaymentEvidenceError` fail-closed를 유지한다.
 
 ## 컨텍스트 — 작업 전 필독
 
@@ -68,6 +69,7 @@ persisted terminal `AUDITED`에서 seller-attributed 100/0 또는 DEFER를 결�
 - NEW `services/buyer-audit-api/src/buyer_audit_api/core/reputation.py`
 - NEW `services/buyer-audit-api/src/buyer_audit_api/core/terminal.py`
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/core/models.py` — `EventType`에 `REPUTATION_DECIDED = "REPUTATION_DECIDED"`와 `REPUTATION_PUBLICATION_CONFLICT = "REPUTATION_PUBLICATION_CONFLICT"` 두 멤버만 추가
+- MODIFY `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — 두 reputation event를 검증된 terminal payment 뒤의 post-payment auxiliary로만 해석하도록 `load_payment_view` ordering validation 확장; payment state/accounting/authorization semantics 변경 금지
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/core/ports.py`
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/memory.py`
 - MODIFY `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py`
@@ -92,6 +94,7 @@ persisted terminal `AUDITED`에서 seller-attributed 100/0 또는 DEFER를 결�
 
 - NEW `services/buyer-audit-api/tests/test_phase6_reputation.py`
 - NEW `services/buyer-audit-api/tests/test_phase6_terminal.py`
+- MODIFY `services/buyer-audit-api/tests/test_payment_service.py`
 - MODIFY `services/buyer-audit-api/tests/test_ai_inference_workflow.py`
 - MODIFY `services/buyer-audit-api/tests/test_ai_inference_domain.py`
 - MODIFY `services/buyer-audit-api/tests/test_api.py`
@@ -110,7 +113,7 @@ WO-P6-01 implementation은 compatibility가 필요한 최소 수정도 이 allow
 ## 구현 단계
 
 1. `ReputationDecisionPolicy`, publish identity/hash/fingerprint, typed `Publish|Defer`, snapshot/aggregation value objects를 pure core로 작성한다. 요구사항의 100/0/DEFER table을 unit test로 먼저 고정한다.
-2. `TerminalAuditCoordinator.finalizeIfEligible(purchaseId)`가 terminal evidence/head를 재검증하고 persisted audit을 finalize한 뒤 같은 transaction/CAS에서 `REPUTATION_DECIDED`와 unique outbox 또는 DEFER를 만든다. recovery sweep은 terminal evidence가 있으나 audit/decision이 없는 항목만 대상으로 한다.
+2. `TerminalAuditCoordinator.finalizeIfEligible(purchaseId)`가 terminal evidence/head를 재검증하고 persisted audit을 finalize한 뒤 같은 transaction/CAS에서 `REPUTATION_DECIDED`와 unique outbox 또는 DEFER를 만든다. recovery sweep은 terminal evidence가 있으나 audit/decision이 없는 항목만 대상으로 한다. 이 append 뒤 `load_payment_view`와 기존-intent `claim`이 동일 payment binding을 계속 읽되, reputation event를 terminal 전이나 audit/decision 전에서 전역 무시하지 않도록 ordering validation을 함께 확장한다.
 3. Mongo outbox에 exact index 이름, unique identity, lease CAS, immutable fingerprint, conflict append, transaction variant partial unique를 구현한다. memory adapter도 동일 observable semantics를 갖게 한다.
 4. Evidence API에 finalize/claim/get/prepared/submitted-unknown/confirmed typed endpoints를 추가한다. malformed=422, stale head/lease/conflict=409, missing=404, disabled=503, same-proof retry=200 semantics를 test한다.
 5. Payment Executor publisher는 immutable job/audit evidence를 다시 읽고 matching feedback을 조회한다. already-found recovery, PREPARED crash, SUBMITTED_UNKNOWN lookup/rebroadcast, receipt+event confirmation을 구현하되 unit fake 외 실제 broadcast는 하지 않는다.
@@ -132,7 +135,7 @@ WO-P6-01 implementation은 compatibility가 필요한 최소 수정도 이 allow
 ```bash
 uv run --project services/buyer-audit-api ruff check services/buyer-audit-api/src services/buyer-audit-api/tests
 uv run --project services/buyer-audit-api mypy services/buyer-audit-api/src
-uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests/test_phase6_reputation.py services/buyer-audit-api/tests/test_phase6_terminal.py services/buyer-audit-api/tests/test_ai_inference_workflow.py services/buyer-audit-api/tests/test_ai_inference_domain.py services/buyer-audit-api/tests/test_api.py -q
+uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests/test_phase6_reputation.py services/buyer-audit-api/tests/test_phase6_terminal.py services/buyer-audit-api/tests/test_payment_service.py services/buyer-audit-api/tests/test_ai_inference_workflow.py services/buyer-audit-api/tests/test_ai_inference_domain.py services/buyer-audit-api/tests/test_api.py -q
 npm run build --workspace @pbl/commerce-gateway
 node --test services/commerce-gateway/dist/tests/erc8004.test.js services/commerce-gateway/dist/tests/phase6-reputation-loop.test.js services/commerce-gateway/dist/tests/runtime.test.js
 npm run test:mongo:local
@@ -155,6 +158,8 @@ git diff --exit-code "$(git merge-base HEAD main)"..HEAD -- aidlc-docs/inception
 - [ ] actual ERC-8004/RPC/provider/facilitator/AWS calls와 public-chain writes가 0이다.
 - [ ] buyer/seller feedback identity, tags, chain, registry, bundle binding negative tests가 통과한다.
 - [ ] hard-ineligible candidate는 reputation 100이어도 복원되지 않는다.
+- [ ] finalize, confirmed publication, publication conflict 뒤에도 payment view/기존-intent claim은 같은 terminal payment binding과 accounting을 반환하고 새 claim/reservation/spend/event를 만들지 않는다.
+- [ ] reputation event의 terminal 전 배치, `REPUTATION_DECIDED`의 `AUDITED` 전·중복 배치, conflict의 decision/outbox identity 전 배치는 계속 fail closed하며 payment intent나 wallet policy를 변경하지 않는다.
 - [ ] canonical history DB와 live/historical documents를 연결·수정·cleanup하지 않았다.
 - [ ] raw feedback calldata/signature/private key/secret/raw prompt-response가 report/log에 없다.
 
@@ -167,6 +172,7 @@ git diff --exit-code "$(git merge-base HEAD main)"..HEAD -- aidlc-docs/inception
 - [ ] receipt와 matching feedback event 전에는 confirmed/recorded가 되지 않는다.
 - [ ] snapshot provenance/aggregation/no-evidence/freshness가 immutable evidence로 저장·조회된다.
 - [ ] provider-level snapshot 공유, hard-filter precedence, sequential score influence가 검증된다.
+- [ ] `load_payment_view`와 `claim`이 (a) finalize 직후, (b) confirmed `REPUTATION_RECORDED` 직후, (c) 한 개 이상 append-only `REPUTATION_PUBLICATION_CONFLICT` 직후 각각 성공하고 기존 payment intent를 그대로 반환하며, 대응하는 illegal-order negative cases는 `PaymentEvidenceError`로 실패한다.
 - [ ] allowed-write 밖 변경이 없고 focused suite/native Mongo가 모두 exit 0다.
 - [ ] coherent commit과 Coder handoff evidence가 있다.
 
@@ -180,6 +186,7 @@ git diff --exit-code "$(git merge-base HEAD main)"..HEAD -- aidlc-docs/inception
 - decision mapping table 결과
 - two-worker/restart/PREPARED/SUBMITTED_UNKNOWN/conflict/confirmed-only 결과
 - snapshot provenance/mean-neutral/hard-filter/sequential-selection 결과
+- finalize/confirmed/conflict 각각의 payment view/claim 회귀와 pre-terminal/decision-before-audit/conflict-before-decision illegal-order negative 결과
 - live/outbound/write 0 근거와 protected diff
 - 미실행 항목/이유, process teardown
 - `READY_FOR_REVIEW`
@@ -199,6 +206,7 @@ Reviewer는 exact tip에서 독립 재실행 후 `.agent/outbox/WO-P6-02-review.
 
 - canonical planning/Work Order 수정
 - 중앙 `EventType` 밖의 별도 parallel event enum 추가 또는 `REPUTATION_DECIDED`/`REPUTATION_PUBLICATION_CONFLICT` 대신 기존 event type을 overload
+- 두 reputation event를 unconditional/global auxiliary set에서 순서 검증 전에 제거하거나, terminal·audit·decision prerequisite 없이 무시
 - live ERC-8004 feedback/query 성공 주장 또는 transaction 제출
 - 실제 RPC/provider/facilitator/AWS/Atlas 접속
 - production root의 fake mode/injection 허용
