@@ -37,6 +37,10 @@ _AUXILIARY_EVENT_TYPES = {
     EventType.PAYMENT_ATTEMPT_REJECTED,
 }
 
+# H1: a new EIP-3009 execution submits to Base Sepolia. Historical on-chain evidence is
+# read-only and can never prove an active submission, so it is not a valid submitted source.
+_ACTIVE_EVM_SOURCE = EvidenceSource.BASE_SEPOLIA_VERIFIED
+
 
 class PaymentIntentState(StrEnum):
     CLAIMED = "CLAIMED"
@@ -479,6 +483,129 @@ def submission_reference_value(reference: TransactionRef) -> str:
     return reference.id if reference.kind == "LOCAL" else reference.hash
 
 
+@dataclass(frozen=True, slots=True)
+class SubmittedReference:
+    """The submission a purchase is bound to, exactly as its own evidence recorded it.
+
+    H1/H2: the reference carries the evidence source and, for synthetic runs, the complete
+    scenario metadata that the `PAYMENT_RECONCILIATION_REQUIRED` event committed to. Later
+    checks and terminal proofs are compared against this, never against a reconstructed
+    default, so a same-hash different-source proof and a foreign-run series both fail closed.
+    """
+
+    reference: TransactionRef
+    scenario: ScenarioMetadata | None
+
+    @property
+    def value(self) -> str:
+        return submission_reference_value(self.reference)
+
+    @property
+    def evidence_source(self) -> EvidenceSource:
+        return self.reference.evidence_source
+
+
+def submitted_reference(
+    intent: PaymentIntent, events: list[EvidenceEvent]
+) -> SubmittedReference | None:
+    """Resolve the submitted identity from the append-only reconciliation evidence.
+
+    Historical rows predate the explicit `evidenceSource` payload field, so a recorded hash
+    submission without one is read as `BASE_SEPOLIA_VERIFIED`; nothing is written or backfilled.
+    """
+    bound = intent_submission_ref(intent)
+    if bound is None:
+        return None
+    recorded = [
+        event
+        for event in events
+        if event.type
+        in (
+            EventType.PAYMENT_RECONCILIATION_REQUIRED,
+            EventType.PAYMENT_SUBMISSION_IDENTIFIED,
+        )
+    ]
+    if not recorded:
+        raise PaymentEvidenceError("submission evidence is missing")
+    scenario: ScenarioMetadata | None = None
+    declared: str | None = None
+    for event in recorded:
+        raw_scenario = event.payload.get("scenario")
+        if raw_scenario is not None:
+            scenario = ScenarioMetadata.from_payload(raw_scenario)
+        raw_source = event.payload.get("evidenceSource")
+        if raw_source is not None:
+            declared = str(raw_source)
+    if bound.kind == "LOCAL":
+        source = EvidenceSource.SYNTHETIC_LOCAL
+        if scenario is None:
+            raise PaymentEvidenceError(
+                "a local submission requires recorded scenario metadata"
+            )
+        if scenario.run_id != bound.run_id:
+            raise PaymentEvidenceError(
+                "recorded scenario run does not own the submitted local transaction"
+            )
+    else:
+        source = EvidenceSource(declared) if declared is not None else _ACTIVE_EVM_SOURCE
+        if source is EvidenceSource.SYNTHETIC_LOCAL:
+            raise PaymentEvidenceError(
+                "an EVM submission cannot declare a synthetic evidence source"
+            )
+        if scenario is not None:
+            raise PaymentEvidenceError(
+                "an EVM submission cannot carry scenario metadata"
+            )
+    reference: TransactionRef = (
+        LocalTransactionRef(id=bound.id, run_id=bound.run_id)
+        if bound.kind == "LOCAL"
+        else EvmTransactionRef(hash=bound.hash, evidence_source=source)
+    )
+    return SubmittedReference(reference=reference, scenario=scenario)
+
+
+def assert_submission_binding(
+    submitted: SubmittedReference,
+    *,
+    reference: TransactionRef | None = None,
+    reference_value: str | None = None,
+    evidence_source: EvidenceSource,
+    scenario: ScenarioMetadata | None,
+    subject: str,
+) -> None:
+    """H1/H2: identity, evidence source and synthetic run must all equal the submission.
+
+    Callers holding only a submission string pass `reference_value`. Each failure has its own
+    reason so a foreign-run series is never reported as a malformed identifier.
+    """
+    value = reference_value
+    if value is None:
+        if reference is None:
+            raise PaymentEvidenceError(f"{subject} has no submission identity")
+        value = submission_reference_value(reference)
+    kind = (
+        reference.kind
+        if reference is not None
+        else ("LOCAL" if value.startswith("localtx:") else "EVM")
+    )
+    if submitted.reference.kind != kind or submitted.value != value:
+        raise PaymentEvidenceError(f"{subject} is not the submitted transaction of this purchase")
+    if scenario is not None and not value.startswith(f"localtx:{scenario.run_id}:"):
+        # H2: a consistent series from another run must never terminalize this purchase.
+        raise PaymentEvidenceError(
+            f"{subject} scenario run does not own the submitted transaction"
+        )
+    source = reference.evidence_source if reference is not None else evidence_source
+    if source is not submitted.evidence_source or evidence_source is not (
+        submitted.evidence_source
+    ):
+        raise PaymentEvidenceError(
+            f"{subject} evidence source is not the submitted evidence source"
+        )
+    if scenario != submitted.scenario:
+        raise PaymentEvidenceError(f"{subject} scenario is not the submitted scenario run")
+
+
 def _proof_fingerprint(payload: JsonObject) -> str:
     """Canonical hash of the complete immutable proof; an alias alone can never match it."""
     return sha256_json(payload)
@@ -643,6 +770,10 @@ class PaymentService:
         if normalized_local_id is not None:
             payload["localTransactionId"] = normalized_local_id
             payload["evidenceSource"] = EvidenceSource.SYNTHETIC_LOCAL.value
+        elif normalized_transaction_hash is not None:
+            # H1: the submitted source is recorded, not inferred, so a later proof cannot
+            # claim a different provenance for the same hash.
+            payload["evidenceSource"] = _ACTIVE_EVM_SOURCE.value
         if scenario is not None:
             payload["scenario"] = scenario.to_payload()
         return await self._repository.transition_payment_intent(
@@ -691,6 +822,7 @@ class PaymentService:
             actor={"id": "seller-execution-recovery", "type": "service"},
             payload={
                 "authorizationHash": intent.decision_authorization_hash,
+                "evidenceSource": _ACTIVE_EVM_SOURCE.value,
                 "transactionHash": normalized_transaction_hash,
             },
             evidence_refs=(
@@ -876,18 +1008,10 @@ class PaymentService:
             raise PaymentConflictError("payment already has a terminal outcome")
         if intent.state != PaymentIntentState.RECONCILIATION_REQUIRED:
             raise PaymentConflictError("payment is not awaiting reconciliation")
-        submission = intent_submission_ref(intent)
-        if submission is None:
+        submitted = submitted_reference(intent, events)
+        if submitted is None:
             raise PaymentEvidenceError(
                 "a reconciliation check requires an identified submission"
-            )
-        if check.submission_ref != submission_reference_value(submission):
-            raise PaymentEvidenceError(
-                "reconciliation check is not bound to the submitted payment"
-            )
-        if check.evidence_source is not submission.evidence_source:
-            raise PaymentEvidenceError(
-                "reconciliation check source contradicts the submission variant"
             )
         if (check.scenario is None) is (
             check.evidence_source is EvidenceSource.SYNTHETIC_LOCAL
@@ -895,6 +1019,13 @@ class PaymentService:
             raise PaymentEvidenceError(
                 "synthetic reconciliation checks require exactly one scenario"
             )
+        assert_submission_binding(
+            submitted,
+            reference_value=check.submission_ref,
+            evidence_source=check.evidence_source,
+            scenario=check.scenario,
+            subject="reconciliation check",
+        )
         payload = check.to_payload()
         recorded = [
             event
@@ -936,7 +1067,7 @@ class PaymentService:
         proof: ConfirmedMismatchProof,
     ) -> PaymentIntent:
         """Record a confirmed real outflow that disagreed with the signed quote."""
-        intent, _events, event_count, head_hash = await self._verified_context(purchase_id)
+        intent, events, event_count, head_hash = await self._verified_context(purchase_id)
         self._reject_legacy_permit2(intent)
         actual = _normalized_transfer(proof.actual_transfer)
         mismatched = mismatched_quote_fields(intent, actual)
@@ -973,17 +1104,16 @@ class PaymentService:
             raise PaymentConflictError("payment cannot confirm a mismatch from current state")
         if intent.decision_authorization_hash is None:
             raise PaymentEvidenceError("mismatch proof requires an authorized payment")
-        submission = intent_submission_ref(intent)
-        if submission is None:
+        submitted = submitted_reference(intent, events)
+        if submitted is None:
             raise PaymentEvidenceError("mismatch proof requires an identified submission")
-        if (
-            submission.kind != proof.transaction_ref.kind
-            or submission_reference_value(submission)
-            != submission_reference_value(proof.transaction_ref)
-        ):
-            raise PaymentEvidenceError(
-                "mismatch proof is not the submitted transaction of this purchase"
-            )
+        assert_submission_binding(
+            submitted,
+            reference=proof.transaction_ref,
+            evidence_source=proof.evidence_source,
+            scenario=proof.scenario,
+            subject="mismatch proof",
+        )
         if actual.from_address != intent.buyer_wallet_address:
             raise PaymentEvidenceError("mismatch proof is not a buyer outflow")
         if not mismatched:
@@ -1158,17 +1288,16 @@ class PaymentService:
             raise PaymentEvidenceError(
                 "a momentary missing receipt cannot confirm a terminal no-transfer"
             )
-        submission = intent_submission_ref(intent)
-        if submission is None:
+        submitted = submitted_reference(intent, events)
+        if submitted is None:
             raise PaymentEvidenceError("no-transfer proof requires an identified submission")
-        if proof.submission_ref != submission_reference_value(submission):
-            raise PaymentEvidenceError(
-                "no-transfer proof is not bound to the submitted payment"
-            )
-        if proof.evidence_source is not submission.evidence_source:
-            raise PaymentEvidenceError(
-                "no-transfer proof source contradicts the submission variant"
-            )
+        assert_submission_binding(
+            submitted,
+            reference_value=proof.submission_ref,
+            evidence_source=proof.evidence_source,
+            scenario=proof.scenario,
+            subject="no-transfer proof",
+        )
         expected_nonce_hash = sha256_bytes(
             (intent.authorization_nonce or intent.quote_id).encode("utf-8")
         )

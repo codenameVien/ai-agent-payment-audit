@@ -40,6 +40,30 @@ from buyer_audit_api.core.payment import (
 )
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
+# M2: the per-purchase singleton unique indexes this packet introduces. One declaration
+# feeds both the read-only collision preflight and index creation, so coverage cannot drift.
+_PHASE6_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
+    (EventType.PAYMENT_MISMATCH_CONFIRMED, "unique_payment_mismatch_per_purchase"),
+    (
+        EventType.PAYMENT_RECONCILED_NO_TRANSFER,
+        "unique_payment_no_transfer_per_purchase",
+    ),
+)
+
+# Singleton indexes that already existed before this packet; unchanged behaviour.
+_EXISTING_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
+    (EventType.PAYMENT_AUTHORIZED, "unique_payment_authorized_per_purchase"),
+    (
+        EventType.PAYMENT_RECONCILIATION_REQUIRED,
+        "unique_payment_reconciliation_per_purchase",
+    ),
+    (EventType.PAYMENT_FAILED, "unique_payment_failed_per_purchase"),
+    (EventType.EVIDENCE_ANCHORED, "unique_evidence_anchor_per_purchase"),
+    (EventType.REPUTATION_RECORDED, "unique_reputation_per_purchase"),
+    (EventType.DELIVERED, "unique_delivery_per_purchase"),
+    (EventType.AUDITED, "unique_audit_per_purchase"),
+)
+
 
 def _event_document(event: EvidenceEvent) -> dict[str, Any]:
     return {
@@ -362,12 +386,13 @@ class MongoEvidenceRepository:
         self._confirmed_outflows = self._database["confirmedOutflows"]
 
     async def phase6_index_collision_report(self) -> list[dict[str, Any]]:
-        """Read-only duplicate report for the new Phase 6 unique keys.
+        """Read-only duplicate report covering every unique index this packet introduces.
 
         It aggregates existing documents that already carry the new fields and reports
-        every key that would violate a new unique index. It never writes or backfills.
+        every key that would violate a new unique index, including the two per-purchase
+        terminal singletons. It never writes, backfills or deletes.
         """
-        specs: tuple[tuple[str, Any, dict[str, Any], list[str]], ...] = (
+        specs: list[tuple[str, Any, dict[str, Any], list[str]]] = [
             (
                 "unique_phase6_terminal_outcome",
                 self._events,
@@ -419,6 +444,10 @@ class MongoEvidenceRepository:
                 },
                 ["transactionRef.runId", "transactionRef.id"],
             ),
+        ]
+        specs.extend(
+            (name, self._events, {"type": event_type.value}, ["purchaseId"])
+            for event_type, name in _PHASE6_SINGLETON_INDEXES
         )
         report: list[dict[str, Any]] = []
         for name, collection, match, keys in specs:
@@ -491,31 +520,16 @@ class MongoEvidenceRepository:
                 "payload.transactionHash": {"$type": "string"},
             },
         )
-        for event_type, name in (
-            (EventType.PAYMENT_AUTHORIZED, "unique_payment_authorized_per_purchase"),
-            (
-                EventType.PAYMENT_RECONCILIATION_REQUIRED,
-                "unique_payment_reconciliation_per_purchase",
-            ),
-            (EventType.PAYMENT_FAILED, "unique_payment_failed_per_purchase"),
-            (EventType.PAYMENT_MISMATCH_CONFIRMED, "unique_payment_mismatch_per_purchase"),
-            (
-                EventType.PAYMENT_RECONCILED_NO_TRANSFER,
-                "unique_payment_no_transfer_per_purchase",
-            ),
-            (EventType.EVIDENCE_ANCHORED, "unique_evidence_anchor_per_purchase"),
-            (EventType.REPUTATION_RECORDED, "unique_reputation_per_purchase"),
-            (EventType.DELIVERED, "unique_delivery_per_purchase"),
-            (EventType.AUDITED, "unique_audit_per_purchase"),
-        ):
+        for event_type, name in _EXISTING_SINGLETON_INDEXES:
             await self._events.create_index(
                 [("purchaseId", ASCENDING)],
                 unique=True,
                 name=name,
                 partialFilterExpression={"type": event_type.value},
             )
-        # M2 / design 18.15.7: report duplicates read-only before creating the new unique
-        # indexes. Historical rows are never modified or backfilled to make them fit.
+        # M2 / design 18.15.7: the read-only preflight runs before creating ANY unique index
+        # this packet introduces, including the two per-purchase terminal singletons below.
+        # Historical rows are never modified, backfilled or deleted to make them fit.
         collisions = await self.phase6_index_collision_report()
         if collisions:
             raise EvidenceIntegrityError(
@@ -523,6 +537,13 @@ class MongoEvidenceRepository:
                 + "; ".join(
                     f"{item['index']} {item['key']} x{item['count']}" for item in collisions
                 )
+            )
+        for event_type, name in _PHASE6_SINGLETON_INDEXES:
+            await self._events.create_index(
+                [("purchaseId", ASCENDING)],
+                unique=True,
+                name=name,
+                partialFilterExpression={"type": event_type.value},
             )
         await self._events.create_index(
             [("payload.terminalOutcomeKey", ASCENDING)],

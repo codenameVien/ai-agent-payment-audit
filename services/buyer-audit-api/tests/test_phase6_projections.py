@@ -5,6 +5,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from buyer_audit_api.core.audit import AuditReportReader
 from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
@@ -42,12 +43,22 @@ SCENARIO = ScenarioMetadata(
 )
 
 PROJECTIONS = PurchaseProjectionService()
+READER = AuditReportReader()
+
+
+AUDIT_HEAD_SENTINEL = "<predecessor>"
 
 
 def chain(*specs: tuple[EventType, JsonObject]) -> list[EvidenceEvent]:
     events: list[EvidenceEvent] = []
     previous: str | None = None
     for index, (event_type, payload) in enumerate(specs, start=1):
+        if (
+            event_type is EventType.AUDITED
+            and payload.get("evidenceHeadEventHash") == AUDIT_HEAD_SENTINEL
+        ):
+            # A real audit records the head it was appended to; only negative tests deviate.
+            payload = {**payload, "evidenceHeadEventHash": previous}
         event = create_event(
             purchase_id=PURCHASE_ID,
             sequence=index,
@@ -157,13 +168,18 @@ def no_transfer_payload() -> JsonObject:
     }
 
 
-def audited_payload(severity: str) -> JsonObject:
+def audited_payload(
+    severity: str,
+    *,
+    head: str | None = AUDIT_HEAD_SENTINEL,
+    ruleset_version: str = "phase6.rules.v1",
+) -> JsonObject:
     return {
         "auditBundleHash": "sha256:" + "44" * 32,
-        "evidenceHeadEventHash": "sha256:" + "55" * 32,
+        "evidenceHeadEventHash": head,
         "findings": [] if severity == "NORMAL" else [{"code": "AUD-X", "severity": severity}],
         "reportId": "audit:" + "66" * 32,
-        "rulesetVersion": "phase6.rules.v1",
+        "rulesetVersion": ruleset_version,
         "severity": severity,
     }
 
@@ -427,7 +443,7 @@ def test_two_audited_events_fail_closed() -> None:
         (EventType.AUDITED, audited_payload("NORMAL")),
         (EventType.AUDITED, audited_payload("RISK")),
     ]
-    with pytest.raises(EvidenceIntegrityError, match="multiple persisted audit"):
+    with pytest.raises(EvidenceIntegrityError, match="multiple audit reports"):
         PROJECTIONS.project(chain(*specs))
 
 
@@ -690,3 +706,49 @@ def test_audit_coverage_is_reported_when_evidence_advances() -> None:
 
     assert PROJECTIONS.project(covered).audit_covers_head is True
     assert PROJECTIONS.project(advanced).audit_covers_head is False
+
+
+def test_summary_rejects_an_audit_whose_head_hash_is_not_its_predecessor() -> None:
+    """H4: the summary must fail closed on exactly the audit the reader rejects."""
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.AUDITED, audited_payload("NORMAL", head="sha256:" + "ee" * 32)),
+    ]
+    events = chain(*specs)
+
+    # The detail path's reader already refuses this evidence...
+    with pytest.raises(EvidenceIntegrityError, match="does not describe the head"):
+        READER.persisted_audit(events)
+    # ...so the summary must refuse it too, instead of showing AUDITED_NORMAL.
+    with pytest.raises(EvidenceIntegrityError, match="does not describe the head"):
+        PROJECTIONS.project(events)
+
+
+def test_summary_rejects_an_audit_with_a_malformed_payload() -> None:
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.AUDITED, {"severity": "NORMAL"}),
+    ]
+    with pytest.raises(EvidenceIntegrityError, match="malformed"):
+        PROJECTIONS.project(chain(*specs))
+
+
+def test_summary_still_reads_an_older_ruleset_audit_as_history() -> None:
+    """A legacy-ruleset audit is real history: readable, but never covered as current."""
+    events = chain(
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.AUDITED, audited_payload("NORMAL", ruleset_version="phase6.rules.old")),
+    )
+    projection = PROJECTIONS.project(events)
+
+    assert projection.audit_status is AuditStatus.AUDITED_NORMAL
+    assert projection.audit_covers_head is True
+    # The service, however, must not serve it as the current audit.
+    with pytest.raises(EvidenceIntegrityError, match="not 'phase6.rules.v1'"):
+        READER.current(events)

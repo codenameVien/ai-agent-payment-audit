@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
+import re
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -11,7 +14,10 @@ from pymongo import AsyncMongoClient
 from pymongo.errors import DuplicateKeyError
 
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
-from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
+from buyer_audit_api.adapters.repositories.mongo import (
+    _PHASE6_SINGLETON_INDEXES,
+    MongoEvidenceRepository,
+)
 from buyer_audit_api.core.errors import EvidenceIntegrityError, PaymentConflictError
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.models import (
@@ -801,31 +807,88 @@ async def test_real_mongo_phase6_indexes_are_partial_and_old_documents_stay_read
         preflight = await repository.phase6_index_collision_report()
         assert preflight == []
         before = await cleanup[database]["purchaseEvents"].count_documents({})
-        colliding = {
+        legacy_row = {
             "actor": {"id": "legacy", "type": "service"},
             "eventHash": "sha256:" + "cc" * 32,
-            "eventId": "legacy-collision",
             "evidenceRefs": [],
             "occurredAt": clock.now(),
-            "payload": {"terminalOutcomeKey": "terminal:legacy-purchase-1"},
             "payloadHash": "sha256:" + "cc" * 32,
             "previousEventHash": None,
-            "purchaseId": "legacy-purchase-1",
-            "sequence": 2,
-            "type": EventType.PAYMENT_SETTLED.value,
         }
+        # One shared terminal outcome key across two purchases: exactly what the new
+        # `payload.terminalOutcomeKey` unique index forbids, and legal under the old ones.
+        outcome_rows = [
+            {
+                **legacy_row,
+                "eventId": f"legacy-outcome-{index}",
+                "payload": {"terminalOutcomeKey": "terminal:shared-legacy"},
+                "purchaseId": f"legacy-outcome-purchase-{index}",
+                "sequence": 1,
+                "type": EventType.PAYMENT_SETTLED.value,
+            }
+            for index in (1, 2)
+        ]
+        # Two events of each newly introduced singleton type on a single purchase.
+        singleton_types = [
+            event_type
+            for event_type in (
+                EventType.PAYMENT_MISMATCH_CONFIRMED,
+                EventType.PAYMENT_RECONCILED_NO_TRANSFER,
+            )
+            for _ in (1, 2)
+        ]
+        singleton_rows = [
+            {
+                **legacy_row,
+                "eventId": f"legacy-singleton-{offset}",
+                "payload": {},
+                "purchaseId": "legacy-singleton-purchase",
+                "sequence": offset,
+                "type": event_type.value,
+            }
+            for offset, event_type in enumerate(singleton_types, start=1)
+        ]
         await cleanup[database]["purchaseEvents"].insert_many(
-            [colliding, {**colliding, "eventId": "legacy-collision-2", "sequence": 3}]
+            [*outcome_rows, *singleton_rows]
         )
         collisions = await repository.phase6_index_collision_report()
-        assert [item["key"] for item in collisions] == [
-            {"payload_terminalOutcomeKey": "terminal:legacy-purchase-1"}
-        ]
-        assert collisions[0]["count"] == 2
-        assert collisions[0]["index"] == "unique_phase6_terminal_outcome"
-        assert await cleanup[database]["purchaseEvents"].count_documents({}) == before + 2
+        reported = {item["index"]: item for item in collisions}
+        assert reported["unique_phase6_terminal_outcome"]["key"] == {
+            "payload_terminalOutcomeKey": "terminal:shared-legacy"
+        }
+        assert reported["unique_phase6_terminal_outcome"]["count"] == 2
+        # M2: the two new per-purchase singletons are covered, not silently created.
+        for name in (
+            "unique_payment_mismatch_per_purchase",
+            "unique_payment_no_transfer_per_purchase",
+        ):
+            assert reported[name]["key"] == {"purchaseId": "legacy-singleton-purchase"}
+            assert reported[name]["count"] == 2
+        assert await cleanup[database]["purchaseEvents"].count_documents({}) == before + 6
+
+        # M2: ensure_indexes must refuse to create a new unique index over collisions, and
+        # it must refuse before creating any of them.
+        with pytest.raises(EvidenceIntegrityError, match="preflight found existing collisions"):
+            await repository.ensure_indexes()
+        created = await cleanup[database]["purchaseEvents"].index_information()
+        for name in (
+            "unique_payment_mismatch_per_purchase",
+            "unique_payment_no_transfer_per_purchase",
+            "unique_phase6_terminal_outcome",
+            "unique_phase6_reconciliation_attempt",
+            "unique_phase6_rejected_attempt",
+        ):
+            assert name not in created, f"{name} was created before the preflight"
+
         await cleanup[database]["purchaseEvents"].delete_many(
-            {"eventId": {"$in": ["legacy-collision", "legacy-collision-2"]}}
+            {
+                "eventId": {
+                    "$in": [
+                        str(row["eventId"])
+                        for row in (*outcome_rows, *singleton_rows)
+                    ]
+                }
+            }
         )
         await repository.ensure_indexes()
         await repository.ensure_indexes()
@@ -1143,3 +1206,106 @@ async def test_real_mongo_reconciliation_attempts_and_actual_spend_are_exact(
         await repository.close()
         await cleanup.drop_database(database)
         await cleanup.close()
+
+
+PHASE6_NEW_UNIQUE_INDEXES = (
+    "unique_payment_mismatch_per_purchase",
+    "unique_payment_no_transfer_per_purchase",
+    "unique_phase6_terminal_outcome",
+    "unique_phase6_reconciliation_attempt",
+    "unique_phase6_rejected_attempt",
+    "unique_confirmed_outflow_terminal",
+    "unique_confirmed_outflow_transaction",
+    "unique_confirmed_outflow_transaction_local",
+)
+
+
+@pytest.mark.asyncio
+async def test_preflight_precedes_every_new_phase6_unique_index() -> None:
+    """M2: no newly introduced unique index may be created before the collision report.
+
+    This runs without a server: the repository's collections are replaced by recorders, so
+    the assertion is about call order in `ensure_indexes()` itself.
+    """
+    calls: list[str] = []
+
+    class RecordingCollection:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        async def index_information(self) -> dict[str, object]:
+            return {}
+
+        async def drop_index(self, _name: str) -> None:
+            return None
+
+        async def create_index(self, _keys: object, **kwargs: object) -> str:
+            name = str(kwargs.get("name") or f"{self._label}:unnamed")
+            calls.append(f"index:{name}")
+            return name
+
+        async def aggregate(self, _pipeline: object) -> AsyncIterator[dict[str, object]]:
+            calls.append("preflight")
+
+            async def empty() -> AsyncIterator[dict[str, object]]:
+                if False:  # pragma: no cover - an empty async iterator
+                    yield {}
+
+            return empty()
+
+    class RecordingAdmin:
+        async def command(self, _payload: object) -> dict[str, object]:
+            return {"ok": 1}
+
+    class RecordingClient:
+        admin = RecordingAdmin()
+
+    repository = MongoEvidenceRepository.__new__(MongoEvidenceRepository)
+    repository._client = RecordingClient()  # type: ignore[assignment]
+    for attribute, label in (
+        ("_users", "users"),
+        ("_events", "events"),
+        ("_heads", "evidenceHeads"),
+        ("_sensitive", "sensitive"),
+        ("_wallet_policies", "walletPolicies"),
+        ("_payment_intents", "paymentIntents"),
+        ("_seller_executions", "sellerExecutions"),
+        ("_confirmed_outflows", "confirmedOutflows"),
+    ):
+        setattr(repository, attribute, RecordingCollection(label))
+
+    await repository.ensure_indexes()
+
+    assert "preflight" in calls
+    # Every aggregation of the report happens before any new unique index is created.
+    first_new_index = min(
+        calls.index(f"index:{name}")
+        for name in PHASE6_NEW_UNIQUE_INDEXES
+        if f"index:{name}" in calls
+    )
+    assert calls.index("preflight") < first_new_index
+    assert calls.count("preflight") == 1 or all(
+        position < first_new_index
+        for position, item in enumerate(calls)
+        if item == "preflight"
+    )
+    # All eight new unique indexes are still created after the preflight passes.
+    for name in PHASE6_NEW_UNIQUE_INDEXES:
+        assert f"index:{name}" in calls, name
+
+
+def test_collision_report_covers_every_new_phase6_unique_index() -> None:
+    """M2: the report's coverage cannot drift from the set of new unique indexes."""
+    source = inspect.getsource(MongoEvidenceRepository.ensure_indexes)
+    created = set(re.findall(r"name=\"(unique_[a-z0-9_]+)\"", source))
+    created.update(
+        name for _event_type, name in _PHASE6_SINGLETON_INDEXES
+    )
+    report_source = inspect.getsource(
+        MongoEvidenceRepository.phase6_index_collision_report
+    )
+    covered = set(re.findall(r"\"(unique_[a-z0-9_]+)\"", report_source))
+    covered.update(name for _event_type, name in _PHASE6_SINGLETON_INDEXES)
+
+    assert set(PHASE6_NEW_UNIQUE_INDEXES) <= created
+    assert set(PHASE6_NEW_UNIQUE_INDEXES) <= covered

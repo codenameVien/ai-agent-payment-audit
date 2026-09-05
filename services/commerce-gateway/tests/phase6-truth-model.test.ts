@@ -22,6 +22,8 @@ import {
   type StagedDelivery,
   type TerminalPaymentEvidenceApi,
   assertTransactionRef,
+  classifyReceipt,
+  intentSubmissionRef,
   encodeHeader,
   evmTransactionRef,
   isTerminalEvidenceApi,
@@ -652,3 +654,44 @@ for (const state of [
     assert.equal(evidence.checks.length, 0);
   });
 }
+
+test("H1: a same-hash HISTORICAL_ON_CHAIN receipt cannot prove an active BASE submission", () => {
+  const { intent, receipt } = fixtures();
+  const submission = intentSubmissionRef({ ...intent, transaction_hash: TX });
+  assert.ok(submission !== null);
+  assert.equal(submission.kind === "EVM" && submission.evidenceSource, "BASE_SEPOLIA_VERIFIED");
+
+  // The hash matches exactly; only the declared provenance differs.
+  assert.throws(
+    () =>
+      classifyReceipt(
+        { ...receipt, evidenceSource: "HISTORICAL_ON_CHAIN" } as ReceiptProof,
+        submission,
+      ),
+    /receipt evidence source is not the submitted evidence source/,
+  );
+  // The same hash under the submitted source is still accepted.
+  assert.equal(classifyReceipt(receipt, submission).reference.evidenceSource, "BASE_SEPOLIA_VERIFIED");
+});
+
+test("H1: an active BASE submission never terminalizes on a historical proof", async () => {
+  const { receipt } = fixtures();
+  const historical: ReceiptProof = {
+    ...receipt,
+    evidenceSource: "HISTORICAL_ON_CHAIN",
+    transfers: [{ ...receipt.transfers[0]!, amount: 200_000n }],
+  };
+  const { gateway, evidence } = harness({ receipt: historical });
+
+  const result = await gateway.execute("purchase-1");
+
+  assert.equal(result.state, "RECONCILIATION_REQUIRED");
+  assert.ok(evidence.mismatch === undefined, "a historical proof must not confirm a mismatch");
+  assert.ok(evidence.noTransfer === undefined);
+  assert.ok(!evidence.calls.includes("settle"));
+  assert.match(evidence.calls.at(-1) ?? "", /^reconciliation:/);
+  assert.ok(
+    (evidence.calls.at(-1) ?? "").includes("evidence source"),
+    `expected a source-binding reason, got: ${evidence.calls.at(-1)}`,
+  );
+});

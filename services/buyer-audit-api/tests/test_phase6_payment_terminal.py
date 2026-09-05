@@ -642,7 +642,7 @@ async def test_no_transfer_proof_cannot_inflate_the_recorded_finality(clock) -> 
         (
             "submission",
             {"submission_ref": f"localtx:{RUN_ID}:payment:000009"},
-            "not bound to the submitted payment",
+            "is not the submitted transaction",
         ),
         ("chain", {"checked_chain_id": 1}, "chain does not match"),
         (
@@ -660,7 +660,7 @@ async def test_no_transfer_proof_cannot_inflate_the_recorded_finality(clock) -> 
             {"last_checked_at": datetime(2030, 1, 1, tzinfo=UTC)},
             "check window does not match",
         ),
-        ("scenario", {"scenario": None}, "scenario does not match"),
+        ("scenario", {"scenario": None}, "scenario is not the submitted scenario run"),
     ],
     ids=[
         "attempt count",
@@ -850,18 +850,28 @@ async def test_reconciliation_check_must_bind_the_submitted_identity(clock) -> N
     repository = InMemoryEvidenceRepository()
     service = await synthetic_service(repository, clock)
 
-    with pytest.raises(PaymentEvidenceError, match="not bound to the submitted payment"):
+    with pytest.raises(PaymentEvidenceError, match="is not the submitted transaction"):
         await service.record_reconciliation_check(
             purchase_id=PURCHASE_ID,
             check=check(1, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND, submission_ref=EVM_TX),
         )
-    with pytest.raises(PaymentEvidenceError, match="source contradicts"):
+    with pytest.raises(PaymentEvidenceError, match="require exactly one scenario"):
         await service.record_reconciliation_check(
             purchase_id=PURCHASE_ID,
             check=check(
                 1,
                 ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND,
                 evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            ),
+        )
+    with pytest.raises(PaymentEvidenceError, match="evidence source is not the submitted"):
+        await service.record_reconciliation_check(
+            purchase_id=PURCHASE_ID,
+            check=check(
+                1,
+                ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND,
+                evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+                scenario=None,
             ),
         )
     assert all(
@@ -1117,3 +1127,153 @@ async def test_one_synthetic_transaction_cannot_back_two_purchases(clock) -> Non
         event.type != EventType.PAYMENT_MISMATCH_CONFIRMED
         for event in await repository.list_events(second_purchase_id)
     )
+
+
+@pytest.mark.asyncio
+async def test_historical_proof_cannot_terminalize_an_active_base_submission(clock) -> None:
+    """H1: the same bound hash under HISTORICAL_ON_CHAIN is a different provenance claim."""
+    repository = InMemoryEvidenceRepository()
+    service = await onchain_service(repository, clock)
+    historical = replace(
+        onchain_mismatch_proof(),
+        transaction_ref=EvmTransactionRef(
+            hash=EVM_TX, evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN
+        ),
+        evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN,
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="evidence source is not the submitted"):
+        await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=historical)
+
+    stored = await repository.get_payment_intent(PURCHASE_ID)
+    assert stored is not None
+    assert stored.state is PaymentIntentState.RECONCILIATION_REQUIRED
+    assert stored.terminal_evidence_source is None
+    policy = await policy_of(repository, clock)
+    assert policy is not None
+    assert policy.spent_units == 0
+    assert policy.reserved_units == QUOTED_UNITS
+    assert await service.list_confirmed_outflows(PURCHASE_ID) == []
+    assert all(
+        event.type != EventType.PAYMENT_MISMATCH_CONFIRMED
+        for event in await repository.list_events(PURCHASE_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_historical_check_cannot_answer_an_active_base_submission(clock) -> None:
+    """H1: a reconciliation check must also carry the submitted evidence source."""
+    repository = InMemoryEvidenceRepository()
+    service = await onchain_service(repository, clock)
+
+    with pytest.raises(PaymentEvidenceError, match="evidence source is not the submitted"):
+        await service.record_reconciliation_check(
+            purchase_id=PURCHASE_ID,
+            check=check(
+                1,
+                ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND,
+                submission_ref=EVM_TX,
+                evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN,
+                scenario=None,
+            ),
+        )
+
+    assert all(
+        event.type != EventType.PAYMENT_RECONCILIATION_CHECKED
+        for event in await repository.list_events(PURCHASE_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_run_check_cannot_answer_a_local_submission(clock) -> None:
+    """H2: a consistent series from another run must fail before any attempt is recorded."""
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+    other_run = ScenarioMetadata(
+        run_id="b" * 32,
+        scenario_id=SCENARIO.scenario_id,
+        catalog_version=SCENARIO.catalog_version,
+        catalog_hash=SCENARIO.catalog_hash,
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="run does not own the submitted transaction"):
+        await service.record_reconciliation_check(
+            purchase_id=PURCHASE_ID,
+            check=check(
+                1,
+                ReconciliationVerifierOutcome.SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER,
+                scenario=other_run,
+            ),
+        )
+
+    stored = await repository.get_payment_intent(PURCHASE_ID)
+    assert stored is not None
+    assert stored.reconciliation_attempt_count == 0
+    assert all(
+        event.type != EventType.PAYMENT_RECONCILIATION_CHECKED
+        for event in await repository.list_events(PURCHASE_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_run_no_transfer_proof_cannot_release_the_reservation(clock) -> None:
+    """H2: a forged run-B proof over a genuine run-A series never terminalizes."""
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+    await exhaust_bounded_checks(service)
+    other_run = ScenarioMetadata(
+        run_id="b" * 32,
+        scenario_id=SCENARIO.scenario_id,
+        catalog_version=SCENARIO.catalog_version,
+        catalog_hash=SCENARIO.catalog_hash,
+    )
+    forged = await build_no_transfer_proof(repository, scenario=other_run)
+
+    with pytest.raises(PaymentEvidenceError, match="run does not own the submitted transaction"):
+        await service.reconcile_no_transfer(purchase_id=PURCHASE_ID, proof=forged)
+
+    stored = await repository.get_payment_intent(PURCHASE_ID)
+    assert stored is not None
+    assert stored.state is PaymentIntentState.RECONCILIATION_REQUIRED
+    policy = await policy_of(repository, clock)
+    assert policy is not None
+    # The reservation is still held: nothing was released by the foreign-run proof.
+    assert policy.reserved_units == QUOTED_UNITS
+    assert policy.spent_units == 0
+    assert all(
+        event.type != EventType.PAYMENT_RECONCILED_NO_TRANSFER
+        for event in await repository.list_events(PURCHASE_ID)
+    )
+
+
+@pytest.mark.asyncio
+async def test_foreign_run_mismatch_proof_cannot_charge_the_wallet(clock) -> None:
+    """H2: a run-B mismatch proof against a run-A submission is not evidence."""
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+    other_run = ScenarioMetadata(
+        run_id="b" * 32,
+        scenario_id=SCENARIO.scenario_id,
+        catalog_version=SCENARIO.catalog_version,
+        catalog_hash=SCENARIO.catalog_hash,
+    )
+    # The value object already refuses to mix a run-A reference with run-B provenance.
+    with pytest.raises(ValueError, match="belongs to another run"):
+        replace(mismatch_proof(), scenario=other_run)
+    # A fully self-consistent run-B proof is still not this purchase's submission.
+    forged = replace(
+        mismatch_proof(),
+        transaction_ref=LocalTransactionRef(
+            id=f"localtx:{other_run.run_id}:payment:000001", run_id=other_run.run_id
+        ),
+        scenario=other_run,
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="is not the submitted transaction"):
+        await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=forged)
+
+    policy = await policy_of(repository, clock)
+    assert policy is not None
+    assert policy.spent_units == 0
+    assert policy.reserved_units == QUOTED_UNITS
+    assert await service.list_confirmed_outflows(PURCHASE_ID) == []

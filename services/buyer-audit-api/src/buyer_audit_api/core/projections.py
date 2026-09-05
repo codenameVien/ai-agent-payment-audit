@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 
+from buyer_audit_api.core.audit import AuditReportReader
 from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.models import (
     EventType,
@@ -63,6 +64,9 @@ _AUDIT_STATUS_BY_VERDICT: dict[str, AuditStatus] = {
     "CAUTION": AuditStatus.AUDITED_WARNING,
     "RISK": AuditStatus.AUDITED_RISK,
 }
+
+# H4: one pure parser for persisted audit evidence, shared with every read path.
+_AUDIT_READER = AuditReportReader()
 
 _NON_LIFECYCLE_EVENT_TYPES = frozenset(
     {
@@ -273,25 +277,24 @@ def _payment_status(
 def _audit_projection(
     events: list[EvidenceEvent],
 ) -> tuple[AuditStatus, str | None, int, bool]:
-    audited = [event for event in events if event.type == EventType.AUDITED]
-    if not audited:
+    """H4: the read model rejects exactly the audit evidence the reader rejects.
+
+    Position and payload are validated by the shared `AuditReportReader`, so a summary can
+    never present an audit whose `evidenceHeadEventHash` does not describe its predecessor.
+    """
+    persisted = _AUDIT_READER.persisted_audit(events)
+    if persisted is None:
         return AuditStatus.PENDING_AUDIT, None, 0, False
-    if len(audited) > 1:
-        raise EvidenceIntegrityError("multiple persisted audit reports exist")
-    audited_event = audited[0]
-    payload = audited_event.payload
-    verdict = str(payload.get("severity", ""))
+    verdict = persisted.report.severity.value
     status = _AUDIT_STATUS_BY_VERDICT.get(verdict)
     if status is None:
         raise EvidenceIntegrityError("persisted audit verdict is malformed")
-    findings = payload.get("findings")
-    # H4: a read model must disclose when evidence advanced past the audited head.
-    covers_head = audited_event.sequence == len(events)
     return (
         status,
         verdict,
-        len(findings) if isinstance(findings, list) else 0,
-        covers_head,
+        len(persisted.report.findings),
+        # H4: a read model must disclose when evidence advanced past the audited head.
+        persisted.covers_head,
     )
 
 

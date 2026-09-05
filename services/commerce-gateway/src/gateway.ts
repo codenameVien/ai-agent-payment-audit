@@ -251,6 +251,13 @@ export function classifyReceipt(
     if (reference.hash !== submission.hash) {
       throw new TransactionRefError("receipt transaction hash is not the submitted transaction");
     }
+    // H1: the same hash under a different provenance is a different claim. An active
+    // EIP-3009 submission is BASE_SEPOLIA_VERIFIED, so HISTORICAL_ON_CHAIN can never prove it.
+    if (reference.evidenceSource !== submission.evidenceSource) {
+      throw new TransactionRefError(
+        "receipt evidence source is not the submitted evidence source",
+      );
+    }
     return { kind: "EVM", proof, reference, confirmations };
   }
   const proof = receipt as LocalReceiptProof;
@@ -263,6 +270,11 @@ export function classifyReceipt(
   const reference = localTransactionRef({ id: proof.localTransactionId, runId: proof.runId });
   if (reference.id !== submission.id || reference.runId !== submission.runId) {
     throw new TransactionRefError("local receipt identity is not the submitted identity");
+  }
+  if (reference.evidenceSource !== submission.evidenceSource) {
+    throw new TransactionRefError(
+      "receipt evidence source is not the submitted evidence source",
+    );
   }
   return { kind: "LOCAL", proof, reference, confirmations };
 }

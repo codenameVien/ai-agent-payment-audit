@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
 import pytest
 
@@ -12,17 +13,19 @@ from buyer_audit_api.core.audit import (
     AuditEvaluator,
     AuditFinding,
     AuditReportReader,
+    AuditRepository,
     AuditService,
     AuditSeverity,
     finding_from_payload,
     finding_payload,
     is_final_eligible,
 )
-from buyer_audit_api.core.errors import EvidenceIntegrityError
+from buyer_audit_api.core.errors import EvidenceIntegrityError, EvidenceTransitionError
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
     EventType,
     EvidenceEvent,
+    EvidenceHead,
     EvidenceSource,
     JsonObject,
     LocalTransactionRef,
@@ -811,3 +814,118 @@ async def test_persisted_audit_must_describe_the_head_it_was_appended_to(clock) 
         READER.persisted_audit(events)
     with pytest.raises(EvidenceIntegrityError, match="does not describe the head"):
         await AuditService(repository=repository, clock=clock).audit(PURCHASE_ID)
+
+
+@pytest.mark.asyncio
+async def test_an_older_ruleset_audit_is_never_returned_as_current(clock) -> None:
+    """H4: P6-AC-03.5 requires the same head AND the same ruleset."""
+    repository = await settled_delivered_repository(clock)
+    head = await repository.get_event_head(PURCHASE_ID)
+    assert head is not None
+    await repository.append_event(
+        purchase_id=PURCHASE_ID,
+        event_type=EventType.AUDITED,
+        occurred_at=DECIDED_AT,
+        actor={"id": "deterministic-audit-engine", "type": "service"},
+        payload={
+            "auditBundleHash": "sha256:" + "44" * 32,
+            "evidenceHeadEventHash": head.head_event_hash,
+            "findings": [],
+            "reportId": "audit:" + "66" * 32,
+            "rulesetVersion": "phase6.rules.old",
+            "severity": "NORMAL",
+        },
+    )
+    service = AuditService(repository=repository, clock=clock)
+
+    with pytest.raises(EvidenceIntegrityError, match="re-audit policy is required"):
+        await service.audit(PURCHASE_ID)
+
+    events = await repository.list_events(PURCHASE_ID)
+    # The stored history stays readable and no second audit was appended.
+    assert [event.type for event in events].count(EventType.AUDITED) == 1
+    persisted = READER.persisted_audit(events)
+    assert persisted is not None
+    assert persisted.report.ruleset_version == "phase6.rules.old"
+    assert persisted.covers_head is True
+
+
+class RacingRepository:
+    """Serves the pre-race snapshot, loses the append CAS, then serves the real state.
+
+    This is the exact shape of a lost audit race: the loser evaluated an older head, its
+    append is rejected, and only then does it see the winner's evidence.
+    """
+
+    def __init__(
+        self,
+        inner: InMemoryEvidenceRepository,
+        before_events: list[EvidenceEvent],
+        before_head: EvidenceHead,
+    ) -> None:
+        self._inner = inner
+        self._before_events = before_events
+        self._before_head = before_head
+        self.append_attempts = 0
+
+    async def list_events(self, purchase_id: str) -> list[EvidenceEvent]:
+        if self.append_attempts == 0:
+            return list(self._before_events)
+        return await self._inner.list_events(purchase_id)
+
+    async def get_event_head(self, purchase_id: str) -> EvidenceHead | None:
+        if self.append_attempts == 0:
+            return self._before_head
+        return await self._inner.get_event_head(purchase_id)
+
+    async def append_event(self, **kwargs: object) -> EvidenceEvent:
+        self.append_attempts += 1
+        raise EvidenceTransitionError("append lost the evidence head race")
+
+
+@pytest.mark.asyncio
+async def test_append_race_loser_never_returns_a_stale_audit(clock) -> None:
+    """H4: the race recovery path applies exactly the normal path's currency rules."""
+    repository = await settled_delivered_repository(clock)
+    before_events = await repository.list_events(PURCHASE_ID)
+    before_head = await repository.get_event_head(PURCHASE_ID)
+    assert before_head is not None
+
+    # The winner audits, then an unrelated append advances the head past that audit.
+    await AuditService(repository=repository, clock=clock).audit(PURCHASE_ID)
+    await repository.append_event(
+        purchase_id=PURCHASE_ID,
+        event_type=EventType.SENSITIVE_PAYLOAD_ACCESSED,
+        occurred_at=DECIDED_AT,
+        actor={"id": OWNER, "type": "user"},
+        payload={"kind": "request", "payloadId": "payload-1"},
+    )
+
+    racing = RacingRepository(repository, before_events, before_head)
+    loser = AuditService(repository=cast(AuditRepository, racing), clock=clock)
+
+    with pytest.raises(EvidenceIntegrityError, match="advanced after the terminal audit"):
+        await loser.audit(PURCHASE_ID)
+
+    assert racing.append_attempts == 1
+    events = await repository.list_events(PURCHASE_ID)
+    assert [event.type for event in events].count(EventType.AUDITED) == 1
+    assert events[-1].type is EventType.SENSITIVE_PAYLOAD_ACCESSED
+
+
+@pytest.mark.asyncio
+async def test_append_race_loser_returns_the_winner_report_when_it_is_current(clock) -> None:
+    """The recovery path still answers with the committed audit when it covers the head."""
+    repository = await settled_delivered_repository(clock)
+    before_events = await repository.list_events(PURCHASE_ID)
+    before_head = await repository.get_event_head(PURCHASE_ID)
+    assert before_head is not None
+    winner = await AuditService(repository=repository, clock=clock).audit(PURCHASE_ID)
+
+    racing = RacingRepository(repository, before_events, before_head)
+    loser = AuditService(repository=cast(AuditRepository, racing), clock=clock)
+
+    assert await loser.audit(PURCHASE_ID) == winner
+    assert racing.append_attempts == 1
+    events = await repository.list_events(PURCHASE_ID)
+    assert [event.type for event in events].count(EventType.AUDITED) == 1

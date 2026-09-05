@@ -167,3 +167,69 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 ### Handoff
 - Reviewer re-runs the full fixed focused sequence on the corrected `wo/P6-01` tip;
   `.agent/outbox/WO-P6-01-coder.done.md` carries the correction SHA and `READY_FOR_REVIEW`.
+
+## 2026-09-05 05:10 KST — coder — WO-P6-01 review correction round 2
+
+### Intent
+- Close the four items left open by `.agent/outbox/WO-P6-01-review-r2.md` (`REJECT`: H1, H2, H4,
+  M2) inside the WO-P6-01 allowed-write list, without weakening any approved requirement.
+
+### Files changed
+- `services/commerce-gateway/src/gateway.ts` — H1: `classifyReceipt` now requires the receipt
+  reference's evidence source to equal the submitted reference's source, so a same-hash
+  `HISTORICAL_ON_CHAIN` receipt can no longer prove an active `BASE_SEPOLIA_VERIFIED` submission;
+  `evmTransactionRef` names the synthetic-into-EVM confusion explicitly.
+- `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — H1/H2: new
+  `SubmittedReference` + `submitted_reference()` resolve the submission from the persisted
+  `PAYMENT_RECONCILIATION_REQUIRED`/`PAYMENT_SUBMISSION_IDENTIFIED` evidence, including its
+  recorded evidence source and complete scenario metadata; `assert_submission_binding()` is the
+  single gate that every check, mismatch proof and no-transfer proof passes. Submission events now
+  record `evidenceSource` explicitly (`BASE_SEPOLIA_VERIFIED` for active EIP-3009 submissions).
+- `services/buyer-audit-api/src/buyer_audit_api/core/audit.py` — H4: `require_current_audit()` and
+  `AuditReportReader.current()` centralize P6-AC-03.5; the normal path and the append-race
+  recovery path both require the current `RULESET_VERSION` and exact covered head, and the race
+  path re-verifies the chain before answering.
+- `services/buyer-audit-api/src/buyer_audit_api/core/projections.py` — H4: `_audit_projection`
+  now parses through the shared `AuditReportReader`, so a summary rejects exactly the audit
+  evidence the detail path rejects instead of presenting `AUDITED_NORMAL`.
+- `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py` — M2:
+  `_PHASE6_SINGLETON_INDEXES`/`_EXISTING_SINGLETON_INDEXES` split the loop, the collision report
+  covers all eight newly introduced unique indexes including both per-purchase terminal
+  singletons, and the read-only preflight now runs before creating any of them.
+- Tests: direct regressions for every reproduced probe in
+  `tests/test_phase6_payment_terminal.py` (H1 historical proof/check, H2 foreign-run check,
+  no-transfer proof and mismatch proof), `tests/test_phase6_projections.py` (H4 malformed head,
+  malformed payload, legacy-ruleset history), `tests/test_phase6_audit.py` (H4 old ruleset,
+  append-race stale rejection and current-report recovery), `tests/test_mongo_repository.py`
+  (M2 native collision coverage, refusal before creation, call order, coverage drift) and
+  `services/commerce-gateway/tests/phase6-truth-model.test.ts` (H1 same-hash wrong source and
+  no terminalization on a historical proof).
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` strict 0, focused pytest 145 passed, gateway build 0,
+  `node --test` 43/43, `npm run test:mongo:local` 6 passed, `git diff --check` 0.
+- Preservation: full non-mongo pytest 195 passed, full gateway suite 58/58, protected paths
+  byte-identical to `685472c`, allowed-write scope only, 27019 free and no mongod/temp left.
+- Independent probe reproduction (`node` + `uv run python`, local only): all seven probes the
+  reviewer reported as accepted now fail closed — historical proof (`spent=0`), run-B check
+  (`attempts=0`), run-B no-transfer proof (`reserved=100000`), old-ruleset audit, append race
+  (`attempts=1`), malformed audit head in the summary, and preflight at call 16 before the new
+  singleton indexes at calls 24 and 25.
+
+### Decisions / assumptions
+- The submitted evidence source is now recorded on the submission event instead of inferred.
+  Historical rows without that field are still read as `BASE_SEPOLIA_VERIFIED`; nothing is
+  written or backfilled.
+- P6-AC-03.5 is enforced literally: any event after `AUDITED` makes the persisted report
+  non-current and demands an explicit correction/re-audit policy. The approved post-audit
+  reputation flow (design 18.8) therefore plugs into the single `require_current_audit()`
+  predicate in WO-P6-02 rather than into scattered read paths, and history stays readable through
+  the projection's `audit_covers_head` signal.
+- A legacy-ruleset audit remains readable history in the read model but is never served as the
+  current audit. Malformed audit evidence fails closed in both the summary and the detail path.
+- Projection fixtures previously fabricated `evidenceHeadEventHash`; they now record their real
+  predecessor, which is why the shared reader accepts them.
+
+### Handoff
+- Reviewer re-verifies `wo/P6-01` independently against `685472c`; the coder evidence report
+  carries the round-2 implementation anchor and `READY_FOR_REVIEW`. WO-P6-02 stays blocked.

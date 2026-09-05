@@ -227,12 +227,42 @@ class PersistedAudit:
     covers_head: bool
 
 
+def require_current_audit(persisted: PersistedAudit) -> None:
+    """P6-AC-03.5: a persisted audit is current truth only for the same head and ruleset.
+
+    Both conditions demand an explicit correction/re-audit policy rather than a silent
+    stale answer. The approved post-audit reputation flow (design 18.8) appends
+    `REPUTATION_*` evidence after `AUDITED`; those events change the head, so a purchase
+    that has progressed past its audit is re-audited through that explicit policy instead
+    of being served a report that no longer describes its evidence.
+    """
+    if not persisted.covers_head:
+        raise EvidenceIntegrityError(
+            "evidence head advanced after the terminal audit; "
+            "an explicit correction or re-audit policy is required"
+        )
+    if persisted.report.ruleset_version != RULESET_VERSION:
+        raise EvidenceIntegrityError(
+            "persisted audit was produced by ruleset "
+            f"{persisted.report.ruleset_version!r}, not {RULESET_VERSION!r}; "
+            "an explicit re-audit policy is required"
+        )
+
+
 class AuditReportReader:
     """Parses persisted audit evidence. It never evaluates rules and never writes."""
 
     def persisted(self, events: list[EvidenceEvent]) -> AuditReport | None:
         found = self.persisted_audit(events)
         return None if found is None else found.report
+
+    def current(self, events: list[EvidenceEvent]) -> AuditReport | None:
+        """The persisted audit, but only when it is still the truth for this evidence."""
+        persisted = self.persisted_audit(events)
+        if persisted is None:
+            return None
+        require_current_audit(persisted)
+        return persisted.report
 
     def persisted_audit(self, events: list[EvidenceEvent]) -> PersistedAudit | None:
         audited = [event for event in events if event.type == EventType.AUDITED]
@@ -1010,15 +1040,9 @@ class AuditService:
             expected_event_count=head.event_count,
             expected_head_event_hash=head.head_event_hash,
         )
-        persisted = self._reader.persisted_audit(events)
-        if persisted is not None:
-            if not persisted.covers_head:
-                # P6-AC-03.5: a changed head must never silently return a stale report.
-                raise EvidenceIntegrityError(
-                    "evidence head advanced after the terminal audit; "
-                    "an explicit correction or re-audit policy is required"
-                )
-            return persisted.report
+        current = self._reader.current(events)
+        if current is not None:
+            return current
 
         deterministic = self._evaluator.deterministic_findings(events)
         semantic = await self._semantic.advise(
@@ -1058,8 +1082,18 @@ class AuditService:
                 expected_head_event_hash=head.head_event_hash,
             )
         except EvidenceTransitionError:
+            # H4: the loser of an append race must apply exactly the same currency rules as
+            # the normal path. A winner's audit plus any later event is not a current report.
             raced = await self._repository.list_events(purchase_id)
-            report = self._reader.persisted(raced)
+            raced_head = await self._repository.get_event_head(purchase_id)
+            if not raced or raced_head is None:
+                raise
+            verify_event_chain(
+                raced,
+                expected_event_count=raced_head.event_count,
+                expected_head_event_hash=raced_head.head_event_hash,
+            )
+            report = self._reader.current(raced)
             if report is not None:
                 return report
             raise
