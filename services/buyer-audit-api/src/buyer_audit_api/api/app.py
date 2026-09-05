@@ -12,7 +12,7 @@ from typing import cast
 
 import httpx
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 from buyer_audit_api.api.schemas import (
     AuditAlertResponse,
@@ -28,12 +28,16 @@ from buyer_audit_api.api.schemas import (
     EventResponse,
     EvidenceHeadResponse,
     ExternalAnchorRequest,
+    InternalConfirmMismatchRequest,
     InternalPaymentAuthorizeRequest,
     InternalPaymentClaimRequest,
     InternalPaymentFailureRequest,
     InternalPaymentReconciliationRequest,
     InternalPaymentSettlementRequest,
     InternalPaymentTransactionBindingRequest,
+    InternalReconcileNoTransferRequest,
+    InternalReconciliationCheckRequest,
+    InternalTerminalProofRequest,
     MeResponse,
     PaymentIntentResponse,
     PaymentQuoteViewResponse,
@@ -45,6 +49,7 @@ from buyer_audit_api.api.schemas import (
     PurchaseSummaryResponse,
     ReputationIntentResponse,
     ReputationRecordRequest,
+    ScenarioResponse,
     SellerAgentSummaryResponse,
     SellerExecutionClaimRequest,
     SellerExecutionProviderSubmissionRequest,
@@ -56,9 +61,15 @@ from buyer_audit_api.api.schemas import (
     WalletDashboardResponse,
     WalletPolicyRequest,
     WalletPolicyResponse,
+    transaction_ref_response,
 )
 from buyer_audit_api.composition import AppContainer
-from buyer_audit_api.core.audit import AuditReport, AuditRepository, AuditService
+from buyer_audit_api.core.audit import (
+    AuditReport,
+    AuditReportReader,
+    AuditRepository,
+    AuditService,
+)
 from buyer_audit_api.core.errors import (
     AuthenticationError,
     DomainNotRegisteredError,
@@ -69,14 +80,23 @@ from buyer_audit_api.core.errors import (
     PaymentPolicyError,
 )
 from buyer_audit_api.core.events import verify_event_chain
-from buyer_audit_api.core.models import EventType, EvidenceEvent
+from buyer_audit_api.core.models import (
+    EventType,
+    EvidenceEvent,
+    EvidenceSource,
+    ScenarioMetadata,
+    TransactionRef,
+    transaction_ref_from_payload,
+)
 from buyer_audit_api.core.payment import (
     PaymentIntent,
+    PaymentIntentState,
     PaymentRepository,
     PaymentService,
     PaymentView,
     WalletPolicy,
 )
+from buyer_audit_api.core.projections import PurchaseProjection, PurchaseProjectionService
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 from buyer_audit_api.domains.ai_inference.models import NormalizedAiRequest
 
@@ -118,9 +138,69 @@ def _redact(value: object) -> tuple[object, bool]:
     return value, False
 
 
+_PROJECTIONS = PurchaseProjectionService()
+_AUDIT_READER = AuditReportReader()
+_TRANSACTION_PROOF_EVENT_TYPES = frozenset(
+    {EventType.PAYMENT_SETTLED, EventType.PAYMENT_FAILED}
+)
+
+
+def _scenario_response(scenario: ScenarioMetadata | None) -> ScenarioResponse | None:
+    if scenario is None:
+        return None
+    return ScenarioResponse(
+        run_id=scenario.run_id,
+        scenario_id=scenario.scenario_id,
+        catalog_version=scenario.catalog_version,
+    )
+
+
+def _event_evidence_source(event: EvidenceEvent) -> EvidenceSource | None:
+    raw = event.payload.get("evidenceSource")
+    if not isinstance(raw, str):
+        return None
+    try:
+        return EvidenceSource(raw)
+    except ValueError:
+        return None
+
+
+def _event_transaction_ref(event: EvidenceEvent) -> TransactionRef | None:
+    """Only validated unions reach the response; raw payload strings are never promoted."""
+    raw = event.payload.get("transactionRef")
+    if raw is not None:
+        try:
+            return transaction_ref_from_payload(raw)
+        except ValueError:
+            return None
+    if event.type not in _TRANSACTION_PROOF_EVENT_TYPES:
+        return None
+    legacy_hash = event.payload.get("transactionHash")
+    if not isinstance(legacy_hash, str):
+        return None
+    try:
+        return transaction_ref_from_payload(
+            {
+                "kind": "EVM",
+                "hash": legacy_hash.lower(),
+                "chainId": 84532,
+                "evidenceSource": EvidenceSource.BASE_SEPOLIA_VERIFIED.value,
+            }
+        )
+    except ValueError:
+        return None
+
+
 def _event_response(event: EvidenceEvent) -> EventResponse:
     payload, redacted = _redact(event.payload)
     assert isinstance(payload, dict)
+    raw_scenario = event.payload.get("scenario")
+    scenario: ScenarioMetadata | None = None
+    if raw_scenario is not None:
+        try:
+            scenario = ScenarioMetadata.from_payload(raw_scenario)
+        except ValueError:
+            scenario = None
     return EventResponse(
         event_id=event.event_id,
         purchase_id=event.purchase_id,
@@ -134,7 +214,29 @@ def _event_response(event: EvidenceEvent) -> EventResponse:
         event_hash=event.event_hash,
         evidence_refs=list(event.evidence_refs),
         redacted=redacted,
+        evidence_source=_event_evidence_source(event),
+        scenario=_scenario_response(scenario),
+        transaction_ref=transaction_ref_response(_event_transaction_ref(event)),
     )
+
+
+def _finding_responses(report: AuditReport) -> list[AuditFindingResponse]:
+    return [
+        AuditFindingResponse(
+            code=item.code,
+            severity=item.severity.value,
+            title=item.title,
+            detail=item.detail,
+            evidence_refs=list(item.evidence_refs),
+            authority=item.authority.value,
+            rule_id=item.rule_id,
+            ruleset_version=item.ruleset_version,
+            expected=item.expected,
+            observed=item.observed,
+            mismatched_fields=list(item.mismatched_fields),
+        )
+        for item in report.findings
+    ]
 
 
 def _audit_response(report: AuditReport) -> AuditReportResponse:
@@ -142,67 +244,38 @@ def _audit_response(report: AuditReport) -> AuditReportResponse:
         report_id=report.report_id,
         purchase_id=report.purchase_id,
         severity=report.severity.value,
-        findings=[
-            AuditFindingResponse(
-                code=item.code,
-                severity=item.severity.value,
-                title=item.title,
-                detail=item.detail,
-                evidence_refs=list(item.evidence_refs),
-                authority=item.authority,
-            )
-            for item in report.findings
-        ],
+        findings=_finding_responses(report),
         evidence_head_event_hash=report.evidence_head_event_hash,
         audit_bundle_hash=report.audit_bundle_hash,
+        ruleset_version=report.ruleset_version,
+    )
+
+
+def _summary_response(projection: PurchaseProjection) -> PurchaseSummaryResponse:
+    return PurchaseSummaryResponse(
+        purchase_id=projection.purchase_id,
+        created_at=projection.created_at,
+        domain=projection.domain,
+        request_summary=projection.request_summary,
+        status=projection.lifecycle_status,
+        amount_units=projection.amount_units,
+        token=projection.token,
+        transaction_hash=projection.legacy_transaction_hash,
+        audit_severity=projection.audit_severity,
+        finding_count=projection.finding_count,
+        audit_covers_head=projection.audit_covers_head,
+        lifecycle_status=projection.lifecycle_status,
+        payment_status=projection.payment_status.value,
+        audit_status=projection.audit_status.value,
+        evidence_source=projection.evidence_source,
+        transaction_ref=transaction_ref_response(projection.transaction_ref),
+        scenario=_scenario_response(projection.scenario),
+        mismatched_fields=list(projection.mismatched_fields),
     )
 
 
 def _summary(events: list[EvidenceEvent]) -> PurchaseSummaryResponse:
-    requested = events[0]
-    by_type = {event.type: event for event in events}
-    claimed = by_type.get(EventType.PAYMENT_INTENT_CLAIMED)
-    settled = by_type.get(EventType.PAYMENT_SETTLED)
-    audited = by_type.get(EventType.AUDITED)
-    lifecycle = [
-        event
-        for event in events
-        if event.type
-        not in {
-            EventType.SENSITIVE_PAYLOAD_ACCESSED,
-            EventType.CORRECTION_RECORDED,
-            EventType.EVIDENCE_ANCHORED,
-        }
-    ]
-    findings = audited.payload.get("findings", []) if audited is not None else []
-    return PurchaseSummaryResponse(
-        purchase_id=requested.purchase_id,
-        created_at=requested.occurred_at,
-        domain=str(requested.payload.get("domain", "unknown")),
-        request_summary=(
-            dict(requested.payload["normalizedRequest"])
-            if isinstance(requested.payload.get("normalizedRequest"), dict)
-            else {}
-        ),
-        status=lifecycle[-1].type.value,
-        amount_units=(
-            int(claimed.payload["amountUnits"])
-            if claimed is not None and isinstance(claimed.payload.get("amountUnits"), int)
-            else None
-        ),
-        token=(
-            str(claimed.payload["token"])
-            if claimed is not None and isinstance(claimed.payload.get("token"), str)
-            else None
-        ),
-        transaction_hash=(
-            str(settled.payload["transactionHash"])
-            if settled is not None and isinstance(settled.payload.get("transactionHash"), str)
-            else None
-        ),
-        audit_severity=(str(audited.payload.get("severity")) if audited is not None else None),
-        finding_count=len(findings) if isinstance(findings, list) else 0,
-    )
+    return _summary_response(_PROJECTIONS.project(events))
 
 
 def _payment_view_response(view: PaymentView) -> PaymentViewResponse:
@@ -258,6 +331,23 @@ def _payment_intent_response(intent: PaymentIntent) -> PaymentIntentResponse:
         settlement_verified_at=intent.settlement_verified_at,
         failure_reason=intent.failure_reason,
         failed_at=intent.failed_at,
+        reconciliation_attempt_count=intent.reconciliation_attempt_count,
+        reconciliation_first_checked_at=intent.reconciliation_first_checked_at,
+        reconciliation_last_checked_at=intent.reconciliation_last_checked_at,
+        reconciliation_last_outcome=(
+            intent.reconciliation_last_outcome.value
+            if intent.reconciliation_last_outcome is not None
+            else None
+        ),
+        actual_transfer=(
+            intent.actual_transfer.to_payload() if intent.actual_transfer is not None else None
+        ),
+        mismatched_fields=list(intent.mismatched_fields),
+        terminal_outcome_key=intent.terminal_outcome_key,
+        terminal_proof_ref=intent.terminal_proof_ref,
+        terminal_evidence_source=intent.terminal_evidence_source,
+        local_transaction_id=intent.local_transaction_id,
+        no_transfer_reason_code=intent.no_transfer_reason_code,
     )
 
 
@@ -278,6 +368,12 @@ def create_app(container: AppContainer) -> FastAPI:
         await container.repository.close()
 
     app = FastAPI(title="Buyer Agent & Audit Evidence API", version="0.1.0", lifespan=lifespan)
+
+    @app.exception_handler(EvidenceIntegrityError)
+    async def evidence_integrity_handler(
+        _request: Request, exc: EvidenceIntegrityError
+    ) -> Response:
+        return JSONResponse(status_code=409, content={"detail": str(exc)})
 
     async def verified_events(purchase_id: str) -> list[EvidenceEvent]:
         events = await container.repository.list_events(purchase_id)
@@ -343,6 +439,52 @@ def create_app(container: AppContainer) -> FastAPI:
         ):
             return HTTPException(status_code=409, detail=str(exc))
         return HTTPException(status_code=500, detail="unexpected payment error")
+
+    def terminal_error(exc: Exception) -> HTTPException:
+        """Design 18.12.2: stale state/head 409, malformed proof 422."""
+        if isinstance(
+            exc,
+            (PaymentConflictError, EvidenceIntegrityError, EvidenceTransitionError),
+        ):
+            return HTTPException(status_code=409, detail=str(exc))
+        if isinstance(exc, (PaymentEvidenceError, PaymentPolicyError, ValueError)):
+            return HTTPException(status_code=422, detail=str(exc))
+        return HTTPException(status_code=500, detail="unexpected payment error")
+
+    async def terminal_context(
+        body: InternalTerminalProofRequest,
+        *,
+        terminal_state: PaymentIntentState | None = None,
+        attempt_number: int | None = None,
+    ) -> tuple[PaymentIntent, list[EvidenceEvent]]:
+        """M1: every terminal mutation proves the state and head it observed.
+
+        A replay of evidence this purchase already holds skips the compare-and-set
+        precondition, because the service then compares the complete immutable proof and
+        answers with the committed result or a conflict.
+        """
+        intent = await payment_service.get_payment_intent(body.purchase_id)
+        if intent is None:
+            raise HTTPException(status_code=404, detail="payment intent not found")
+        events = await verified_events(body.purchase_id)
+        if not events:
+            raise HTTPException(status_code=404, detail="purchase not found")
+        replayed = terminal_state is not None and intent.state is terminal_state
+        if attempt_number is not None:
+            replayed = replayed or any(
+                event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
+                and event.payload.get("attemptNumber") == attempt_number
+                for event in events
+            )
+        if replayed:
+            return intent, events
+        if intent.state != body.expected_state:
+            raise HTTPException(status_code=409, detail="payment state changed before request")
+        if body.expected_event_count != len(events):
+            raise HTTPException(status_code=409, detail="evidence head changed before request")
+        if body.expected_head_event_hash != events[-1].event_hash:
+            raise HTTPException(status_code=409, detail="evidence head changed before request")
+        return intent, events
 
     async def seller_execution_response(
         execution: SellerExecution,
@@ -778,6 +920,10 @@ def create_app(container: AppContainer) -> FastAPI:
                     purchase_id=body.purchase_id,
                     reason=body.reason,
                     transaction_hash=body.transaction_hash,
+                    local_transaction_id=body.local_transaction_id,
+                    scenario=(
+                        body.scenario.to_core() if body.scenario is not None else None
+                    ),
                 )
             )
         except (
@@ -869,6 +1015,91 @@ def create_app(container: AppContainer) -> FastAPI:
             EvidenceTransitionError,
         ) as exc:
             raise payment_error(exc) from exc
+
+    @app.post(
+        "/internal/evidence/payment-intents/reconciliation-checks",
+        response_model=PaymentIntentResponse,
+    )
+    async def record_reconciliation_check(
+        body: InternalReconciliationCheckRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        require_internal(authorization)
+        await terminal_context(body, attempt_number=body.attempt_number)
+        try:
+            return _payment_intent_response(
+                await payment_service.record_reconciliation_check(
+                    purchase_id=body.purchase_id,
+                    check=body.to_core(),
+                )
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceIntegrityError,
+            EvidenceTransitionError,
+            ValueError,
+        ) as exc:
+            raise terminal_error(exc) from exc
+
+    @app.post(
+        "/internal/evidence/payment-intents/confirm-mismatch",
+        response_model=PaymentIntentResponse,
+    )
+    async def confirm_payment_mismatch(
+        body: InternalConfirmMismatchRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        require_internal(authorization)
+        await terminal_context(
+            body, terminal_state=PaymentIntentState.MISMATCH_CONFIRMED
+        )
+        try:
+            return _payment_intent_response(
+                await payment_service.confirm_mismatch(
+                    purchase_id=body.purchase_id,
+                    proof=body.to_core(),
+                )
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceIntegrityError,
+            EvidenceTransitionError,
+            ValueError,
+        ) as exc:
+            raise terminal_error(exc) from exc
+
+    @app.post(
+        "/internal/evidence/payment-intents/reconcile-no-transfer",
+        response_model=PaymentIntentResponse,
+    )
+    async def reconcile_no_transfer(
+        body: InternalReconcileNoTransferRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        require_internal(authorization)
+        await terminal_context(
+            body, terminal_state=PaymentIntentState.RECONCILED_NO_TRANSFER
+        )
+        try:
+            return _payment_intent_response(
+                await payment_service.reconcile_no_transfer(
+                    purchase_id=body.purchase_id,
+                    proof=body.to_core(),
+                )
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceIntegrityError,
+            EvidenceTransitionError,
+            ValueError,
+        ) as exc:
+            raise terminal_error(exc) from exc
 
     @app.post(
         "/internal/evidence/purchases/{purchase_id}/delivery",
@@ -1265,11 +1496,12 @@ def create_app(container: AppContainer) -> FastAPI:
         events = await verified_events(purchase_id)
         if not events or events[0].actor.get("id") != owner.lower():
             raise HTTPException(status_code=404)
-        audit = _audit_response(await audit_service.audit(purchase_id))
+        # Read-only: the persisted audit reader parses evidence and never appends.
+        persisted = _AUDIT_READER.persisted(events)
         return PurchaseDetailResponse(
             summary=_summary(events),
             events=[_event_response(event) for event in events],
-            audit=audit,
+            audit=_audit_response(persisted) if persisted is not None else None,
         )
 
     @app.get("/audit-alerts", response_model=list[AuditAlertResponse])
@@ -1279,7 +1511,10 @@ def create_app(container: AppContainer) -> FastAPI:
         owner = require_owner(pbl_session)
         alerts: list[AuditAlertResponse] = []
         for events in await owner_purchase_events(owner):
-            report = await audit_service.audit(events[0].purchase_id)
+            report = _AUDIT_READER.persisted(events)
+            if report is None:
+                continue
+            projection = _PROJECTIONS.project(events)
             alerts.extend(
                 AuditAlertResponse(
                     purchase_id=report.purchase_id,
@@ -1289,7 +1524,14 @@ def create_app(container: AppContainer) -> FastAPI:
                     title=finding.title,
                     detail=finding.detail,
                     evidence_refs=list(finding.evidence_refs),
-                    authority=finding.authority,
+                    authority=finding.authority.value,
+                    rule_id=finding.rule_id,
+                    ruleset_version=finding.ruleset_version,
+                    expected=finding.expected,
+                    observed=finding.observed,
+                    mismatched_fields=list(finding.mismatched_fields),
+                    evidence_source=projection.evidence_source,
+                    scenario=_scenario_response(projection.scenario),
                 )
                 for finding in report.findings
             )
@@ -1578,15 +1820,21 @@ def create_app(container: AppContainer) -> FastAPI:
             raise HTTPException(status_code=404)
         return [_event_response(event) for event in events]
 
-    @app.get(
-        "/purchases/{purchase_id}/sensitive/{payload_id}",
+    @app.post(
+        "/purchases/{purchase_id}/sensitive/{payload_id}/access",
         response_model=SensitivePayloadResponse,
+        status_code=201,
     )
-    async def read_sensitive(
+    async def access_sensitive(
         purchase_id: str,
         payload_id: str,
         pbl_session: str | None = Cookie(default=None),
     ) -> SensitivePayloadResponse:
+        """H4: reading sensitive material is an explicit mutation, never a GET.
+
+        Every read of an encrypted payload must leave an append-only access record, so
+        this operation is a POST and the GET/read contract stays strictly zero-write.
+        """
         owner = require_owner(pbl_session)
         events = await verified_events(purchase_id)
         if not events or events[0].actor.get("id") != owner.lower():

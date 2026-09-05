@@ -4,7 +4,6 @@ import asyncio
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
-from typing import Literal
 
 from buyer_audit_api.core.errors import (
     EvidenceIntegrityError,
@@ -14,6 +13,7 @@ from buyer_audit_api.core.errors import (
 )
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
+    TERMINAL_PAYMENT_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceHead,
@@ -21,7 +21,13 @@ from buyer_audit_api.core.models import (
     SensitivePayload,
     WalletBinding,
 )
-from buyer_audit_api.core.payment import PaymentIntent, PaymentIntentState, WalletPolicy
+from buyer_audit_api.core.payment import (
+    ConfirmedOutflow,
+    PaymentIntent,
+    PaymentIntentState,
+    ReservationAction,
+    WalletPolicy,
+)
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 
@@ -60,6 +66,7 @@ class InMemoryEvidenceRepository:
         self._wallet_policies: dict[tuple[str, str, str], WalletPolicy] = {}
         self._payment_intents: dict[str, PaymentIntent] = {}
         self._seller_executions: dict[str, SellerExecution] = {}
+        self._confirmed_outflows: list[ConfirmedOutflow] = []
         self._lock = asyncio.Lock()
 
     async def ensure_indexes(self) -> None:
@@ -208,6 +215,8 @@ class InMemoryEvidenceRepository:
             EventType.PAYMENT_RECONCILIATION_REQUIRED,
             EventType.PAYMENT_SETTLED,
             EventType.PAYMENT_FAILED,
+            EventType.PAYMENT_MISMATCH_CONFIRMED,
+            EventType.PAYMENT_RECONCILED_NO_TRANSFER,
             EventType.EVIDENCE_ANCHORED,
             EventType.REPUTATION_RECORDED,
             EventType.DELIVERED,
@@ -215,6 +224,27 @@ class InMemoryEvidenceRepository:
         }
         if event_type in singleton_types and any(event.type == event_type for event in current):
             raise EvidenceTransitionError(f"duplicate singleton event: {event_type.value}")
+        # unique_phase6_terminal_outcome: one terminal outcome per purchase, any terminal type.
+        outcome_key = payload.get("terminalOutcomeKey")
+        if outcome_key is not None and any(
+            event.payload.get("terminalOutcomeKey") == outcome_key
+            for event in current
+            if event.type in TERMINAL_PAYMENT_EVENT_TYPES
+        ):
+            raise EvidenceTransitionError("duplicate terminal outcome key")
+        # unique_phase6_reconciliation_attempt and unique_phase6_rejected_attempt.
+        for attempt_key, attempt_type in (
+            ("attemptNumber", EventType.PAYMENT_RECONCILIATION_CHECKED),
+            ("attemptId", EventType.PAYMENT_ATTEMPT_REJECTED),
+        ):
+            if event_type is not attempt_type:
+                continue
+            attempt_value = payload.get(attempt_key)
+            if attempt_value is not None and any(
+                event.type == attempt_type and event.payload.get(attempt_key) == attempt_value
+                for event in current
+            ):
+                raise EvidenceTransitionError(f"duplicate {attempt_type.value} {attempt_key}")
         previous_hash = current[-1].event_hash if current else None
         event = create_event(
             purchase_id=purchase_id,
@@ -413,7 +443,8 @@ class InMemoryEvidenceRepository:
         evidence_refs: tuple[str, ...],
         expected_event_count: int,
         expected_head_event_hash: str,
-        reservation_action: Literal["hold", "settle", "release"],
+        reservation_action: ReservationAction,
+        confirmed_outflow: ConfirmedOutflow | None = None,
     ) -> PaymentIntent:
         async with self._lock:
             existing = self._payment_intents.get(next_intent.purchase_id)
@@ -429,7 +460,16 @@ class InMemoryEvidenceRepository:
                 and existing.transaction_hash is None
                 and next_intent.transaction_hash is not None
             )
-            if existing.state == next_intent.state and not same_state_submission_binding:
+            same_state_reconciliation_check = (
+                event_type == EventType.PAYMENT_RECONCILIATION_CHECKED
+                and existing.state == PaymentIntentState.RECONCILIATION_REQUIRED
+                and next_intent.state == PaymentIntentState.RECONCILIATION_REQUIRED
+                and next_intent.reconciliation_attempt_count
+                == existing.reconciliation_attempt_count + 1
+            )
+            if existing.state == next_intent.state and not (
+                same_state_submission_binding or same_state_reconciliation_check
+            ):
                 matching = [event for event in current if event.type == event_type]
                 if existing == next_intent and len(matching) == 1:
                     return deepcopy(existing)
@@ -470,18 +510,38 @@ class InMemoryEvidenceRepository:
             policy = self._wallet_policies.get(key)
             if policy is None:
                 raise PaymentPolicyError("wallet policy is missing during transition")
-            if reservation_action in ("settle", "release"):
+            if reservation_action in ("settle", "release", "replace_with_actual"):
                 if policy.reserved_units < existing.amount_units:
                     raise PaymentConflictError("reserved budget is insufficient")
+                actual_spend = 0
+                if reservation_action == "settle":
+                    actual_spend = existing.amount_units
+                elif reservation_action == "replace_with_actual":
+                    if confirmed_outflow is None or confirmed_outflow.token != policy.token:
+                        raise PaymentConflictError(
+                            "replace_with_actual requires a same-token confirmed outflow"
+                        )
+                    actual_spend = confirmed_outflow.amount_units
                 policy = replace(
                     policy,
                     reserved_units=policy.reserved_units - existing.amount_units,
-                    spent_units=(
-                        policy.spent_units + existing.amount_units
-                        if reservation_action == "settle"
-                        else policy.spent_units
-                    ),
+                    spent_units=policy.spent_units + actual_spend,
                 )
+            if confirmed_outflow is not None:
+                if any(
+                    item.transaction_ref == confirmed_outflow.transaction_ref
+                    and item.purchase_id != confirmed_outflow.purchase_id
+                    for item in self._confirmed_outflows
+                ):
+                    raise PaymentConflictError(
+                        "confirmed outflow transaction is already recorded"
+                    )
+                if any(
+                    item.terminal_outcome_key == confirmed_outflow.terminal_outcome_key
+                    or item.transaction_ref == confirmed_outflow.transaction_ref
+                    for item in self._confirmed_outflows
+                ):
+                    raise PaymentConflictError("confirmed outflow is already recorded")
             if event_type == EventType.PAYMENT_SETTLED:
                 transaction_hash = payload.get("transactionHash")
                 if any(
@@ -491,10 +551,20 @@ class InMemoryEvidenceRepository:
                     if prior.type == EventType.PAYMENT_SETTLED
                 ):
                     raise PaymentConflictError("transaction hash is already settled")
+            if confirmed_outflow is not None:
+                self._confirmed_outflows.append(confirmed_outflow)
             self._wallet_policies[key] = policy
             self._payment_intents[next_intent.purchase_id] = next_intent
             self._commit_event_locked(event, current, heads)
             return deepcopy(next_intent)
+
+    async def list_confirmed_outflows(self, purchase_id: str) -> list[ConfirmedOutflow]:
+        async with self._lock:
+            return [
+                deepcopy(item)
+                for item in self._confirmed_outflows
+                if item.purchase_id == purchase_id
+            ]
 
     async def list_events(self, purchase_id: str) -> list[EvidenceEvent]:
         async with self._lock:

@@ -1,20 +1,41 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import os
+import re
 import uuid
+from collections.abc import AsyncIterator
 from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
 from pymongo import AsyncMongoClient
+from pymongo.errors import DuplicateKeyError
 
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
-from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
-from buyer_audit_api.core.errors import EvidenceIntegrityError
+from buyer_audit_api.adapters.repositories.mongo import (
+    _PHASE6_SINGLETON_INDEXES,
+    MongoEvidenceRepository,
+)
+from buyer_audit_api.core.errors import EvidenceIntegrityError, PaymentConflictError
 from buyer_audit_api.core.events import verify_event_chain
-from buyer_audit_api.core.models import EventType
-from buyer_audit_api.core.payment import PaymentIntentState, PaymentService, WalletPolicy
+from buyer_audit_api.core.models import (
+    EventType,
+    EvidenceSource,
+    LocalTransactionRef,
+    ScenarioMetadata,
+)
+from buyer_audit_api.core.payment import (
+    ActualTransfer,
+    ConfirmedMismatchProof,
+    NoTransferProof,
+    PaymentIntentState,
+    PaymentService,
+    ReconciliationCheck,
+    ReconciliationVerifierOutcome,
+    WalletPolicy,
+)
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 pytestmark = pytest.mark.mongo
@@ -571,3 +592,720 @@ async def test_real_mongo_atomic_nonce_hash_chain_and_ciphertext(mongo_uri, cloc
         await repository.close()
         await cleanup.drop_database(database)
         await cleanup.close()
+
+
+PHASE6_OWNER = "0xowner-phase6"
+PHASE6_BUYER = "0xbuyer-phase6"
+PHASE6_TOKEN = "0xtoken-phase6"
+PHASE6_SELLER = "0xseller-phase6"
+PHASE6_OTHER_TOKEN = "0xtoken-phase6-alt"
+PHASE6_RUN_ID = "a" * 32
+PHASE6_LOCAL_TX = f"localtx:{PHASE6_RUN_ID}:payment:000001"
+PHASE6_SECOND_LOCAL_TX = f"localtx:{PHASE6_RUN_ID}:payment:000002"
+PHASE6_EVM_TX = "0x" + "ab" * 32
+PHASE6_SCENARIO = ScenarioMetadata(
+    run_id=PHASE6_RUN_ID,
+    scenario_id="P6-A04-WRONG-AMOUNT",
+    catalog_version="phase6.v1",
+    catalog_hash="sha256:" + "cd" * 32,
+)
+
+
+async def seed_phase6_reconciliation(
+    repository: MongoEvidenceRepository,
+    clock,
+    purchase_id: str,
+    *,
+    bind_wallet: bool = True,
+    configure_policy: bool = True,
+    daily_limit_units: int = 1_000_000,
+    local_transaction_id: str = PHASE6_LOCAL_TX,
+) -> PaymentService:
+    if bind_wallet:
+        await repository.bind_buyer_wallet(
+            owner_address=PHASE6_OWNER,
+            buyer_wallet_address=PHASE6_BUYER,
+            bound_at=clock.now(),
+        )
+    if configure_policy:
+        await repository.put_wallet_policy(
+            WalletPolicy(
+                buyer_wallet_address=PHASE6_BUYER,
+                policy_date=clock.now().date().isoformat(),
+                token=PHASE6_TOKEN,
+                per_transaction_limit_units=250_000,
+                daily_limit_units=daily_limit_units,
+            )
+        )
+    await repository.append_event(
+        purchase_id=purchase_id,
+        event_type=EventType.REQUESTED,
+        occurred_at=clock.now(),
+        actor={"id": PHASE6_OWNER, "type": "user"},
+        payload={
+            "budgetUnits": 250_000,
+            "domain": "fake",
+            "normalizedRequest": {"value": "phase6"},
+            "policy": {},
+        },
+    )
+    await repository.append_event(
+        purchase_id=purchase_id,
+        event_type=EventType.QUOTED,
+        occurred_at=clock.now(),
+        actor={"id": "buyer-orchestrator", "type": "service"},
+        payload={
+            "signedQuotes": [
+                {
+                    "quote_id": f"quote-{purchase_id}",
+                    "purchase_id": purchase_id,
+                    "seller_agent_id": "seller-phase6",
+                    "provider_id": "gemini",
+                    "model_id": "model-a",
+                    "model_version": "v1",
+                    "amount_units": 100_000,
+                    "token": PHASE6_TOKEN,
+                    "pay_to": PHASE6_SELLER,
+                    "available": True,
+                    "expires_at": clock.now().replace(year=2027).isoformat(),
+                    "signer_address": PHASE6_SELLER,
+                    "chain_id": 84532,
+                    "verifying_contract": "0xquotecontract",
+                }
+            ],
+            "quoteIdentityEvidence": [
+                {
+                    "quoteId": f"quote-{purchase_id}",
+                    "erc8004AgentId": "1",
+                    "identityVerified": True,
+                }
+            ],
+        },
+    )
+    await repository.append_event(
+        purchase_id=purchase_id,
+        event_type=EventType.DECIDED,
+        occurred_at=clock.now(),
+        actor={"id": "buyer-agent", "type": "agent"},
+        payload={"winner": {"quote_id": f"quote-{purchase_id}"}},
+    )
+    service = PaymentService(repository=repository, clock=clock)
+    await service.claim(purchase_id)
+    await service.authorize(
+        purchase_id=purchase_id,
+        authorization_hash="0xauthorization",
+        signature="0xsignature",
+    )
+    await service.require_reconciliation(
+        purchase_id=purchase_id,
+        reason="synthetic facilitator returned a local submission",
+        local_transaction_id=local_transaction_id,
+        scenario=PHASE6_SCENARIO,
+    )
+    return service
+
+
+def phase6_check(attempt: int, outcome: ReconciliationVerifierOutcome, *, tag: str = "0"):
+    return ReconciliationCheck(
+        attempt_number=attempt,
+        checked_at=datetime(2026, 9, 4, 12, attempt, tzinfo=UTC),
+        checked_chain_id=84532,
+        submission_ref=PHASE6_LOCAL_TX,
+        verifier_outcome=outcome,
+        finality_confirmations=3,
+        proof_ref=f"sha256:{'1' * 62}{tag}{attempt}",
+        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
+        receipt_status=1,
+        block_number=46_349_821,
+        scenario=PHASE6_SCENARIO,
+    )
+
+
+def phase6_mismatch(
+    *,
+    amount_units: int = 200_000,
+    token: str = PHASE6_TOKEN,
+    local_tx_id: str = PHASE6_LOCAL_TX,
+    proof_ref: str = "sha256:" + "22" * 32,
+):
+    return ConfirmedMismatchProof(
+        actual_transfer=ActualTransfer(
+            amount_units=amount_units,
+            token=token,
+            from_address=PHASE6_BUYER,
+            to_address=PHASE6_SELLER,
+        ),
+        transaction_ref=LocalTransactionRef(id=local_tx_id, run_id=PHASE6_RUN_ID),
+        proof_ref=proof_ref,
+        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
+        scenario=PHASE6_SCENARIO,
+    )
+
+
+def phase6_no_transfer(*, attempts: int = 3):
+    return NoTransferProof(
+        reason_code="SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
+        checked_chain_id=84532,
+        attempt_count=attempts,
+        first_checked_at=datetime(2026, 9, 4, 12, 1, tzinfo=UTC),
+        last_checked_at=datetime(2026, 9, 4, 12, 9, tzinfo=UTC),
+        authorization_nonce_hash="sha256:" + "44" * 32,
+        finality_evidence={"confirmations": 3},
+        proof_ref="sha256:" + "33" * 32,
+        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
+        submission_ref=PHASE6_LOCAL_TX,
+        scenario=PHASE6_SCENARIO,
+    )
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_phase6_indexes_are_partial_and_old_documents_stay_readable(
+    mongo_uri, clock
+) -> None:
+    database = f"pbl_phase6_index_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    try:
+        # Pre-existing rows without any Phase 6 payload must not block index creation.
+        await cleanup[database]["purchaseEvents"].insert_many(
+            [
+                {
+                    "actor": {"id": "legacy", "type": "service"},
+                    "eventHash": f"sha256:{index:064d}",
+                    "eventId": f"legacy-{index}",
+                    "evidenceRefs": [],
+                    "occurredAt": clock.now(),
+                    "payload": {"transactionHash": "0x" + f"{index:064x}"},
+                    "payloadHash": f"sha256:{index:064d}",
+                    "previousEventHash": None,
+                    "purchaseId": f"legacy-purchase-{index}",
+                    "sequence": 1,
+                    "type": EventType.PAYMENT_SETTLED.value,
+                }
+                for index in (1, 2)
+            ]
+        )
+        await cleanup[database]["paymentIntents"].insert_one(
+            {
+                "purchaseId": "legacy-permit2-purchase",
+                "buyerWalletAddress": PHASE6_BUYER,
+                "policyDate": "2026-01-01",
+                "quoteId": "legacy-quote",
+                "decisionEventHash": "sha256:" + "ee" * 32,
+                "amountUnits": 100_000,
+                "token": PHASE6_TOKEN,
+                "payTo": PHASE6_SELLER,
+                "permit2Nonce": "123456789",
+                "transferMethod": "permit2",
+                "state": PaymentIntentState.SETTLED.value,
+                "claimedAt": clock.now(),
+                "transactionHash": "0x" + "32" * 32,
+            }
+        )
+
+        # M2: the preflight reports duplicates and never writes, before any unique index.
+        preflight = await repository.phase6_index_collision_report()
+        assert preflight == []
+        before = await cleanup[database]["purchaseEvents"].count_documents({})
+        legacy_row = {
+            "actor": {"id": "legacy", "type": "service"},
+            "eventHash": "sha256:" + "cc" * 32,
+            "evidenceRefs": [],
+            "occurredAt": clock.now(),
+            "payloadHash": "sha256:" + "cc" * 32,
+            "previousEventHash": None,
+        }
+        # One shared terminal outcome key across two purchases: exactly what the new
+        # `payload.terminalOutcomeKey` unique index forbids, and legal under the old ones.
+        outcome_rows = [
+            {
+                **legacy_row,
+                "eventId": f"legacy-outcome-{index}",
+                "payload": {"terminalOutcomeKey": "terminal:shared-legacy"},
+                "purchaseId": f"legacy-outcome-purchase-{index}",
+                "sequence": 1,
+                "type": EventType.PAYMENT_SETTLED.value,
+            }
+            for index in (1, 2)
+        ]
+        # Two events of each newly introduced singleton type on a single purchase.
+        singleton_types = [
+            event_type
+            for event_type in (
+                EventType.PAYMENT_MISMATCH_CONFIRMED,
+                EventType.PAYMENT_RECONCILED_NO_TRANSFER,
+            )
+            for _ in (1, 2)
+        ]
+        singleton_rows = [
+            {
+                **legacy_row,
+                "eventId": f"legacy-singleton-{offset}",
+                "payload": {},
+                "purchaseId": "legacy-singleton-purchase",
+                "sequence": offset,
+                "type": event_type.value,
+            }
+            for offset, event_type in enumerate(singleton_types, start=1)
+        ]
+        await cleanup[database]["purchaseEvents"].insert_many(
+            [*outcome_rows, *singleton_rows]
+        )
+        collisions = await repository.phase6_index_collision_report()
+        reported = {item["index"]: item for item in collisions}
+        assert reported["unique_phase6_terminal_outcome"]["key"] == {
+            "payload_terminalOutcomeKey": "terminal:shared-legacy"
+        }
+        assert reported["unique_phase6_terminal_outcome"]["count"] == 2
+        # M2: the two new per-purchase singletons are covered, not silently created.
+        for name in (
+            "unique_payment_mismatch_per_purchase",
+            "unique_payment_no_transfer_per_purchase",
+        ):
+            assert reported[name]["key"] == {"purchaseId": "legacy-singleton-purchase"}
+            assert reported[name]["count"] == 2
+        assert await cleanup[database]["purchaseEvents"].count_documents({}) == before + 6
+
+        # M2: ensure_indexes must refuse to create a new unique index over collisions, and
+        # it must refuse before creating any of them.
+        with pytest.raises(EvidenceIntegrityError, match="preflight found existing collisions"):
+            await repository.ensure_indexes()
+        created = await cleanup[database]["purchaseEvents"].index_information()
+        for name in (
+            "unique_payment_mismatch_per_purchase",
+            "unique_payment_no_transfer_per_purchase",
+            "unique_phase6_terminal_outcome",
+            "unique_phase6_reconciliation_attempt",
+            "unique_phase6_rejected_attempt",
+        ):
+            assert name not in created, f"{name} was created before the preflight"
+
+        await cleanup[database]["purchaseEvents"].delete_many(
+            {
+                "eventId": {
+                    "$in": [
+                        str(row["eventId"])
+                        for row in (*outcome_rows, *singleton_rows)
+                    ]
+                }
+            }
+        )
+        await repository.ensure_indexes()
+        await repository.ensure_indexes()
+
+        indexes = await cleanup[database]["purchaseEvents"].index_information()
+        assert indexes["unique_phase6_terminal_outcome"]["key"] == [
+            ("payload.terminalOutcomeKey", 1)
+        ]
+        assert indexes["unique_phase6_terminal_outcome"]["unique"] is True
+        assert indexes["unique_phase6_terminal_outcome"]["partialFilterExpression"] == {
+            "type": {
+                "$in": [
+                    EventType.PAYMENT_SETTLED.value,
+                    EventType.PAYMENT_FAILED.value,
+                    EventType.PAYMENT_MISMATCH_CONFIRMED.value,
+                    EventType.PAYMENT_RECONCILED_NO_TRANSFER.value,
+                ]
+            },
+            "payload.terminalOutcomeKey": {"$type": "string"},
+        }
+        assert indexes["unique_phase6_reconciliation_attempt"]["key"] == [
+            ("purchaseId", 1),
+            ("type", 1),
+            ("payload.attemptNumber", 1),
+        ]
+        assert indexes["unique_phase6_rejected_attempt"]["key"] == [
+            ("purchaseId", 1),
+            ("type", 1),
+            ("payload.attemptId", 1),
+        ]
+        assert "unique_payment_mismatch_per_purchase" in indexes
+        assert "unique_payment_no_transfer_per_purchase" in indexes
+        outflow_indexes = await cleanup[database]["confirmedOutflows"].index_information()
+        assert outflow_indexes["unique_confirmed_outflow_terminal"]["unique"] is True
+        assert outflow_indexes["unique_confirmed_outflow_transaction"][
+            "partialFilterExpression"
+        ] == {"transactionRef.kind": "EVM", "transactionRef.hash": {"$type": "string"}}
+        assert outflow_indexes["unique_confirmed_outflow_transaction_local"]["key"] == [
+            ("transactionRef.runId", 1),
+            ("transactionRef.id", 1),
+        ]
+
+        legacy_intent = await repository.get_payment_intent("legacy-permit2-purchase")
+        assert legacy_intent is not None
+        assert legacy_intent.transfer_method == "permit2"
+        assert legacy_intent.reconciliation_attempt_count == 0
+        assert legacy_intent.reconciliation_last_outcome is None
+        assert legacy_intent.actual_transfer is None
+        assert legacy_intent.mismatched_fields == ()
+        assert legacy_intent.terminal_outcome_key is None
+        assert legacy_intent.terminal_evidence_source is None
+        assert legacy_intent.local_transaction_id is None
+        legacy_service = PaymentService(repository=repository, clock=clock)
+        await repository.append_event(
+            purchase_id="legacy-permit2-purchase",
+            event_type=EventType.CORRECTION_RECORDED,
+            occurred_at=clock.now(),
+            actor={"id": "legacy", "type": "service"},
+            payload={"note": "historical evidence"},
+        )
+        with pytest.raises(PaymentConflictError, match="read-only"):
+            await legacy_service.confirm_mismatch(
+                purchase_id="legacy-permit2-purchase", proof=phase6_mismatch()
+            )
+        with pytest.raises(PaymentConflictError, match="read-only"):
+            await legacy_service.reconcile_no_transfer(
+                purchase_id="legacy-permit2-purchase", proof=phase6_no_transfer()
+            )
+        assert (
+            await cleanup[database]["purchaseEvents"].count_documents(
+                {
+                    "purchaseId": "legacy-permit2-purchase",
+                    "type": {
+                        "$in": [
+                            EventType.PAYMENT_MISMATCH_CONFIRMED.value,
+                            EventType.PAYMENT_RECONCILED_NO_TRANSFER.value,
+                        ]
+                    },
+                }
+            )
+            == 0
+        )
+        assert (
+            await cleanup[database]["confirmedOutflows"].count_documents(
+                {"purchaseId": "legacy-permit2-purchase"}
+            )
+            == 0
+        )
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_terminal_outcome_is_exclusive_under_concurrency(
+    mongo_uri, clock
+) -> None:
+    database = f"pbl_phase6_terminal_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    purchase_id = "purchase-phase6-race"
+    try:
+        await repository.ensure_indexes()
+        service = await seed_phase6_reconciliation(repository, clock, purchase_id)
+        for attempt in (1, 2, 3):
+            await service.record_reconciliation_check(
+                purchase_id=purchase_id,
+                check=phase6_check(
+                    attempt,
+                    ReconciliationVerifierOutcome.SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER,
+                ),
+            )
+        # A local submission can only be closed by synthetic terminal proofs, so the
+        # third racer is a competing mismatch rather than a chain-shaped failure.
+        results = await asyncio.gather(
+            service.confirm_mismatch(purchase_id=purchase_id, proof=phase6_mismatch()),
+            service.reconcile_no_transfer(
+                purchase_id=purchase_id, proof=phase6_no_transfer()
+            ),
+            service.confirm_mismatch(
+                purchase_id=purchase_id,
+                proof=phase6_mismatch(
+                    amount_units=150_000, proof_ref="sha256:" + "77" * 32
+                ),
+            ),
+            return_exceptions=True,
+        )
+
+        assert len([item for item in results if not isinstance(item, BaseException)]) == 1
+        terminal_documents = await cleanup[database]["purchaseEvents"].count_documents(
+            {
+                "purchaseId": purchase_id,
+                "type": {
+                    "$in": [
+                        EventType.PAYMENT_SETTLED.value,
+                        EventType.PAYMENT_FAILED.value,
+                        EventType.PAYMENT_MISMATCH_CONFIRMED.value,
+                        EventType.PAYMENT_RECONCILED_NO_TRANSFER.value,
+                    ]
+                },
+            }
+        )
+        assert terminal_documents == 1
+        assert (
+            await cleanup[database]["purchaseEvents"].count_documents(
+                {"purchaseId": purchase_id, "payload.terminalOutcomeKey": {"$exists": True}}
+            )
+            == 1
+        )
+        events = await repository.list_events(purchase_id)
+        head = await repository.get_event_head(purchase_id)
+        assert head is not None
+        verify_event_chain(
+            events,
+            expected_event_count=head.event_count,
+            expected_head_event_hash=head.head_event_hash,
+        )
+        policy = await repository.get_wallet_policy(
+            buyer_wallet_address=PHASE6_BUYER,
+            policy_date=clock.now().date().isoformat(),
+            token=PHASE6_TOKEN,
+        )
+        assert policy is not None
+        assert policy.reserved_units == 0
+        outflows = await repository.list_confirmed_outflows(purchase_id)
+        assert len(outflows) <= 1
+
+        with pytest.raises(PaymentConflictError):
+            await service.record_reconciliation_check(
+                purchase_id=purchase_id,
+                check=phase6_check(4, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND),
+            )
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_reconciliation_attempts_and_actual_spend_are_exact(
+    mongo_uri, clock
+) -> None:
+    database = f"pbl_phase6_spend_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    purchase_id = "purchase-phase6-spend"
+    wrong_token_purchase_id = "purchase-phase6-wrong-token"
+    try:
+        await repository.ensure_indexes()
+        service = await seed_phase6_reconciliation(repository, clock, purchase_id)
+
+        attempts = await asyncio.gather(
+            *(
+                service.record_reconciliation_check(
+                    purchase_id=purchase_id,
+                    check=phase6_check(
+                        1, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND
+                    ),
+                )
+                for _ in range(8)
+            ),
+            return_exceptions=True,
+        )
+        assert any(not isinstance(item, BaseException) for item in attempts)
+        assert (
+            await cleanup[database]["purchaseEvents"].count_documents(
+                {
+                    "purchaseId": purchase_id,
+                    "type": EventType.PAYMENT_RECONCILIATION_CHECKED.value,
+                }
+            )
+            == 1
+        )
+
+        confirmed = await asyncio.gather(
+            *(
+                service.confirm_mismatch(purchase_id=purchase_id, proof=phase6_mismatch())
+                for _ in range(6)
+            )
+        )
+        assert all(
+            item.state is PaymentIntentState.MISMATCH_CONFIRMED for item in confirmed
+        )
+        policy = await repository.get_wallet_policy(
+            buyer_wallet_address=PHASE6_BUYER,
+            policy_date=clock.now().date().isoformat(),
+            token=PHASE6_TOKEN,
+        )
+        assert policy is not None
+        assert policy.reserved_units == 0
+        assert policy.spent_units == 200_000
+        outflows = await repository.list_confirmed_outflows(purchase_id)
+        assert len(outflows) == 1
+        assert outflows[0].amount_units == 200_000
+        assert outflows[0].token == PHASE6_TOKEN
+        assert outflows[0].transaction_ref == LocalTransactionRef(
+            id=PHASE6_LOCAL_TX, run_id=PHASE6_RUN_ID
+        )
+        with pytest.raises(DuplicateKeyError):
+            await cleanup[database]["confirmedOutflows"].insert_one(
+                {
+                    "amountUnits": 1,
+                    "buyerWallet": PHASE6_BUYER,
+                    "policyDate": clock.now().date().isoformat(),
+                    "proofRef": "sha256:" + "99" * 32,
+                    "purchaseId": purchase_id,
+                    "recipient": PHASE6_SELLER,
+                    "terminalOutcomeKey": outflows[0].terminal_outcome_key,
+                    "token": PHASE6_TOKEN,
+                    "transactionRef": {
+                        "evidenceSource": "SYNTHETIC_LOCAL",
+                        "id": PHASE6_LOCAL_TX,
+                        "kind": "LOCAL",
+                        "runId": PHASE6_RUN_ID,
+                    },
+                }
+            )
+
+        wrong_token_service = await seed_phase6_reconciliation(
+            repository,
+            clock,
+            wrong_token_purchase_id,
+            bind_wallet=False,
+            configure_policy=False,
+        )
+        with pytest.raises(PaymentConflictError, match="transaction is already recorded"):
+            await wrong_token_service.confirm_mismatch(
+                purchase_id=wrong_token_purchase_id,
+                proof=phase6_mismatch(amount_units=100_000, token=PHASE6_OTHER_TOKEN),
+            )
+        # A purchase can only be closed by the submission it actually holds, so the
+        # wrong-token close needs its own submitted local transaction.
+        other_token_service = await seed_phase6_reconciliation(
+            repository,
+            clock,
+            "purchase-phase6-other-token",
+            bind_wallet=False,
+            configure_policy=False,
+            local_transaction_id=PHASE6_SECOND_LOCAL_TX,
+        )
+        await other_token_service.confirm_mismatch(
+            purchase_id="purchase-phase6-other-token",
+            proof=phase6_mismatch(
+                amount_units=100_000,
+                token=PHASE6_OTHER_TOKEN,
+                local_tx_id=PHASE6_SECOND_LOCAL_TX,
+                proof_ref="sha256:" + "55" * 32,
+            ),
+        )
+        quoted_policy = await repository.get_wallet_policy(
+            buyer_wallet_address=PHASE6_BUYER,
+            policy_date=clock.now().date().isoformat(),
+            token=PHASE6_TOKEN,
+        )
+        assert quoted_policy is not None
+        # The rejected purchase is still open, so its quoted reservation is still held.
+        assert quoted_policy.reserved_units == 100_000
+        assert quoted_policy.spent_units == 200_000
+        assert (
+            await repository.get_wallet_policy(
+                buyer_wallet_address=PHASE6_BUYER,
+                policy_date=clock.now().date().isoformat(),
+                token=PHASE6_OTHER_TOKEN,
+            )
+            is None
+        )
+        assert await repository.list_confirmed_outflows(wrong_token_purchase_id) == []
+        other_token_outflows = await repository.list_confirmed_outflows(
+            "purchase-phase6-other-token"
+        )
+        assert len(other_token_outflows) == 1
+        assert other_token_outflows[0].token == PHASE6_OTHER_TOKEN
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()
+
+
+PHASE6_NEW_UNIQUE_INDEXES = (
+    "unique_payment_mismatch_per_purchase",
+    "unique_payment_no_transfer_per_purchase",
+    "unique_phase6_terminal_outcome",
+    "unique_phase6_reconciliation_attempt",
+    "unique_phase6_rejected_attempt",
+    "unique_confirmed_outflow_terminal",
+    "unique_confirmed_outflow_transaction",
+    "unique_confirmed_outflow_transaction_local",
+)
+
+
+@pytest.mark.asyncio
+async def test_preflight_precedes_every_new_phase6_unique_index() -> None:
+    """M2: no newly introduced unique index may be created before the collision report.
+
+    This runs without a server: the repository's collections are replaced by recorders, so
+    the assertion is about call order in `ensure_indexes()` itself.
+    """
+    calls: list[str] = []
+
+    class RecordingCollection:
+        def __init__(self, label: str) -> None:
+            self._label = label
+
+        async def index_information(self) -> dict[str, object]:
+            return {}
+
+        async def drop_index(self, _name: str) -> None:
+            return None
+
+        async def create_index(self, _keys: object, **kwargs: object) -> str:
+            name = str(kwargs.get("name") or f"{self._label}:unnamed")
+            calls.append(f"index:{name}")
+            return name
+
+        async def aggregate(self, _pipeline: object) -> AsyncIterator[dict[str, object]]:
+            calls.append("preflight")
+
+            async def empty() -> AsyncIterator[dict[str, object]]:
+                if False:  # pragma: no cover - an empty async iterator
+                    yield {}
+
+            return empty()
+
+    class RecordingAdmin:
+        async def command(self, _payload: object) -> dict[str, object]:
+            return {"ok": 1}
+
+    class RecordingClient:
+        admin = RecordingAdmin()
+
+    repository = MongoEvidenceRepository.__new__(MongoEvidenceRepository)
+    repository._client = RecordingClient()  # type: ignore[assignment]
+    for attribute, label in (
+        ("_users", "users"),
+        ("_events", "events"),
+        ("_heads", "evidenceHeads"),
+        ("_sensitive", "sensitive"),
+        ("_wallet_policies", "walletPolicies"),
+        ("_payment_intents", "paymentIntents"),
+        ("_seller_executions", "sellerExecutions"),
+        ("_confirmed_outflows", "confirmedOutflows"),
+    ):
+        setattr(repository, attribute, RecordingCollection(label))
+
+    await repository.ensure_indexes()
+
+    assert "preflight" in calls
+    # Every aggregation of the report happens before any new unique index is created.
+    first_new_index = min(
+        calls.index(f"index:{name}")
+        for name in PHASE6_NEW_UNIQUE_INDEXES
+        if f"index:{name}" in calls
+    )
+    assert calls.index("preflight") < first_new_index
+    assert calls.count("preflight") == 1 or all(
+        position < first_new_index
+        for position, item in enumerate(calls)
+        if item == "preflight"
+    )
+    # All eight new unique indexes are still created after the preflight passes.
+    for name in PHASE6_NEW_UNIQUE_INDEXES:
+        assert f"index:{name}" in calls, name
+
+
+def test_collision_report_covers_every_new_phase6_unique_index() -> None:
+    """M2: the report's coverage cannot drift from the set of new unique indexes."""
+    source = inspect.getsource(MongoEvidenceRepository.ensure_indexes)
+    created = set(re.findall(r"name=\"(unique_[a-z0-9_]+)\"", source))
+    created.update(
+        name for _event_type, name in _PHASE6_SINGLETON_INDEXES
+    )
+    report_source = inspect.getsource(
+        MongoEvidenceRepository.phase6_index_collision_report
+    )
+    covered = set(re.findall(r"\"(unique_[a-z0-9_]+)\"", report_source))
+    covered.update(name for _event_type, name in _PHASE6_SINGLETON_INDEXES)
+
+    assert set(PHASE6_NEW_UNIQUE_INDEXES) <= created
+    assert set(PHASE6_NEW_UNIQUE_INDEXES) <= covered
