@@ -332,3 +332,34 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   7 duplicate logical conflict events instead of converging to one.
 - Canonical report: `.agent/outbox/WO-P6-02-review-r2.md`. Verdict: `REJECT`; keep coder branch
   unintegrated and preserve all history for a bounded correction.
+
+## 2026-09-05 18:22 KST — reviewer — WO-P6-02 correction round 3
+
+### Boundary and verification
+- Independently reviewed Coder `wo/P6-02` exact tip
+  `ce6b403833c1e58240dfd02f9f286ac32ae97c6a` against canonical packet base
+  `66e72560a3ebbf06c18865d84a0712228d4ea1d7`; merge-base matched exactly and the Coder
+  worktree stayed clean.
+- Read the WO, both preserved rejection reports, Coder r3 evidence, canonical Phase 6
+  requirements/design/tasks, and the exact base-to-tip source/test diff. Exact diff accounting is
+  35 paths: 30 source/test paths and five append-only agent artifacts.
+- Fixed order passed: Ruff; strict mypy 47 files; focused Python 152; Gateway build; focused Node
+  37/37; native Mongo 10; exact-range/worktree diff checks. Broad non-Mongo 303 and full Gateway
+  88 also passed; legacy/Permit2/read-side focus 7/7 and prior-finding focus 19/19 passed.
+- Exact-base protected diff was zero. Main merge-base showed only older approved Phase 6
+  planning/WO history. No dashboard/scenario/AWS/contracts/tools scope leakage occurred.
+
+### Independent r2 probes and verdict
+- Payment probe rejected identity A→identity B recorded/conflict in both view and claim, rejected
+  a wrong existing fingerprint and mixed branches, isolated Phase 5 recorded-without-decision,
+  and confirmed valid reads had no event/accounting side effect.
+- Gateway/Memory/API probes produced no conflict evidence for eight ordinary/non-payload 409
+  reasons or same fingerprint. Only a real payload mismatch requested one conflict record.
+- Separate `127.0.0.1:27021` replica-set probe converged eight identical conflict calls to one
+  event; deterministic key, unique partial index, collision preflight, duplicate recovery, and a
+  separate logical conflict were verified. Listener/process/temp directories were cleaned.
+- Prior C1/C2/H1-H4/M1/M2 and new R2-H1/R2-H2/H4/R2-M1 are fixed and independently verified.
+  Existing PBLC/ERC-3009/Permit2/Mongo history was not connected to or mutated; no public
+  RPC/provider/facilitator/ERC-8004/AWS/Atlas call occurred.
+- Canonical report: `.agent/outbox/WO-P6-02-review-r3.md`. Verdict: `APPROVE`; integrate only exact
+  reviewed tip `ce6b403833c1e58240dfd02f9f286ac32ae97c6a`.
