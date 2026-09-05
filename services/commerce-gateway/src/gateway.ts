@@ -4,20 +4,25 @@ import type { Address, Hex } from "viem";
 
 import {
   BASE_SEPOLIA_CHAIN_ID,
+  TERMINAL_PAYMENT_INTENT_STATE,
   type Clock,
   type ConfirmedMismatchProof,
   type DecisionSigner,
   type Erc3009Signer,
   type EvidenceApi,
+  type EvmReceiptProof,
   type EvmTransactionRef,
+  type LocalReceiptProof,
   type LocalTransactionRef,
   type NoTransferProof,
   type PaymentIntent,
   type PaymentExecutionResult,
   type PaymentView,
   type QuoteIdentityVerifier,
+  type ReceiptAuthorization,
   type ReceiptProof,
   type ReceiptReader,
+  type ReceiptTransfer,
   type ReconciliationCheck,
   type ReconciliationVerifierOutcome,
   type SellerClient,
@@ -44,6 +49,7 @@ const LOCAL_TRANSACTION_ID_PATTERN =
   /^localtx:[0-9a-f]{32}:(payment|feedback):[0-9]{6}$/;
 const SCENARIO_RUN_ID_PATTERN = /^[0-9a-f]{32}$/;
 const DEFAULT_BOUNDED_RECONCILIATION_ATTEMPTS = 3;
+const DEFAULT_MINIMUM_FINALITY_CONFIRMATIONS = 2;
 
 export class CommerceGatewayError extends Error {
   constructor(message: string) {
@@ -59,10 +65,23 @@ export class TransactionRefError extends Error {
   }
 }
 
-/** Builds the EVM variant, rejecting local identifiers and non-canonical hashes. */
+const EVM_EVIDENCE_SOURCE: Record<string, "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN"> = {
+  BASE_SEPOLIA_VERIFIED: "BASE_SEPOLIA_VERIFIED",
+  HISTORICAL_ON_CHAIN: "HISTORICAL_ON_CHAIN",
+};
+
+function assertCoordinate(value: number | undefined, field: string): number | undefined {
+  if (value === undefined) return undefined;
+  if (!Number.isInteger(value) || value < 0) {
+    throw new TransactionRefError(`${field} must be a non-negative integer`);
+  }
+  return value;
+}
+
+/** Builds the EVM variant, rejecting local identifiers, unknown sources and bad coordinates. */
 export function evmTransactionRef(args: {
   hash: string;
-  evidenceSource?: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+  evidenceSource?: string;
   chainId?: number;
   blockNumber?: number;
   logIndex?: number;
@@ -76,13 +95,24 @@ export function evmTransactionRef(args: {
   if ((args.chainId ?? BASE_SEPOLIA_CHAIN_ID) !== BASE_SEPOLIA_CHAIN_ID) {
     throw new TransactionRefError("EVM transaction reference must be on Base Sepolia");
   }
+  if (args.evidenceSource === "SYNTHETIC_LOCAL") {
+    throw new TransactionRefError("synthetic evidence cannot use an EVM transaction reference");
+  }
+  const source = EVM_EVIDENCE_SOURCE[args.evidenceSource ?? "BASE_SEPOLIA_VERIFIED"];
+  if (source === undefined) {
+    throw new TransactionRefError(
+      `unknown EVM evidence source: ${String(args.evidenceSource)}`,
+    );
+  }
+  const blockNumber = assertCoordinate(args.blockNumber, "blockNumber");
+  const logIndex = assertCoordinate(args.logIndex, "logIndex");
   return {
     kind: "EVM",
     hash: args.hash as Hex,
     chainId: BASE_SEPOLIA_CHAIN_ID,
-    evidenceSource: args.evidenceSource ?? "BASE_SEPOLIA_VERIFIED",
-    ...(args.blockNumber === undefined ? {} : { blockNumber: args.blockNumber }),
-    ...(args.logIndex === undefined ? {} : { logIndex: args.logIndex }),
+    evidenceSource: source,
+    ...(blockNumber === undefined ? {} : { blockNumber }),
+    ...(logIndex === undefined ? {} : { logIndex }),
   };
 }
 
@@ -117,14 +147,12 @@ export function assertTransactionRef(value: unknown): TransactionRef {
     );
   }
   if (candidate.kind === "EVM") {
-    const source = candidate.evidenceSource;
-    if (source === "SYNTHETIC_LOCAL") {
-      throw new TransactionRefError("synthetic evidence cannot use an EVM transaction reference");
-    }
     return evmTransactionRef({
       hash: String(candidate.hash ?? ""),
       evidenceSource:
-        source === "HISTORICAL_ON_CHAIN" ? "HISTORICAL_ON_CHAIN" : "BASE_SEPOLIA_VERIFIED",
+        candidate.evidenceSource === undefined
+          ? undefined
+          : String(candidate.evidenceSource),
       chainId: typeof candidate.chainId === "number" ? candidate.chainId : undefined,
       blockNumber: typeof candidate.blockNumber === "number" ? candidate.blockNumber : undefined,
       logIndex: typeof candidate.logIndex === "number" ? candidate.logIndex : undefined,
@@ -168,15 +196,75 @@ function evidenceHashToBytes32(value: string): Hex {
   }
 }
 
-function receiptTransactionRef(receipt: ReceiptProof, logIndex?: number): TransactionRef {
-  if (receipt.transactionRef !== undefined) {
-    return assertTransactionRef(receipt.transactionRef);
+/** The submission identity a payment intent is currently bound to, if any. */
+export function intentSubmissionRef(intent: PaymentIntent): TransactionRef | null {
+  const hash = intent.transaction_hash ?? null;
+  const local = intent.local_transaction_id ?? null;
+  if (hash !== null && local !== null) {
+    throw new TransactionRefError(
+      "a payment intent cannot carry both transactionHash and localTransactionId",
+    );
   }
-  return evmTransactionRef({
-    hash: receipt.transactionHash.toLowerCase(),
-    blockNumber: receipt.blockNumber,
-    ...(logIndex === undefined ? {} : { logIndex }),
-  });
+  if (hash !== null) return evmTransactionRef({ hash: hash.toLowerCase() });
+  if (local !== null) {
+    return localTransactionRef({ id: local, runId: local.split(":")[1] ?? "" });
+  }
+  return null;
+}
+
+/**
+ * A receipt narrowed to exactly one variant, with every coordinate and the declared
+ * evidence source validated against the submission the gateway actually asked about.
+ */
+export type ClassifiedReceipt =
+  | { kind: "EVM"; proof: EvmReceiptProof; reference: EvmTransactionRef; confirmations: number }
+  | { kind: "LOCAL"; proof: LocalReceiptProof; reference: LocalTransactionRef; confirmations: number };
+
+export function classifyReceipt(
+  receipt: ReceiptProof,
+  submission: TransactionRef,
+): ClassifiedReceipt {
+  const hasHash = receipt.transactionHash !== undefined;
+  const hasLocal = receipt.localTransactionId !== undefined;
+  if (hasHash === hasLocal) {
+    throw new TransactionRefError(
+      "a receipt must carry exactly one of transactionHash or localTransactionId",
+    );
+  }
+  const confirmations = assertCoordinate(receipt.confirmations, "confirmations") ?? 0;
+  for (const transfer of receipt.transfers) {
+    assertCoordinate(transfer.logIndex, "transfer logIndex");
+  }
+  for (const authorization of receipt.authorizations ?? []) {
+    assertCoordinate(authorization.logIndex, "authorization logIndex");
+  }
+  if (hasHash) {
+    const proof = receipt as EvmReceiptProof;
+    if (submission.kind !== "EVM") {
+      throw new TransactionRefError("an EVM receipt cannot prove a local submission");
+    }
+    const reference = evmTransactionRef({
+      hash: proof.transactionHash.toLowerCase(),
+      evidenceSource: proof.evidenceSource,
+      blockNumber: proof.blockNumber,
+    });
+    if (reference.hash !== submission.hash) {
+      throw new TransactionRefError("receipt transaction hash is not the submitted transaction");
+    }
+    return { kind: "EVM", proof, reference, confirmations };
+  }
+  const proof = receipt as LocalReceiptProof;
+  if (submission.kind !== "LOCAL") {
+    throw new TransactionRefError("a local receipt cannot prove an EVM submission");
+  }
+  if (proof.evidenceSource !== undefined && proof.evidenceSource !== "SYNTHETIC_LOCAL") {
+    throw new TransactionRefError("a local receipt is always SYNTHETIC_LOCAL");
+  }
+  const reference = localTransactionRef({ id: proof.localTransactionId, runId: proof.runId });
+  if (reference.id !== submission.id || reference.runId !== submission.runId) {
+    throw new TransactionRefError("local receipt identity is not the submitted identity");
+  }
+  return { kind: "LOCAL", proof, reference, confirmations };
 }
 
 export class CommerceGateway {
@@ -189,6 +277,7 @@ export class CommerceGateway {
   readonly #clock: Clock;
   readonly #terminal: TerminalPaymentEvidenceApi | null;
   readonly #boundedReconciliationAttempts: number;
+  readonly #minimumFinalityConfirmations: number;
 
   constructor(args: {
     evidence: EvidenceApi;
@@ -200,6 +289,7 @@ export class CommerceGateway {
     clock: Clock;
     terminalEvidence?: TerminalPaymentEvidenceApi;
     boundedReconciliationAttempts?: number;
+    minimumFinalityConfirmations?: number;
   }) {
     this.#evidence = args.evidence;
     this.#seller = args.seller;
@@ -212,6 +302,8 @@ export class CommerceGateway {
     this.#terminal = isTerminalEvidenceApi(terminal) ? terminal : null;
     this.#boundedReconciliationAttempts =
       args.boundedReconciliationAttempts ?? DEFAULT_BOUNDED_RECONCILIATION_ATTEMPTS;
+    this.#minimumFinalityConfirmations =
+      args.minimumFinalityConfirmations ?? DEFAULT_MINIMUM_FINALITY_CONFIRMATIONS;
   }
 
   async execute(purchaseId: string, resourceBody?: unknown): Promise<PaymentExecutionResult> {
@@ -222,11 +314,12 @@ export class CommerceGateway {
     );
     const intent = await this.#evidence.claim(purchaseId);
     this.#assertViewIntent(view, intent);
+    // C1: every terminal state must stop here, before any seller, signing or submission call.
     if (intent.state === "SETTLED") {
       const staged = await this.#evidence.stagedDelivery(purchaseId);
       return staged === null ? intent : this.#finishStaged(purchaseId, intent, staged);
     }
-    if (intent.state === "FAILED") {
+    if (TERMINAL_PAYMENT_INTENT_STATE[intent.state]) {
       return intent;
     }
     if (intent.transfer_method !== "eip3009") {
@@ -234,12 +327,9 @@ export class CommerceGateway {
         "legacy Permit2 payment intents are read-only and cannot be executed",
       );
     }
-    if (intent.state === "RECONCILIATION_REQUIRED" && intent.transaction_hash) {
-      const outcome = await this.#reconcileTransaction(
-        purchaseId,
-        intent,
-        intent.transaction_hash,
-      );
+    const boundSubmission = intentSubmissionRef(intent);
+    if (intent.state === "RECONCILIATION_REQUIRED" && boundSubmission !== null) {
+      const outcome = await this.#reconcileTransaction(purchaseId, intent, boundSubmission);
       const staged = await this.#evidence.stagedDelivery(purchaseId);
       return staged === null ? outcome : this.#finishStaged(purchaseId, outcome, staged);
     }
@@ -372,7 +462,11 @@ export class CommerceGateway {
         transactionHash,
         recoveredFromHashless,
       );
-      return this.#reconcileTransaction(purchaseId, submitted, transactionHash);
+      return this.#reconcileTransaction(
+        purchaseId,
+        submitted,
+        evmTransactionRef({ hash: transactionHash.toLowerCase() }),
+      );
     }
     let staged: StagedDelivery;
     try {
@@ -385,7 +479,11 @@ export class CommerceGateway {
         transactionHash,
         recoveredFromHashless,
       );
-      return this.#reconcileTransaction(purchaseId, submitted, transactionHash);
+      return this.#reconcileTransaction(
+        purchaseId,
+        submitted,
+        evmTransactionRef({ hash: transactionHash.toLowerCase() }),
+      );
     }
     const submitted = await this.#recordSubmittedTransaction(
       purchaseId,
@@ -395,7 +493,11 @@ export class CommerceGateway {
     );
     return this.#finishStaged(
       purchaseId,
-      await this.#reconcileTransaction(purchaseId, submitted, transactionHash),
+      await this.#reconcileTransaction(
+        purchaseId,
+        submitted,
+        evmTransactionRef({ hash: transactionHash.toLowerCase() }),
+      ),
       staged,
     );
   }
@@ -485,13 +587,20 @@ export class CommerceGateway {
         "legacy Permit2 payment intents are read-only and cannot be reconciled",
       );
     }
+    // C1: a terminal payment is never re-examined or re-submitted.
+    if (TERMINAL_PAYMENT_INTENT_STATE[intent.state]) {
+      return intent;
+    }
+    const submission = intentSubmissionRef(intent);
     if (
       intent.state !== "RECONCILIATION_REQUIRED" ||
-      intent.transaction_hash?.toLowerCase() !== transactionHash.toLowerCase()
+      submission === null ||
+      submission.kind !== "EVM" ||
+      submission.hash !== transactionHash.toLowerCase()
     ) {
       throw new CommerceGatewayError("transaction hash is not bound to this payment intent");
     }
-    return this.#reconcileTransaction(purchaseId, intent, transactionHash);
+    return this.#reconcileTransaction(purchaseId, intent, submission);
   }
 
   /**
@@ -537,50 +646,65 @@ export class CommerceGateway {
   async #reconcileTransaction(
     purchaseId: string,
     intent: PaymentIntent,
-    transactionHash: Hex,
+    submission: TransactionRef,
   ): Promise<PaymentIntent> {
-    const receipt = await this.#receipts.read(transactionHash);
-    if (receipt === null) {
+    const submissionRef = submission.kind === "LOCAL" ? submission.id : submission.hash;
+    const evmHash = submission.kind === "EVM" ? submission.hash : undefined;
+    const raw = await this.#receipts.read(submissionRef);
+    if (raw === null) {
       await this.#recordCheck(purchaseId, intent, {
-        reference: evmTransactionRef({ hash: transactionHash.toLowerCase() }),
+        reference: submission,
         outcome: "RECEIPT_NOT_FOUND",
         confirmations: 0,
       });
       return this.#evidence.reconciliation(
         purchaseId,
-        `receipt pending for ${transactionHash}`,
-        transactionHash,
+        `receipt pending for ${submissionRef}`,
+        evmHash,
       );
     }
-    if (receipt.transactionHash.toLowerCase() !== transactionHash.toLowerCase()) {
+    let receipt: ClassifiedReceipt;
+    try {
+      receipt = classifyReceipt(raw, submission);
+    } catch (error) {
+      // A proof that does not match the submission it answers is never usable evidence.
       await this.#recordCheck(purchaseId, intent, {
-        reference: evmTransactionRef({ hash: transactionHash.toLowerCase() }),
+        reference: submission,
         outcome: "RECEIPT_HASH_MISMATCH",
-        confirmations: receipt.confirmations ?? 0,
+        confirmations: 0,
       });
       return this.#evidence.reconciliation(
         purchaseId,
-        "RPC receipt hash mismatch",
-        transactionHash,
+        error instanceof TransactionRefError
+          ? error.message
+          : "receipt proof does not match the submitted payment",
+        evmHash,
       );
     }
-    const confirmations = receipt.confirmations ?? 0;
-    if (receipt.status === 0) {
+    const { proof, reference, confirmations } = receipt;
+    if (proof.status === 0) {
       await this.#recordCheck(purchaseId, intent, {
-        reference: receiptTransactionRef(receipt),
+        reference,
         outcome: "RECEIPT_REVERTED",
         confirmations,
         receiptStatus: 0,
-        blockNumber: receipt.blockNumber,
+        ...(proof.blockNumber === undefined ? {} : { blockNumber: proof.blockNumber }),
       });
+      if (receipt.kind !== "EVM") {
+        return this.#evidence.reconciliation(
+          purchaseId,
+          "synthetic reverted proof cannot fail an on-chain payment intent",
+          evmHash,
+        );
+      }
       return this.#evidence.failConfirmed(
         purchaseId,
         "independent receipt status zero",
-        transactionHash,
-        receipt.blockNumber,
+        receipt.reference.hash,
+        receipt.proof.blockNumber,
       );
     }
-    const buyerOutflows = receipt.transfers.filter(
+    const buyerOutflows = proof.transfers.filter(
       (transfer) =>
         transfer.from.toLowerCase() === intent.buyer_wallet_address.toLowerCase(),
     );
@@ -591,7 +715,7 @@ export class CommerceGateway {
         transfer.amount === BigInt(intent.amount_units),
     );
     if (matches.length === 1) {
-      const authorizations = (receipt.authorizations ?? []).filter(
+      const authorizations = (proof.authorizations ?? []).filter(
         (authorization) =>
           authorization.token.toLowerCase() === intent.token.toLowerCase() &&
           authorization.authorizer.toLowerCase() ===
@@ -600,26 +724,39 @@ export class CommerceGateway {
       );
       if (authorizations.length !== 1) {
         await this.#recordCheck(purchaseId, intent, {
-          reference: receiptTransactionRef(receipt),
+          reference,
           outcome: "AMBIGUOUS_TRANSFER_EVIDENCE",
           confirmations,
           receiptStatus: 1,
-          blockNumber: receipt.blockNumber,
+          ...(proof.blockNumber === undefined ? {} : { blockNumber: proof.blockNumber }),
           authorizationState: "MISSING_OR_AMBIGUOUS",
         });
         return this.#evidence.reconciliation(
           purchaseId,
           "independent receipt lacks one matching AuthorizationUsed event",
-          transactionHash,
+          evmHash,
+        );
+      }
+      if (receipt.kind !== "EVM") {
+        await this.#recordCheck(purchaseId, intent, {
+          reference,
+          outcome: "AMBIGUOUS_TRANSFER_EVIDENCE",
+          confirmations,
+          receiptStatus: 1,
+        });
+        return this.#evidence.reconciliation(
+          purchaseId,
+          "a synthetic proof cannot settle an on-chain payment intent",
+          evmHash,
         );
       }
       const transfer = matches[0]!;
       return this.#evidence.settle({
         purchaseId,
-        transactionHash,
-        blockNumber: receipt.blockNumber,
+        transactionHash: receipt.reference.hash,
+        blockNumber: receipt.proof.blockNumber,
         transferLogIndex: transfer.logIndex,
-        receiptStatus: receipt.status,
+        receiptStatus: proof.status,
         token: transfer.token,
         fromAddress: transfer.from,
         toAddress: transfer.to,
@@ -627,28 +764,22 @@ export class CommerceGateway {
       });
     }
     if (buyerOutflows.length === 1) {
-      return this.#classifyMismatch(purchaseId, intent, receipt, buyerOutflows[0]!, {
-        confirmations,
-        transactionHash,
-      });
+      return this.#classifyMismatch(purchaseId, intent, receipt, buyerOutflows[0]!, evmHash);
     }
     if (buyerOutflows.length === 0) {
-      return this.#classifyNoTransfer(purchaseId, intent, receipt, {
-        confirmations,
-        transactionHash,
-      });
+      return this.#classifyNoTransfer(purchaseId, intent, receipt, evmHash);
     }
     await this.#recordCheck(purchaseId, intent, {
-      reference: receiptTransactionRef(receipt),
+      reference,
       outcome: "AMBIGUOUS_TRANSFER_EVIDENCE",
       confirmations,
       receiptStatus: 1,
-      blockNumber: receipt.blockNumber,
+      ...(proof.blockNumber === undefined ? {} : { blockNumber: proof.blockNumber }),
     });
     return this.#evidence.reconciliation(
       purchaseId,
       "independent receipt has more than one buyer outflow",
-      transactionHash,
+      evmHash,
     );
   }
 
@@ -656,23 +787,33 @@ export class CommerceGateway {
   async #classifyMismatch(
     purchaseId: string,
     intent: PaymentIntent,
-    receipt: ReceiptProof,
-    outflow: { token: Address; from: Address; to: Address; amount: bigint; logIndex: number },
-    context: { confirmations: number; transactionHash: Hex },
+    receipt: ClassifiedReceipt,
+    outflow: ReceiptTransfer,
+    evmHash: Hex | undefined,
   ): Promise<PaymentIntent> {
-    const reference = receiptTransactionRef(receipt, outflow.logIndex);
+    const reference =
+      receipt.kind === "EVM"
+        ? evmTransactionRef({
+            hash: receipt.reference.hash,
+            evidenceSource: receipt.reference.evidenceSource,
+            blockNumber: receipt.proof.blockNumber,
+            logIndex: outflow.logIndex,
+          })
+        : receipt.reference;
     await this.#recordCheck(purchaseId, intent, {
       reference,
       outcome: "MISMATCHED_TRANSFER_CONFIRMED",
-      confirmations: context.confirmations,
+      confirmations: receipt.confirmations,
       receiptStatus: 1,
-      blockNumber: receipt.blockNumber,
+      ...(receipt.proof.blockNumber === undefined
+        ? {}
+        : { blockNumber: receipt.proof.blockNumber }),
     });
     if (this.#terminal === null) {
       return this.#evidence.reconciliation(
         purchaseId,
         "independent receipt lacks one exact ERC-20 Transfer",
-        context.transactionHash,
+        evmHash,
       );
     }
     const submissionRef = reference.kind === "LOCAL" ? reference.id : reference.hash;
@@ -693,47 +834,61 @@ export class CommerceGateway {
   }
 
   /**
-   * A success receipt without any buyer outflow only closes as terminal no-transfer
-   * after the bounded attempt budget is exhausted; otherwise it stays unknown.
+   * H3: a success proof without any buyer outflow only closes as terminal no-transfer once
+   * the bounded attempt budget AND the configured finality depth are both satisfied.
+   * Zero or unknown confirmations always stay `PAYMENT_CONFIRMATION_UNKNOWN`.
    */
   async #classifyNoTransfer(
     purchaseId: string,
     intent: PaymentIntent,
-    receipt: ReceiptProof,
-    context: { confirmations: number; transactionHash: Hex },
+    receipt: ClassifiedReceipt,
+    evmHash: Hex | undefined,
   ): Promise<PaymentIntent> {
-    const reference = receiptTransactionRef(receipt);
+    const reference = receipt.reference;
     const checked = await this.#recordCheck(purchaseId, intent, {
       reference,
       outcome: "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
-      confirmations: context.confirmations,
+      confirmations: receipt.confirmations,
       receiptStatus: 1,
-      blockNumber: receipt.blockNumber,
+      ...(receipt.proof.blockNumber === undefined
+        ? {}
+        : { blockNumber: receipt.proof.blockNumber }),
     });
     const attempts = checked.reconciliation_attempt_count ?? 0;
-    if (this.#terminal === null || attempts < this.#boundedReconciliationAttempts) {
+    const finalityReached =
+      receipt.confirmations >= this.#minimumFinalityConfirmations;
+    if (
+      this.#terminal === null ||
+      attempts < this.#boundedReconciliationAttempts ||
+      !finalityReached
+    ) {
       return this.#evidence.reconciliation(
         purchaseId,
-        "independent receipt lacks one exact ERC-20 Transfer",
-        context.transactionHash,
+        finalityReached
+          ? "independent receipt lacks one exact ERC-20 Transfer"
+          : "independent proof has not reached the configured finality depth",
+        evmHash,
       );
     }
     const submissionRef = reference.kind === "LOCAL" ? reference.id : reference.hash;
-    const firstCheckedAt =
-      checked.reconciliation_first_checked_at ??
-      checked.reconciliation_last_checked_at ??
-      new Date(Number(this.#clock.nowSeconds()) * 1000).toISOString();
+    const firstCheckedAt = checked.reconciliation_first_checked_at ?? null;
+    const lastCheckedAt = checked.reconciliation_last_checked_at ?? null;
+    if (firstCheckedAt === null || lastCheckedAt === null) {
+      return this.#evidence.reconciliation(
+        purchaseId,
+        "reconciliation attempt evidence is incomplete",
+        evmHash,
+      );
+    }
     const proof: NoTransferProof = {
       purchaseId,
       reasonCode: "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
       checkedChainId: BASE_SEPOLIA_CHAIN_ID,
       attemptCount: attempts,
       firstCheckedAt,
-      lastCheckedAt:
-        checked.reconciliation_last_checked_at ??
-        new Date(Number(this.#clock.nowSeconds()) * 1000).toISOString(),
+      lastCheckedAt,
       authorizationNonceHash: sha256Ref(intent.authorization_nonce ?? intent.quote_id),
-      finalityEvidence: { confirmations: context.confirmations },
+      finalityEvidence: { confirmations: receipt.confirmations },
       proofRef: sha256Ref(`${submissionRef}:${attempts}:no-transfer`),
       evidenceSource:
         reference.kind === "LOCAL" ? "SYNTHETIC_LOCAL" : reference.evidenceSource,

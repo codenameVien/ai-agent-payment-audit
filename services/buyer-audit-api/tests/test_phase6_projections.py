@@ -578,3 +578,115 @@ def test_wrong_token_mismatch_keeps_the_quoted_amount_in_the_summary() -> None:
     assert projection.amount_units == 100_000
     assert projection.token == TOKEN
     assert projection.mismatched_fields == ("token",)
+
+
+def test_unknown_evidence_source_is_rejected_not_coerced() -> None:
+    """H1 probe: an unknown source must never silently become BASE_SEPOLIA_VERIFIED."""
+    payload = settled_payload()
+    payload["evidenceSource"] = "TOTALLY_TRUSTED"
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, payload),
+    ]
+    with pytest.raises(EvidenceIntegrityError, match="unknown evidence source"):
+        PROJECTIONS.project(chain(*specs))
+
+
+def test_negative_reference_coordinates_are_rejected() -> None:
+    """H1 probe: negative block/log coordinates are not a provable position."""
+    with pytest.raises(ValueError, match="blockNumber"):
+        EvmTransactionRef(hash=EVM_TX, block_number=-1)
+    with pytest.raises(ValueError, match="logIndex"):
+        EvmTransactionRef(hash=EVM_TX, log_index=-7)
+    with pytest.raises(ValueError, match="blockNumber"):
+        transaction_ref_from_payload(
+            {
+                "kind": "EVM",
+                "hash": EVM_TX,
+                "chainId": 84532,
+                "evidenceSource": EvidenceSource.BASE_SEPOLIA_VERIFIED.value,
+                "blockNumber": -1,
+            }
+        )
+
+
+
+def test_unknown_source_in_a_nested_reference_is_rejected() -> None:
+    with pytest.raises(ValueError, match="not a valid EvidenceSource"):
+        transaction_ref_from_payload(
+            {
+                "kind": "EVM",
+                "hash": EVM_TX,
+                "chainId": 84532,
+                "evidenceSource": "TOTALLY_TRUSTED",
+            }
+        )
+
+
+def test_one_base_event_plus_one_synthetic_event_fails_closed() -> None:
+    """H1 probe: a nonterminal BASE source must not be ignored while synthetic wins."""
+    reconciliation = {
+        "reason": "receipt pending",
+        "evidenceSource": EvidenceSource.BASE_SEPOLIA_VERIFIED.value,
+    }
+    checked = {
+        "attemptNumber": 1,
+        "verifierOutcome": "RECEIPT_NOT_FOUND",
+        "evidenceSource": EvidenceSource.SYNTHETIC_LOCAL.value,
+        "scenario": SCENARIO.to_payload(),
+    }
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_RECONCILIATION_REQUIRED, reconciliation),
+        (EventType.PAYMENT_RECONCILIATION_CHECKED, checked),
+    ]
+    with pytest.raises(EvidenceIntegrityError, match="mixes synthetic"):
+        PROJECTIONS.project(chain(*specs))
+
+
+def test_synthetic_terminal_carrying_a_base_reference_fails_closed() -> None:
+    """H1 probe: the projection source and the reference source are one fact."""
+    payload = mismatch_payload()
+    payload["transactionRef"] = EvmTransactionRef(hash=EVM_TX).to_payload()
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_MISMATCH_CONFIRMED, payload),
+    ]
+    with pytest.raises(EvidenceIntegrityError, match="mixes synthetic"):
+        PROJECTIONS.project(chain(*specs))
+
+
+def test_base_and_historical_sources_cannot_coexist() -> None:
+    payload = mismatch_payload(
+        evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED, local=False
+    )
+    specs = [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload(transfer_method="permit2")),
+        (EventType.PAYMENT_MISMATCH_CONFIRMED, payload),
+    ]
+    with pytest.raises(EvidenceIntegrityError, match="contradictory evidence sources"):
+        PROJECTIONS.project(chain(*specs))
+
+
+def test_audit_coverage_is_reported_when_evidence_advances() -> None:
+    """H4: the read model discloses that later evidence passed the audited head."""
+    covered = chain(
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.AUDITED, audited_payload("NORMAL")),
+    )
+    advanced = chain(
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.AUDITED, audited_payload("NORMAL")),
+        (EventType.SENSITIVE_PAYLOAD_ACCESSED, {"kind": "request", "payloadId": "p-1"}),
+    )
+
+    assert PROJECTIONS.project(covered).audit_covers_head is True
+    assert PROJECTIONS.project(advanced).audit_covers_head is False

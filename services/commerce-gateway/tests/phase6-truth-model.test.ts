@@ -442,26 +442,30 @@ for (const [label, mutate, expectedFields] of [
   });
 }
 
-test("a synthetic receipt keeps its local reference out of the EVM hash field", async () => {
+test("a local receipt can never answer an EVM submission or alias its hash", async () => {
   const { receipt } = fixtures();
-  receipt.transfers[0]!.amount = 200_000n;
-  receipt.transactionRef = localTransactionRef({ id: LOCAL_TX_ID, runId: RUN_ID });
-  const { gateway, evidence } = harness({ receipt });
+  const local: ReceiptProof = {
+    status: receipt.status,
+    transfers: [{ ...receipt.transfers[0]!, amount: 200_000n }],
+    authorizations: receipt.authorizations,
+    confirmations: receipt.confirmations,
+    localTransactionId: LOCAL_TX_ID,
+    runId: RUN_ID,
+  };
+  const { gateway, evidence } = harness({ receipt: local });
 
   const result = await gateway.execute("purchase-1");
 
-  assert.equal(result.state, "MISMATCH_CONFIRMED");
-  assert.equal(evidence.mismatch?.evidenceSource, "SYNTHETIC_LOCAL");
-  assert.equal(evidence.mismatch?.transactionRef.kind, "LOCAL");
-  assert.equal(
-    evidence.mismatch?.transactionRef.kind === "LOCAL"
-      ? evidence.mismatch.transactionRef.id
-      : undefined,
-    LOCAL_TX_ID,
+  // H1: the submission was an EVM hash, so a synthetic proof must not close it.
+  assert.equal(result.state, "RECONCILIATION_REQUIRED");
+  assert.ok(evidence.mismatch === undefined);
+  assert.ok(evidence.noTransfer === undefined);
+  assert.equal(evidence.checks.at(-1)?.verifierOutcome, "RECEIPT_HASH_MISMATCH");
+  assert.equal(evidence.checks.at(-1)?.submissionRef, TX.toLowerCase());
+  assert.ok(
+    !JSON.stringify(evidence.checks).includes(LOCAL_TX_ID),
+    "a local identity must never be recorded as the submitted transaction",
   );
-  assert.equal(evidence.checks[0]!.evidenceSource, "SYNTHETIC_LOCAL");
-  assert.equal(evidence.checks[0]!.submissionRef, LOCAL_TX_ID);
-  assert.ok(!JSON.stringify(evidence.mismatch).includes(TX));
 });
 
 test("a success receipt without any buyer outflow stays unknown until the bound is reached", async () => {
@@ -492,7 +496,7 @@ test("a success receipt without any buyer outflow stays unknown until the bound 
   assert.match(closed?.authorizationNonceHash ?? "", /^sha256:[0-9a-f]{64}$/);
 });
 
-test("a receipt with unknown finality still reports zero confirmations", async () => {
+test("unknown finality never closes a payment, even at the attempt bound", async () => {
   const { receipt } = fixtures();
   receipt.transfers = [];
   delete receipt.confirmations;
@@ -500,8 +504,10 @@ test("a receipt with unknown finality still reports zero confirmations", async (
 
   const result = await gateway.execute("purchase-1");
 
-  assert.equal(result.state, "RECONCILED_NO_TRANSFER");
-  assert.equal(evidence.noTransfer?.finalityEvidence.confirmations, 0);
+  // H3: absent finality is not evidence of finality.
+  assert.equal(result.state, "RECONCILIATION_REQUIRED");
+  assert.ok(evidence.noTransfer === undefined);
+  assert.equal(evidence.checks.at(-1)?.finalityConfirmations, 0);
 });
 
 test("a missing receipt records a transient attempt and never closes the payment", async () => {
@@ -603,3 +609,46 @@ test("a legacy Permit2 intent never reaches terminal classification", async () =
   assert.ok(evidence.mismatch === undefined);
   assert.ok(evidence.noTransfer === undefined);
 });
+
+for (const state of [
+  "SETTLED",
+  "FAILED",
+  "MISMATCH_CONFIRMED",
+  "RECONCILED_NO_TRANSFER",
+] as const) {
+  test(`C1: a ${state} intent stops before any seller, signing or submission call`, async () => {
+    const { view, intent, required, receipt } = fixtures();
+    const evidence = new FakeTerminalEvidence(view, { ...intent, state });
+    const seller = new FakeSeller(required);
+    let signed = 0;
+    const gateway = new CommerceGateway({
+      evidence,
+      seller,
+      decisionSigner: new StubDecisionSigner(),
+      erc3009Signer: {
+        async sign() {
+          signed += 1;
+          return "0xauthorization" as Hex;
+        },
+      },
+      receipts: { async read() { return receipt; } },
+      identityVerifier: { async verifyQuoteSigner() {} },
+      clock: { nowSeconds() { return 1_800_000_000n; } },
+    });
+
+    const result = await gateway.execute("purchase-1");
+
+    assert.equal(result.state, state);
+    assert.equal(seller.calls, 0, "a terminal payment must never contact the seller");
+    assert.equal(signed, 0, "a terminal payment must never be signed again");
+    assert.ok(
+      !evidence.calls.some((item) =>
+        ["authorize", "settle", "fail", "confirm-mismatch", "reconcile-no-transfer"].includes(
+          item,
+        ),
+      ),
+      `terminal state ${state} produced a write: ${evidence.calls.join(",")}`,
+    );
+    assert.equal(evidence.checks.length, 0);
+  });
+}

@@ -12,14 +12,17 @@ from buyer_audit_api.core.errors import (
     PaymentPolicyError,
 )
 from buyer_audit_api.core.events import verify_event_chain
-from buyer_audit_api.core.hashing import sha256_bytes
+from buyer_audit_api.core.hashing import sha256_bytes, sha256_json
 from buyer_audit_api.core.models import (
+    EVM_TRANSACTION_HASH_PATTERN,
     TERMINAL_PAYMENT_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceHead,
     EvidenceSource,
+    EvmTransactionRef,
     JsonObject,
+    LocalTransactionRef,
     ScenarioMetadata,
     TransactionRef,
     WalletBinding,
@@ -242,10 +245,22 @@ class ConfirmedMismatchProof:
     def __post_init__(self) -> None:
         if not self.proof_ref.strip():
             raise ValueError("a confirmed mismatch requires a proof reference")
+        if self.evidence_source is not self.transaction_ref.evidence_source:
+            raise ValueError("mismatch proof source and transaction reference source disagree")
         if (
             self.evidence_source is EvidenceSource.SYNTHETIC_LOCAL
         ) is not (self.transaction_ref.kind == "LOCAL"):
             raise ValueError("mismatch proof source and transaction variant disagree")
+        if (self.scenario is None) is (
+            self.evidence_source is EvidenceSource.SYNTHETIC_LOCAL
+        ):
+            raise ValueError("synthetic mismatch proofs require exactly one scenario")
+        if (
+            self.scenario is not None
+            and self.transaction_ref.kind == "LOCAL"
+            and self.transaction_ref.run_id != self.scenario.run_id
+        ):
+            raise ValueError("mismatch proof transaction belongs to another run")
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +337,7 @@ class PaymentIntent:
     mismatched_fields: tuple[str, ...] = ()
     terminal_outcome_key: str | None = None
     terminal_proof_ref: str | None = None
+    terminal_proof_fingerprint: str | None = None
     terminal_evidence_source: EvidenceSource | None = None
     local_transaction_id: str | None = None
     no_transfer_reason_code: str | None = None
@@ -435,6 +451,37 @@ def mismatched_quote_fields(
     if actual.to_address.lower() != intent.pay_to:
         mismatched.append("recipient")
     return tuple(mismatched)
+
+
+def normalized_evm_hash(value: str, *, field: str = "transaction hash") -> str:
+    """Canonical lowercase EVM hash. Non-hex and wrong-length values fail closed."""
+    normalized = value.lower()
+    if EVM_TRANSACTION_HASH_PATTERN.fullmatch(normalized) is None:
+        raise PaymentEvidenceError(f"{field} is malformed")
+    return normalized
+
+
+def intent_submission_ref(intent: PaymentIntent) -> TransactionRef | None:
+    """The single submission identity an intent is bound to, or None before submission."""
+    if intent.transaction_hash is not None and intent.local_transaction_id is not None:
+        raise PaymentEvidenceError(
+            "a payment intent cannot carry both transactionHash and localTransactionId"
+        )
+    if intent.transaction_hash is not None:
+        return EvmTransactionRef(hash=normalized_evm_hash(intent.transaction_hash))
+    if intent.local_transaction_id is not None:
+        run_id = intent.local_transaction_id.split(":")[1]
+        return LocalTransactionRef(id=intent.local_transaction_id, run_id=run_id)
+    return None
+
+
+def submission_reference_value(reference: TransactionRef) -> str:
+    return reference.id if reference.kind == "LOCAL" else reference.hash
+
+
+def _proof_fingerprint(payload: JsonObject) -> str:
+    """Canonical hash of the complete immutable proof; an alias alone can never match it."""
+    return sha256_json(payload)
 
 
 class PaymentService:
@@ -554,42 +601,63 @@ class PaymentService:
         purchase_id: str,
         reason: str,
         transaction_hash: str | None = None,
+        local_transaction_id: str | None = None,
+        scenario: ScenarioMetadata | None = None,
     ) -> PaymentIntent:
         if not reason.strip():
             raise PaymentEvidenceError("reconciliation reason is required")
+        if transaction_hash is not None and local_transaction_id is not None:
+            raise PaymentEvidenceError(
+                "a submission cannot carry both transactionHash and localTransactionId"
+            )
         normalized_transaction_hash = (
-            transaction_hash.lower() if transaction_hash is not None else None
+            normalized_evm_hash(transaction_hash) if transaction_hash is not None else None
         )
-        if normalized_transaction_hash is not None and (
-            not normalized_transaction_hash.startswith("0x")
-            or len(normalized_transaction_hash) != 66
-        ):
-            raise PaymentEvidenceError("transaction hash is malformed")
+        normalized_local_id: str | None = None
+        if local_transaction_id is not None:
+            if scenario is None:
+                raise PaymentEvidenceError(
+                    "a local submission identity requires attested scenario metadata"
+                )
+            # Constructing the reference validates the namespace, format and run binding.
+            normalized_local_id = LocalTransactionRef(
+                id=local_transaction_id, run_id=scenario.run_id
+            ).id
         intent, event_count, head_hash = await self._transition_context(purchase_id)
         normalized_reason = reason.strip()
         if intent.state == PaymentIntentState.RECONCILIATION_REQUIRED:
-            if intent.transaction_hash == normalized_transaction_hash:
+            if (
+                intent.transaction_hash == normalized_transaction_hash
+                and intent.local_transaction_id == normalized_local_id
+            ):
                 return intent
             raise PaymentConflictError("payment has a different reconciliation reason")
         if intent.state != PaymentIntentState.AUTHORIZED:
             raise PaymentConflictError("payment cannot enter reconciliation")
         now = self._clock.now()
+        payload: JsonObject = {
+            "authorizationHash": intent.decision_authorization_hash,
+            "reason": normalized_reason,
+            "transactionHash": normalized_transaction_hash,
+        }
+        if normalized_local_id is not None:
+            payload["localTransactionId"] = normalized_local_id
+            payload["evidenceSource"] = EvidenceSource.SYNTHETIC_LOCAL.value
+        if scenario is not None:
+            payload["scenario"] = scenario.to_payload()
         return await self._repository.transition_payment_intent(
             next_intent=replace(
                 intent,
                 state=PaymentIntentState.RECONCILIATION_REQUIRED,
                 reconciliation_reason=normalized_reason,
                 transaction_hash=normalized_transaction_hash,
+                local_transaction_id=normalized_local_id,
             ),
             expected_states=(PaymentIntentState.AUTHORIZED,),
             event_type=EventType.PAYMENT_RECONCILIATION_REQUIRED,
             occurred_at=now,
             actor={"id": "payment-executor", "type": "service"},
-            payload={
-                "authorizationHash": intent.decision_authorization_hash,
-                "reason": normalized_reason,
-                "transactionHash": normalized_transaction_hash,
-            },
+            payload=payload,
             evidence_refs=(intent.decision_authorization_hash or "",),
             expected_event_count=event_count,
             expected_head_event_hash=head_hash,
@@ -602,15 +670,14 @@ class PaymentService:
         purchase_id: str,
         transaction_hash: str,
     ) -> PaymentIntent:
-        normalized_transaction_hash = transaction_hash.lower()
-        if (
-            not normalized_transaction_hash.startswith("0x")
-            or len(normalized_transaction_hash) != 66
-        ):
-            raise PaymentEvidenceError("transaction hash is malformed")
+        normalized_transaction_hash = normalized_evm_hash(transaction_hash)
         intent, event_count, head_hash = await self._transition_context(purchase_id)
         if intent.state != PaymentIntentState.RECONCILIATION_REQUIRED:
             raise PaymentConflictError("payment is not awaiting reconciliation")
+        if intent.local_transaction_id is not None:
+            raise PaymentConflictError(
+                "payment is bound to a local submission identity"
+            )
         if intent.transaction_hash == normalized_transaction_hash:
             return intent
         if intent.transaction_hash is not None:
@@ -648,12 +715,9 @@ class PaymentService:
         to_address: str,
         amount_units: int,
     ) -> PaymentIntent:
+        normalized_hash = normalized_evm_hash(transaction_hash)
         intent, event_count, head_hash = await self._transition_context(purchase_id)
-        normalized_proof = (
-            transaction_hash.lower(),
-            block_number,
-            transfer_log_index,
-        )
+        normalized_proof = (normalized_hash, block_number, transfer_log_index)
         if intent.state == PaymentIntentState.SETTLED:
             if (
                 intent.transaction_hash,
@@ -666,7 +730,7 @@ class PaymentService:
             raise PaymentConflictError("payment already has a different terminal outcome")
         if intent.state != PaymentIntentState.RECONCILIATION_REQUIRED:
             raise PaymentConflictError("payment cannot settle from current state")
-        if intent.transaction_hash != transaction_hash.lower():
+        if intent.transaction_hash != normalized_hash:
             raise PaymentConflictError("settlement receipt is not bound to submitted payment")
         if receipt_status != 1:
             raise PaymentEvidenceError("receipt status is not successful")
@@ -680,17 +744,17 @@ class PaymentService:
             raise PaymentEvidenceError("receipt transfer recipient mismatch")
         if amount_units != intent.amount_units:
             raise PaymentEvidenceError("receipt transfer amount mismatch")
-        if not transaction_hash.startswith("0x") or len(transaction_hash) != 66:
-            raise PaymentEvidenceError("transaction hash is malformed")
+        if intent.local_transaction_id is not None:
+            raise PaymentConflictError("payment is bound to a local submission identity")
         now = self._clock.now()
         outcome_key = terminal_outcome_key(purchase_id)
         proof_ref = sha256_bytes(
-            f"{transaction_hash.lower()}:{block_number}:{transfer_log_index}".encode()
+            f"{normalized_hash}:{block_number}:{transfer_log_index}".encode()
         )
         next_intent = replace(
             intent,
             state=PaymentIntentState.SETTLED,
-            transaction_hash=transaction_hash.lower(),
+            transaction_hash=normalized_hash,
             block_number=block_number,
             transfer_log_index=transfer_log_index,
             settlement_verified_at=now,
@@ -712,12 +776,12 @@ class PaymentService:
                 "terminalOutcomeKey": outcome_key,
                 "to": to_address.lower(),
                 "token": token.lower(),
-                "transactionHash": transaction_hash.lower(),
+                "transactionHash": normalized_hash,
                 "transferLogIndex": transfer_log_index,
             },
             evidence_refs=(
                 intent.decision_authorization_hash or "",
-                transaction_hash.lower(),
+                normalized_hash,
             ),
             expected_event_count=event_count,
             expected_head_event_hash=head_hash,
@@ -733,12 +797,7 @@ class PaymentService:
         block_number: int,
         receipt_status: int,
     ) -> PaymentIntent:
-        normalized_transaction_hash = transaction_hash.lower()
-        if (
-            not normalized_transaction_hash.startswith("0x")
-            or len(normalized_transaction_hash) != 66
-        ):
-            raise PaymentEvidenceError("transaction hash is malformed")
+        normalized_transaction_hash = normalized_evm_hash(transaction_hash)
         if block_number < 0 or receipt_status != 0:
             raise PaymentEvidenceError("failure requires a confirmed reverted receipt")
         normalized_reason = reason.strip()
@@ -817,6 +876,25 @@ class PaymentService:
             raise PaymentConflictError("payment already has a terminal outcome")
         if intent.state != PaymentIntentState.RECONCILIATION_REQUIRED:
             raise PaymentConflictError("payment is not awaiting reconciliation")
+        submission = intent_submission_ref(intent)
+        if submission is None:
+            raise PaymentEvidenceError(
+                "a reconciliation check requires an identified submission"
+            )
+        if check.submission_ref != submission_reference_value(submission):
+            raise PaymentEvidenceError(
+                "reconciliation check is not bound to the submitted payment"
+            )
+        if check.evidence_source is not submission.evidence_source:
+            raise PaymentEvidenceError(
+                "reconciliation check source contradicts the submission variant"
+            )
+        if (check.scenario is None) is (
+            check.evidence_source is EvidenceSource.SYNTHETIC_LOCAL
+        ):
+            raise PaymentEvidenceError(
+                "synthetic reconciliation checks require exactly one scenario"
+            )
         payload = check.to_payload()
         recorded = [
             event
@@ -860,34 +938,66 @@ class PaymentService:
         """Record a confirmed real outflow that disagreed with the signed quote."""
         intent, _events, event_count, head_hash = await self._verified_context(purchase_id)
         self._reject_legacy_permit2(intent)
-        actual = proof.actual_transfer
+        actual = _normalized_transfer(proof.actual_transfer)
         mismatched = mismatched_quote_fields(intent, actual)
+        outcome_key = terminal_outcome_key(purchase_id)
+        fingerprint = _proof_fingerprint(
+            {
+                "actualTransfer": actual.to_payload(),
+                "evidenceSource": proof.evidence_source.value,
+                "kind": EventType.PAYMENT_MISMATCH_CONFIRMED.value,
+                "mismatchedFields": list(mismatched),
+                "proofRef": proof.proof_ref,
+                "purchaseId": purchase_id,
+                "quoteBinding": {
+                    "amountUnits": intent.amount_units,
+                    "payTo": intent.pay_to,
+                    "quoteId": intent.quote_id,
+                    "token": intent.token,
+                },
+                "scenario": (
+                    proof.scenario.to_payload() if proof.scenario is not None else None
+                ),
+                "terminalOutcomeKey": outcome_key,
+                "transactionRef": proof.transaction_ref.to_payload(),
+            }
+        )
         if intent.state == PaymentIntentState.MISMATCH_CONFIRMED:
-            if (
-                intent.terminal_proof_ref == proof.proof_ref
-                and intent.actual_transfer == _normalized_transfer(actual)
-            ):
+            # H2: an alias alone is never enough; the whole immutable proof must match.
+            if intent.terminal_proof_fingerprint == fingerprint:
                 return intent
             raise PaymentConflictError("payment has a different mismatch proof")
         if intent.state in TERMINAL_PAYMENT_INTENT_STATES:
             raise PaymentConflictError("payment already has a different terminal outcome")
         if intent.state != PaymentIntentState.RECONCILIATION_REQUIRED:
             raise PaymentConflictError("payment cannot confirm a mismatch from current state")
-        if actual.from_address.lower() != intent.buyer_wallet_address:
+        if intent.decision_authorization_hash is None:
+            raise PaymentEvidenceError("mismatch proof requires an authorized payment")
+        submission = intent_submission_ref(intent)
+        if submission is None:
+            raise PaymentEvidenceError("mismatch proof requires an identified submission")
+        if (
+            submission.kind != proof.transaction_ref.kind
+            or submission_reference_value(submission)
+            != submission_reference_value(proof.transaction_ref)
+        ):
+            raise PaymentEvidenceError(
+                "mismatch proof is not the submitted transaction of this purchase"
+            )
+        if actual.from_address != intent.buyer_wallet_address:
             raise PaymentEvidenceError("mismatch proof is not a buyer outflow")
         if not mismatched:
             raise PaymentEvidenceError("proof matches the signed quote and is not a mismatch")
         now = self._clock.now()
-        outcome_key = terminal_outcome_key(purchase_id)
-        same_token = actual.token.lower() == intent.token
+        same_token = actual.token == intent.token
         confirmed_outflow = ConfirmedOutflow(
             terminal_outcome_key=outcome_key,
             purchase_id=purchase_id,
             buyer_wallet=intent.buyer_wallet_address,
             policy_date=intent.policy_date,
-            token=actual.token.lower(),
+            token=actual.token,
             amount_units=actual.amount_units,
-            recipient=actual.to_address.lower(),
+            recipient=actual.to_address,
             transaction_ref=proof.transaction_ref,
             proof_ref=proof.proof_ref,
         )
@@ -895,10 +1005,12 @@ class PaymentService:
             "actualTransfer": actual.to_payload(),
             "evidenceSource": proof.evidence_source.value,
             "mismatchedFields": list(mismatched),
+            "proofFingerprint": fingerprint,
             "proofRef": proof.proof_ref,
             "quoteBinding": {
                 "amountUnits": intent.amount_units,
                 "payTo": intent.pay_to,
+                "quoteId": intent.quote_id,
                 "token": intent.token,
             },
             "reconciliationAttempts": intent.reconciliation_attempt_count,
@@ -911,12 +1023,12 @@ class PaymentService:
             next_intent=replace(
                 intent,
                 state=PaymentIntentState.MISMATCH_CONFIRMED,
-                actual_transfer=_normalized_transfer(actual),
+                actual_transfer=actual,
                 mismatched_fields=mismatched,
                 terminal_outcome_key=outcome_key,
                 terminal_proof_ref=proof.proof_ref,
+                terminal_proof_fingerprint=fingerprint,
                 terminal_evidence_source=proof.evidence_source,
-                local_transaction_id=_local_transaction_id(proof.transaction_ref),
             ),
             expected_states=(PaymentIntentState.RECONCILIATION_REQUIRED,),
             event_type=EventType.PAYMENT_MISMATCH_CONFIRMED,
@@ -939,11 +1051,33 @@ class PaymentService:
         purchase_id: str,
         proof: NoTransferProof,
     ) -> PaymentIntent:
-        """Close a payment as terminal no-transfer once bounded checks are exhausted."""
+        """Close a payment as terminal no-transfer once the recorded series proves it."""
         intent, events, event_count, head_hash = await self._verified_context(purchase_id)
         self._reject_legacy_permit2(intent)
+        outcome_key = terminal_outcome_key(purchase_id)
+        fingerprint = _proof_fingerprint(
+            {
+                "attemptCount": proof.attempt_count,
+                "authorizationNonceHash": proof.authorization_nonce_hash,
+                "checkedChainId": proof.checked_chain_id,
+                "evidenceSource": proof.evidence_source.value,
+                "finalityEvidence": proof.finality_evidence,
+                "firstCheckedAt": proof.first_checked_at.isoformat(),
+                "kind": EventType.PAYMENT_RECONCILED_NO_TRANSFER.value,
+                "lastCheckedAt": proof.last_checked_at.isoformat(),
+                "proofRef": proof.proof_ref,
+                "purchaseId": purchase_id,
+                "reasonCode": proof.reason_code,
+                "scenario": (
+                    proof.scenario.to_payload() if proof.scenario is not None else None
+                ),
+                "submissionRef": proof.submission_ref,
+                "terminalOutcomeKey": outcome_key,
+            }
+        )
         if intent.state == PaymentIntentState.RECONCILED_NO_TRANSFER:
-            if intent.terminal_proof_ref == proof.proof_ref:
+            # H2: an alias alone is never enough; the whole immutable proof must match.
+            if intent.terminal_proof_fingerprint == fingerprint:
                 return intent
             raise PaymentConflictError("payment has a different no-transfer proof")
         if intent.state in TERMINAL_PAYMENT_INTENT_STATES:
@@ -954,24 +1088,8 @@ class PaymentService:
             event.type == EventType.PAYMENT_RECONCILIATION_REQUIRED for event in events
         ):
             raise PaymentEvidenceError("no-transfer requires prior reconciliation evidence")
-        policy = self._reconciliation_policy
-        if proof.attempt_count != intent.reconciliation_attempt_count:
-            raise PaymentEvidenceError("no-transfer proof attempt count is not recorded")
-        if intent.reconciliation_attempt_count < policy.minimum_attempts:
-            raise PaymentEvidenceError("bounded reconciliation retries are not exhausted")
-        if intent.reconciliation_last_outcome not in NO_TRANSFER_VERIFIER_OUTCOMES:
-            raise PaymentEvidenceError(
-                "a momentary missing receipt cannot confirm a terminal no-transfer"
-            )
-        confirmations = proof.finality_evidence.get("confirmations")
-        if (
-            not isinstance(confirmations, int)
-            or isinstance(confirmations, bool)
-            or confirmations < policy.minimum_finality_confirmations
-        ):
-            raise PaymentEvidenceError("no-transfer proof lacks configured finality evidence")
+        self._assert_no_transfer_series(intent=intent, events=events, proof=proof)
         now = self._clock.now()
-        outcome_key = terminal_outcome_key(purchase_id)
         payload: JsonObject = {
             "attemptCount": proof.attempt_count,
             "authorizationNonceHash": proof.authorization_nonce_hash,
@@ -980,6 +1098,7 @@ class PaymentService:
             "finalityEvidence": proof.finality_evidence,
             "firstCheckedAt": proof.first_checked_at.isoformat(),
             "lastCheckedAt": proof.last_checked_at.isoformat(),
+            "proofFingerprint": fingerprint,
             "proofRef": proof.proof_ref,
             "reasonCode": proof.reason_code,
             "submissionRef": proof.submission_ref,
@@ -994,6 +1113,7 @@ class PaymentService:
                 no_transfer_reason_code=proof.reason_code,
                 terminal_outcome_key=outcome_key,
                 terminal_proof_ref=proof.proof_ref,
+                terminal_proof_fingerprint=fingerprint,
                 terminal_evidence_source=proof.evidence_source,
             ),
             expected_states=(PaymentIntentState.RECONCILIATION_REQUIRED,),
@@ -1009,6 +1129,95 @@ class PaymentService:
             expected_head_event_hash=head_hash,
             reservation_action="release",
         )
+
+    def _assert_no_transfer_series(
+        self,
+        *,
+        intent: PaymentIntent,
+        events: list[EvidenceEvent],
+        proof: NoTransferProof,
+    ) -> None:
+        """H2/H3: the proof must restate the append-only reconciliation series exactly."""
+        policy = self._reconciliation_policy
+        checks = [
+            event
+            for event in events
+            if event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
+        ]
+        attempts = [int(event.payload.get("attemptNumber", 0)) for event in checks]
+        if attempts != list(range(1, len(checks) + 1)):
+            raise PaymentEvidenceError("recorded reconciliation attempts are not a series")
+        if (
+            proof.attempt_count != len(checks)
+            or proof.attempt_count != intent.reconciliation_attempt_count
+        ):
+            raise PaymentEvidenceError("no-transfer proof attempt count is not recorded")
+        if intent.reconciliation_attempt_count < policy.minimum_attempts:
+            raise PaymentEvidenceError("bounded reconciliation retries are not exhausted")
+        if intent.reconciliation_last_outcome not in NO_TRANSFER_VERIFIER_OUTCOMES:
+            raise PaymentEvidenceError(
+                "a momentary missing receipt cannot confirm a terminal no-transfer"
+            )
+        submission = intent_submission_ref(intent)
+        if submission is None:
+            raise PaymentEvidenceError("no-transfer proof requires an identified submission")
+        if proof.submission_ref != submission_reference_value(submission):
+            raise PaymentEvidenceError(
+                "no-transfer proof is not bound to the submitted payment"
+            )
+        if proof.evidence_source is not submission.evidence_source:
+            raise PaymentEvidenceError(
+                "no-transfer proof source contradicts the submission variant"
+            )
+        expected_nonce_hash = sha256_bytes(
+            (intent.authorization_nonce or intent.quote_id).encode("utf-8")
+        )
+        if proof.authorization_nonce_hash != expected_nonce_hash:
+            raise PaymentEvidenceError(
+                "no-transfer proof authorization nonce hash does not bind this payment"
+            )
+        first, last = checks[0], checks[-1]
+        if proof.first_checked_at != _required_datetime(
+            first.payload.get("checkedAt"), field="first recorded check time"
+        ) or proof.last_checked_at != _required_datetime(
+            last.payload.get("checkedAt"), field="last recorded check time"
+        ):
+            raise PaymentEvidenceError(
+                "no-transfer proof check window does not match the recorded series"
+            )
+        for event in checks:
+            if event.payload.get("checkedChainId") != proof.checked_chain_id:
+                raise PaymentEvidenceError(
+                    "no-transfer proof chain does not match the recorded series"
+                )
+            if event.payload.get("submissionRef") != proof.submission_ref:
+                raise PaymentEvidenceError(
+                    "recorded reconciliation series checked another submission"
+                )
+            if event.payload.get("evidenceSource") != proof.evidence_source.value:
+                raise PaymentEvidenceError(
+                    "recorded reconciliation series has a different evidence source"
+                )
+            recorded_scenario = event.payload.get("scenario")
+            expected_scenario = (
+                proof.scenario.to_payload() if proof.scenario is not None else None
+            )
+            if recorded_scenario != expected_scenario:
+                raise PaymentEvidenceError(
+                    "no-transfer proof scenario does not match the recorded series"
+                )
+        recorded_confirmations = last.payload.get("finalityConfirmations")
+        confirmations = proof.finality_evidence.get("confirmations")
+        if (
+            not isinstance(confirmations, int)
+            or isinstance(confirmations, bool)
+            or confirmations != recorded_confirmations
+        ):
+            raise PaymentEvidenceError(
+                "no-transfer proof finality does not match the recorded check"
+            )
+        if confirmations < policy.minimum_finality_confirmations:
+            raise PaymentEvidenceError("no-transfer proof lacks configured finality evidence")
 
     async def list_confirmed_outflows(self, purchase_id: str) -> list[ConfirmedOutflow]:
         return await self._repository.list_confirmed_outflows(purchase_id)

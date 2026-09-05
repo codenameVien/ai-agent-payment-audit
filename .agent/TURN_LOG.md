@@ -105,3 +105,65 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 ### Handoff
 - Reviewer verifies the tip of `wo/P6-01` independently; `.agent/outbox/WO-P6-01-coder.done.md`
   holds the full evidence report. WO-P6-02 must not start before an `APPROVE` and integration.
+
+## 2026-09-05 03:20 KST — coder — WO-P6-01 review correction round
+
+### Intent
+- Resolve every finding in `.agent/outbox/WO-P6-01-review.md` (`REJECT`: C1, H1-H4, M1, M2)
+  without weakening any approved requirement, and stay inside the WO allowed-write list.
+
+### Files changed
+- `services/commerce-gateway/src/contracts.ts` — `TERMINAL_PAYMENT_INTENT_STATE` record;
+  `ReceiptProof` split into mutually exclusive `EvmReceiptProof | LocalReceiptProof`;
+  `TransactionRef` carried on receipts instead of a raw hash field.
+- `services/commerce-gateway/src/gateway.ts` — C1: all four terminal states stop execution
+  before any seller, signing or submission call; H1: validated receipt classification with
+  source/variant cross-checks; H2/H3: reconciliation bound to the submitted identity with a
+  configured minimum finality gate before a no-transfer close.
+- `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — H2: mismatch proofs bind
+  quote, submission, source, scenario, chain and a canonical proof fingerprint; same-proof
+  retries compare the whole immutable proof and aliases conflict; H3: no-transfer requires the
+  persisted reconciliation series, nonce hash, timestamps and configured finality; M1: canonical
+  lowercase EVM hash validation at the core boundary.
+- `services/buyer-audit-api/src/buyer_audit_api/core/projections.py` — H1: resolved evidence
+  source cross-validated against the terminal transaction reference; audit head coverage exposed.
+- `services/buyer-audit-api/src/buyer_audit_api/core/audit.py` — H4: a persisted audit must
+  describe the head it was appended to, and a changed head fails closed instead of returning stale.
+- `services/buyer-audit-api/src/buyer_audit_api/api/schemas.py` — M1: required expected state,
+  event count and head hash on every terminal mutation; canonical `^0x[0-9a-f]{64}$` everywhere.
+- `services/buyer-audit-api/src/buyer_audit_api/api/app.py` — H4: sensitive payload access is a
+  `POST .../access` mutation, so every GET is zero-write; M1: guards enforced with replay-aware
+  compare-and-set so a genuine retry still returns the committed result.
+- `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py` — M2: read-only
+  `phase6_index_collision_report()` preflight; canonical proof fingerprint persisted.
+- Tests: direct regressions for C1, H1, H2, H3, H4, M1 and M2 in
+  `tests/test_phase6_projections.py`, `tests/test_phase6_audit.py`,
+  `tests/test_phase6_payment_terminal.py`, `tests/test_api.py`, `tests/test_mongo_repository.py`
+  and `services/commerce-gateway/tests/phase6-truth-model.test.ts`.
+
+### Commands / verification
+- `ruff check` src+tests 0; `mypy` strict src 0.
+- Focused pytest (`test_phase6_projections`, `test_phase6_audit`,
+  `test_phase6_payment_terminal`, `test_payment_service`, `test_api`): 134 passed.
+- `npm run build --workspace @pbl/commerce-gateway` 0; `node --test` gateway + truth-model:
+  41/41 pass.
+- `npm run test:mongo:local`: 4 passed, including the M2 preflight and the coherent
+  synthetic terminal race.
+- Preservation: full non-mongo pytest 184 passed, full gateway suite 56/56, `git diff --check` 0,
+  protected paths byte-identical to the base commit.
+
+### Decisions / assumptions
+- A local receipt can never answer an EVM submission and unknown finality never closes a payment.
+  Two pre-review gateway tests asserted the looser behaviour and were rewritten to the reviewed
+  contract rather than the code being weakened.
+- Mandatory expected-state/head guards would have broken the approved same-proof idempotency, so
+  the precondition is skipped only when the request replays evidence the purchase already holds;
+  the service then compares the complete proof and answers 200 or 409.
+- Phase 6 Mongo fixtures are now a coherent synthetic run: a local submission is closed only by
+  synthetic proofs, so the terminal race uses three synthetic writers instead of a chain failure.
+- A purchase can only be closed by the submission it actually holds, so a rejected purchase keeps
+  its quoted reservation; that is asserted explicitly instead of released.
+
+### Handoff
+- Reviewer re-runs the full fixed focused sequence on the corrected `wo/P6-01` tip;
+  `.agent/outbox/WO-P6-01-coder.done.md` carries the correction SHA and `READY_FOR_REVIEW`.

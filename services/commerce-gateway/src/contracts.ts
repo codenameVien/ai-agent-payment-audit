@@ -39,6 +39,17 @@ export type PaymentIntentState =
   | "MISMATCH_CONFIRMED"
   | "RECONCILED_NO_TRANSFER";
 
+/** Every terminal payment state. A terminal intent must never be executed again. */
+export const TERMINAL_PAYMENT_INTENT_STATE: Record<PaymentIntentState, boolean> = {
+  CLAIMED: false,
+  AUTHORIZED: false,
+  RECONCILIATION_REQUIRED: false,
+  SETTLED: true,
+  FAILED: true,
+  MISMATCH_CONFIRMED: true,
+  RECONCILED_NO_TRANSFER: true,
+};
+
 export const BASE_SEPOLIA_CHAIN_ID = 84532;
 
 export type EvidenceSource =
@@ -330,31 +341,55 @@ export interface SellerClient {
   }): Promise<SellerResponse>;
 }
 
-export interface ReceiptProof {
-  transactionHash: Hex;
-  status: 0 | 1;
-  blockNumber: number;
-  transfers: Array<{
-    token: Address;
-    from: Address;
-    to: Address;
-    amount: bigint;
-    logIndex: number;
-  }>;
-  authorizations?: Array<{
-    token: Address;
-    authorizer: Address;
-    nonce: Hex;
-    logIndex: number;
-  }>;
-  /** Observed finality depth. Absent means "unknown", which can never close a payment. */
-  confirmations?: number;
-  /** Set by attested synthetic verifiers so a local proof never becomes a chain hash. */
-  transactionRef?: TransactionRef;
+export interface ReceiptTransfer {
+  token: Address;
+  from: Address;
+  to: Address;
+  amount: bigint;
+  logIndex: number;
 }
 
+export interface ReceiptAuthorization {
+  token: Address;
+  authorizer: Address;
+  nonce: Hex;
+  logIndex: number;
+}
+
+interface ReceiptProofBase {
+  status: 0 | 1;
+  transfers: ReceiptTransfer[];
+  authorizations?: ReceiptAuthorization[];
+  /** Observed finality depth. Absent means "unknown", which can never close a payment. */
+  confirmations?: number;
+}
+
+/** A receipt read from a chain. It can never carry a synthetic identity. */
+export interface EvmReceiptProof extends ReceiptProofBase {
+  transactionHash: Hex;
+  blockNumber: number;
+  evidenceSource?: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+  localTransactionId?: never;
+  runId?: never;
+}
+
+/**
+ * A proof produced by an attested synthetic verifier. It has no transaction hash at all,
+ * so a local ledger result can never be fabricated into chain evidence.
+ */
+export interface LocalReceiptProof extends ReceiptProofBase {
+  localTransactionId: string;
+  runId: string;
+  blockNumber?: number;
+  evidenceSource?: "SYNTHETIC_LOCAL";
+  transactionHash?: never;
+}
+
+export type ReceiptProof = EvmReceiptProof | LocalReceiptProof;
+
 export interface ReceiptReader {
-  read(transactionHash: Hex): Promise<ReceiptProof | null>;
+  /** `submissionRef` is an EVM transaction hash or a `localtx:` submission identity. */
+  read(submissionRef: string): Promise<ReceiptProof | null>;
 }
 
 export interface QuoteIdentityVerifier {

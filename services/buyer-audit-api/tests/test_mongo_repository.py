@@ -613,6 +613,7 @@ async def seed_phase6_reconciliation(
     bind_wallet: bool = True,
     configure_policy: bool = True,
     daily_limit_units: int = 1_000_000,
+    local_transaction_id: str = PHASE6_LOCAL_TX,
 ) -> PaymentService:
     if bind_wallet:
         await repository.bind_buyer_wallet(
@@ -691,8 +692,9 @@ async def seed_phase6_reconciliation(
     )
     await service.require_reconciliation(
         purchase_id=purchase_id,
-        reason="facilitator returned submitted transaction",
-        transaction_hash=PHASE6_EVM_TX,
+        reason="synthetic facilitator returned a local submission",
+        local_transaction_id=local_transaction_id,
+        scenario=PHASE6_SCENARIO,
     )
     return service
 
@@ -702,7 +704,7 @@ def phase6_check(attempt: int, outcome: ReconciliationVerifierOutcome, *, tag: s
         attempt_number=attempt,
         checked_at=datetime(2026, 9, 4, 12, attempt, tzinfo=UTC),
         checked_chain_id=84532,
-        submission_ref=PHASE6_EVM_TX,
+        submission_ref=PHASE6_LOCAL_TX,
         verifier_outcome=outcome,
         finality_confirmations=3,
         proof_ref=f"sha256:{'1' * 62}{tag}{attempt}",
@@ -795,6 +797,36 @@ async def test_real_mongo_phase6_indexes_are_partial_and_old_documents_stay_read
             }
         )
 
+        # M2: the preflight reports duplicates and never writes, before any unique index.
+        preflight = await repository.phase6_index_collision_report()
+        assert preflight == []
+        before = await cleanup[database]["purchaseEvents"].count_documents({})
+        colliding = {
+            "actor": {"id": "legacy", "type": "service"},
+            "eventHash": "sha256:" + "cc" * 32,
+            "eventId": "legacy-collision",
+            "evidenceRefs": [],
+            "occurredAt": clock.now(),
+            "payload": {"terminalOutcomeKey": "terminal:legacy-purchase-1"},
+            "payloadHash": "sha256:" + "cc" * 32,
+            "previousEventHash": None,
+            "purchaseId": "legacy-purchase-1",
+            "sequence": 2,
+            "type": EventType.PAYMENT_SETTLED.value,
+        }
+        await cleanup[database]["purchaseEvents"].insert_many(
+            [colliding, {**colliding, "eventId": "legacy-collision-2", "sequence": 3}]
+        )
+        collisions = await repository.phase6_index_collision_report()
+        assert [item["key"] for item in collisions] == [
+            {"payload_terminalOutcomeKey": "terminal:legacy-purchase-1"}
+        ]
+        assert collisions[0]["count"] == 2
+        assert collisions[0]["index"] == "unique_phase6_terminal_outcome"
+        assert await cleanup[database]["purchaseEvents"].count_documents({}) == before + 2
+        await cleanup[database]["purchaseEvents"].delete_many(
+            {"eventId": {"$in": ["legacy-collision", "legacy-collision-2"]}}
+        )
         await repository.ensure_indexes()
         await repository.ensure_indexes()
 
@@ -907,18 +939,18 @@ async def test_real_mongo_terminal_outcome_is_exclusive_under_concurrency(
                     ReconciliationVerifierOutcome.SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER,
                 ),
             )
-
+        # A local submission can only be closed by synthetic terminal proofs, so the
+        # third racer is a competing mismatch rather than a chain-shaped failure.
         results = await asyncio.gather(
             service.confirm_mismatch(purchase_id=purchase_id, proof=phase6_mismatch()),
             service.reconcile_no_transfer(
                 purchase_id=purchase_id, proof=phase6_no_transfer()
             ),
-            service.fail_confirmed(
+            service.confirm_mismatch(
                 purchase_id=purchase_id,
-                reason="receipt status zero",
-                transaction_hash=PHASE6_EVM_TX,
-                block_number=42,
-                receipt_status=0,
+                proof=phase6_mismatch(
+                    amount_units=150_000, proof_ref="sha256:" + "77" * 32
+                ),
             ),
             return_exceptions=True,
         )
@@ -1065,8 +1097,18 @@ async def test_real_mongo_reconciliation_attempts_and_actual_spend_are_exact(
                 purchase_id=wrong_token_purchase_id,
                 proof=phase6_mismatch(amount_units=100_000, token=PHASE6_OTHER_TOKEN),
             )
-        await wrong_token_service.confirm_mismatch(
-            purchase_id=wrong_token_purchase_id,
+        # A purchase can only be closed by the submission it actually holds, so the
+        # wrong-token close needs its own submitted local transaction.
+        other_token_service = await seed_phase6_reconciliation(
+            repository,
+            clock,
+            "purchase-phase6-other-token",
+            bind_wallet=False,
+            configure_policy=False,
+            local_transaction_id=PHASE6_SECOND_LOCAL_TX,
+        )
+        await other_token_service.confirm_mismatch(
+            purchase_id="purchase-phase6-other-token",
             proof=phase6_mismatch(
                 amount_units=100_000,
                 token=PHASE6_OTHER_TOKEN,
@@ -1080,7 +1122,8 @@ async def test_real_mongo_reconciliation_attempts_and_actual_spend_are_exact(
             token=PHASE6_TOKEN,
         )
         assert quoted_policy is not None
-        assert quoted_policy.reserved_units == 0
+        # The rejected purchase is still open, so its quoted reservation is still held.
+        assert quoted_policy.reserved_units == 100_000
         assert quoted_policy.spent_units == 200_000
         assert (
             await repository.get_wallet_policy(
@@ -1090,11 +1133,12 @@ async def test_real_mongo_reconciliation_attempts_and_actual_spend_are_exact(
             )
             is None
         )
-        wrong_token_outflows = await repository.list_confirmed_outflows(
-            wrong_token_purchase_id
+        assert await repository.list_confirmed_outflows(wrong_token_purchase_id) == []
+        other_token_outflows = await repository.list_confirmed_outflows(
+            "purchase-phase6-other-token"
         )
-        assert len(wrong_token_outflows) == 1
-        assert wrong_token_outflows[0].token == PHASE6_OTHER_TOKEN
+        assert len(other_token_outflows) == 1
+        assert other_token_outflows[0].token == PHASE6_OTHER_TOKEN
     finally:
         await repository.close()
         await cleanup.drop_database(database)

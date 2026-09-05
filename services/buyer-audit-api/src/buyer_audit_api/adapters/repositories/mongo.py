@@ -170,6 +170,7 @@ def _payment_intent_document(intent: PaymentIntent) -> dict[str, Any]:
         "mismatchedFields": list(intent.mismatched_fields),
         "terminalOutcomeKey": intent.terminal_outcome_key,
         "terminalProofRef": intent.terminal_proof_ref,
+        "terminalProofFingerprint": intent.terminal_proof_fingerprint,
         "terminalEvidenceSource": (
             intent.terminal_evidence_source.value
             if intent.terminal_evidence_source is not None
@@ -233,6 +234,9 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         ),
         terminal_outcome_key=cast(str | None, document.get("terminalOutcomeKey")),
         terminal_proof_ref=cast(str | None, document.get("terminalProofRef")),
+        terminal_proof_fingerprint=cast(
+            str | None, document.get("terminalProofFingerprint")
+        ),
         terminal_evidence_source=(
             EvidenceSource(str(document["terminalEvidenceSource"]))
             if document.get("terminalEvidenceSource") is not None
@@ -357,6 +361,89 @@ class MongoEvidenceRepository:
         self._seller_executions = self._database["sellerExecutions"]
         self._confirmed_outflows = self._database["confirmedOutflows"]
 
+    async def phase6_index_collision_report(self) -> list[dict[str, Any]]:
+        """Read-only duplicate report for the new Phase 6 unique keys.
+
+        It aggregates existing documents that already carry the new fields and reports
+        every key that would violate a new unique index. It never writes or backfills.
+        """
+        specs: tuple[tuple[str, Any, dict[str, Any], list[str]], ...] = (
+            (
+                "unique_phase6_terminal_outcome",
+                self._events,
+                {
+                    "type": {"$in": [item.value for item in TERMINAL_PAYMENT_EVENT_TYPES]},
+                    "payload.terminalOutcomeKey": {"$type": "string"},
+                },
+                ["payload.terminalOutcomeKey"],
+            ),
+            (
+                "unique_phase6_reconciliation_attempt",
+                self._events,
+                {
+                    "type": EventType.PAYMENT_RECONCILIATION_CHECKED.value,
+                    "payload.attemptNumber": {"$type": "number"},
+                },
+                ["purchaseId", "type", "payload.attemptNumber"],
+            ),
+            (
+                "unique_phase6_rejected_attempt",
+                self._events,
+                {
+                    "type": EventType.PAYMENT_ATTEMPT_REJECTED.value,
+                    "payload.attemptId": {"$type": "string"},
+                },
+                ["purchaseId", "type", "payload.attemptId"],
+            ),
+            (
+                "unique_confirmed_outflow_terminal",
+                self._confirmed_outflows,
+                {"terminalOutcomeKey": {"$type": "string"}},
+                ["terminalOutcomeKey"],
+            ),
+            (
+                "unique_confirmed_outflow_transaction",
+                self._confirmed_outflows,
+                {
+                    "transactionRef.kind": "EVM",
+                    "transactionRef.hash": {"$type": "string"},
+                },
+                ["transactionRef.hash"],
+            ),
+            (
+                "unique_confirmed_outflow_transaction_local",
+                self._confirmed_outflows,
+                {
+                    "transactionRef.kind": "LOCAL",
+                    "transactionRef.id": {"$type": "string"},
+                },
+                ["transactionRef.runId", "transactionRef.id"],
+            ),
+        )
+        report: list[dict[str, Any]] = []
+        for name, collection, match, keys in specs:
+            group_id = {
+                key.replace(".", "_"): f"${key}" for key in keys
+            }
+            cursor = await collection.aggregate(
+                [
+                    {"$match": match},
+                    {"$group": {"_id": group_id, "count": {"$sum": 1}}},
+                    {"$match": {"count": {"$gt": 1}}},
+                    {"$sort": {"count": DESCENDING}},
+                    {"$limit": 32},
+                ]
+            )
+            async for document in cursor:
+                report.append(
+                    {
+                        "index": name,
+                        "key": document["_id"],
+                        "count": int(document["count"]),
+                    }
+                )
+        return report
+
     async def ensure_indexes(self) -> None:
         await self._client.admin.command({"ping": 1})
         await self._users.create_index([("ownerAddress", ASCENDING)], unique=True)
@@ -427,8 +514,16 @@ class MongoEvidenceRepository:
                 name=name,
                 partialFilterExpression={"type": event_type.value},
             )
-        # Phase 6 cross-terminal exclusivity. The partial expression only matches new
-        # payloads, so historical rows are never backfilled to create these indexes.
+        # M2 / design 18.15.7: report duplicates read-only before creating the new unique
+        # indexes. Historical rows are never modified or backfilled to make them fit.
+        collisions = await self.phase6_index_collision_report()
+        if collisions:
+            raise EvidenceIntegrityError(
+                "Phase 6 unique index preflight found existing collisions: "
+                + "; ".join(
+                    f"{item['index']} {item['key']} x{item['count']}" for item in collisions
+                )
+            )
         await self._events.create_index(
             [("payload.terminalOutcomeKey", ASCENDING)],
             unique=True,

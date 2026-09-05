@@ -18,6 +18,7 @@ from buyer_audit_api.core.audit import (
     finding_payload,
     is_final_eligible,
 )
+from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
     EventType,
@@ -758,3 +759,55 @@ async def test_nonfinal_purchase_gets_a_preview_without_a_persisted_audit(clock)
     assert all(event.type != EventType.AUDITED for event in events)
     assert READER.persisted(events) is None
     assert PROJECTIONS.project(events).audit_status is AuditStatus.PENDING_AUDIT
+
+
+@pytest.mark.asyncio
+async def test_reaudit_fails_closed_once_evidence_passes_the_audited_head(clock) -> None:
+    """H4: a changed head must demand a correction policy, never a silent stale report."""
+    repository = await settled_delivered_repository(clock)
+    service = AuditService(repository=repository, clock=clock)
+    first = await service.audit(PURCHASE_ID)
+    await repository.append_event(
+        purchase_id=PURCHASE_ID,
+        event_type=EventType.SENSITIVE_PAYLOAD_ACCESSED,
+        occurred_at=DECIDED_AT,
+        actor={"id": OWNER, "type": "user"},
+        payload={"kind": "request", "payloadId": "payload-1"},
+    )
+
+    with pytest.raises(EvidenceIntegrityError, match="advanced after the terminal audit"):
+        await service.audit(PURCHASE_ID)
+
+    events = await repository.list_events(PURCHASE_ID)
+    assert [event.type for event in events].count(EventType.AUDITED) == 1
+    persisted = READER.persisted_audit(events)
+    assert persisted is not None
+    assert persisted.report == first
+    assert persisted.covers_head is False
+    assert PROJECTIONS.project(events).audit_covers_head is False
+
+
+@pytest.mark.asyncio
+async def test_persisted_audit_must_describe_the_head_it_was_appended_to(clock) -> None:
+    """H4: a stored audit whose head hash does not match its position is an integrity error."""
+    repository = await settled_delivered_repository(clock)
+    await repository.append_event(
+        purchase_id=PURCHASE_ID,
+        event_type=EventType.AUDITED,
+        payload={
+            "auditBundleHash": "sha256:" + "44" * 32,
+            "evidenceHeadEventHash": "sha256:" + "55" * 32,
+            "findings": [],
+            "reportId": "audit:" + "66" * 32,
+            "rulesetVersion": RULESET_VERSION,
+            "severity": "NORMAL",
+        },
+        occurred_at=DECIDED_AT,
+        actor={"id": "deterministic-audit-engine", "type": "service"},
+    )
+    events = await repository.list_events(PURCHASE_ID)
+
+    with pytest.raises(EvidenceIntegrityError, match="does not describe the head"):
+        READER.persisted_audit(events)
+    with pytest.raises(EvidenceIntegrityError, match="does not describe the head"):
+        await AuditService(repository=repository, clock=clock).audit(PURCHASE_ID)

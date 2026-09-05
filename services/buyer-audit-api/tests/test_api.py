@@ -101,10 +101,14 @@ def test_authenticated_fake_domain_purchase_round_trip(container) -> None:
         assert events.json()[0]["type"] == "REQUESTED"
         assert "private prompt" not in str(events.json())
 
-        sensitive = client.get(
-            f"/purchases/{body['purchase_id']}/sensitive/{body['sensitive_payload_id']}"
+        sensitive_path = (
+            f"/purchases/{body['purchase_id']}"
+            f"/sensitive/{body['sensitive_payload_id']}/access"
         )
-        assert sensitive.status_code == 200
+        # H4: reading encrypted material is an explicit mutation, so the GET is gone.
+        assert client.get(sensitive_path).status_code == 405
+        sensitive = client.post(sensitive_path)
+        assert sensitive.status_code == 201
         assert sensitive.json()["value"]["prompt"] == "private prompt"
         events_after_access = client.get(f"/purchases/{body['purchase_id']}/events").json()
         assert events_after_access[-1]["type"] == "SENSITIVE_PAYLOAD_ACCESSED"
@@ -112,12 +116,7 @@ def test_authenticated_fake_domain_purchase_round_trip(container) -> None:
         client.cookies.clear()
         authenticate(client, Account.create())
         assert client.get(f"/purchases/{body['purchase_id']}/events").status_code == 404
-        assert (
-            client.get(
-                f"/purchases/{body['purchase_id']}/sensitive/{body['sensitive_payload_id']}"
-            ).status_code
-            == 404
-        )
+        assert client.post(sensitive_path).status_code == 404
 
 
 def test_unauthenticated_and_unknown_domain_are_rejected(container) -> None:
@@ -806,22 +805,43 @@ def reconciling_purchase(container, client: TestClient) -> tuple[str, str]:
         headers=INTERNAL_HEADERS,
         json={
             "purchase_id": purchase_id,
-            "reason": "facilitator returned submitted transaction",
-            "transaction_hash": EVM_TX,
+            "reason": "synthetic facilitator returned a local submission",
+            "local_transaction_id": LOCAL_TX_ID,
+            "scenario": SCENARIO_BODY,
         },
     )
     assert reconciled.status_code == 200
     assert reconciled.json()["state"] == "RECONCILIATION_REQUIRED"
+    assert reconciled.json()["local_transaction_id"] == LOCAL_TX_ID
+    assert reconciled.json()["transaction_hash"] is None
     return purchase_id, buyer.address.lower()
 
 
-def check_body(purchase_id: str, attempt: int, outcome: str) -> dict[str, object]:
+def guards(
+    client: TestClient, purchase_id: str, *, state: str = "RECONCILIATION_REQUIRED"
+) -> dict[str, object]:
+    """M1: every internal mutation body states the state and head it observed."""
+    head = client.get(
+        f"/internal/evidence/purchases/{purchase_id}/head",
+        headers=INTERNAL_HEADERS,
+    )
+    assert head.status_code == 200
+    return {
+        "expected_state": state,
+        "expected_event_count": head.json()["event_count"],
+        "expected_head_event_hash": head.json()["head_event_hash"],
+    }
+
+
+def check_body(
+    client: TestClient, purchase_id: str, attempt: int, outcome: str
+) -> dict[str, object]:
     return {
         "purchase_id": purchase_id,
         "attempt_number": attempt,
         "checked_at": f"2026-09-04T12:0{attempt}:00Z",
         "checked_chain_id": 84532,
-        "submission_ref": EVM_TX,
+        "submission_ref": LOCAL_TX_ID,
         "verifier_outcome": outcome,
         "finality_confirmations": 3,
         "proof_ref": "sha256:" + str(attempt) * 64,
@@ -829,11 +849,16 @@ def check_body(purchase_id: str, attempt: int, outcome: str) -> dict[str, object
         "receipt_status": 1,
         "block_number": 46_349_821,
         "scenario": SCENARIO_BODY,
+        **guards(client, purchase_id),
     }
 
 
 def mismatch_body(
-    purchase_id: str, buyer_address: str, *, amount_units: int = 200_000
+    client: TestClient,
+    purchase_id: str,
+    buyer_address: str,
+    *,
+    amount_units: int = 200_000,
 ) -> dict[str, object]:
     return {
         "purchase_id": purchase_id,
@@ -845,23 +870,41 @@ def mismatch_body(
         "proof_ref": "sha256:" + "22" * 32,
         "evidence_source": "SYNTHETIC_LOCAL",
         "scenario": SCENARIO_BODY,
+        **guards(client, purchase_id),
     }
 
 
-def no_transfer_body(purchase_id: str, *, attempts: int = 3) -> dict[str, object]:
+def authorization_nonce_hash(client: TestClient, purchase_id: str) -> str:
+    intent = client.get(
+        f"/internal/evidence/payment-intents/{purchase_id}",
+        headers=INTERNAL_HEADERS,
+    )
+    assert intent.status_code == 200
+    nonce = intent.json()["authorization_nonce"] or intent.json()["quote_id"]
+    return "sha256:" + hashlib.sha256(str(nonce).encode()).hexdigest()
+
+
+def no_transfer_body(
+    client: TestClient,
+    purchase_id: str,
+    *,
+    attempts: int = 3,
+    last_attempt: int = 3,
+) -> dict[str, object]:
     return {
         "purchase_id": purchase_id,
         "reason_code": "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
         "checked_chain_id": 84532,
         "attempt_count": attempts,
         "first_checked_at": "2026-09-04T12:01:00Z",
-        "last_checked_at": "2026-09-04T12:09:00Z",
-        "authorization_nonce_hash": "sha256:" + "44" * 32,
+        "last_checked_at": f"2026-09-04T12:0{last_attempt}:00Z",
+        "authorization_nonce_hash": authorization_nonce_hash(client, purchase_id),
         "finality_evidence": {"confirmations": 3},
         "proof_ref": "sha256:" + "33" * 32,
         "evidence_source": "SYNTHETIC_LOCAL",
         "submission_ref": LOCAL_TX_ID,
         "scenario": SCENARIO_BODY,
+        **guards(client, purchase_id),
     }
 
 
@@ -871,7 +914,20 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         assert (
             client.post(
                 "/internal/evidence/payment-intents/reconciliation-checks",
-                json=check_body("missing", 1, "RECEIPT_NOT_FOUND"),
+                json={
+                    "purchase_id": "missing",
+                    "attempt_number": 1,
+                    "checked_at": "2026-09-04T12:01:00Z",
+                    "checked_chain_id": 84532,
+                    "submission_ref": LOCAL_TX_ID,
+                    "verifier_outcome": "RECEIPT_NOT_FOUND",
+                    "finality_confirmations": 3,
+                    "proof_ref": "sha256:" + "11" * 32,
+                    "evidence_source": "SYNTHETIC_LOCAL",
+                    "expected_state": "RECONCILIATION_REQUIRED",
+                    "expected_event_count": 1,
+                    "expected_head_event_hash": "sha256:" + "22" * 32,
+                },
             ).status_code
             == 401
         )
@@ -881,7 +937,10 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
             client.post(
                 "/internal/evidence/payment-intents/confirm-mismatch",
                 headers=INTERNAL_HEADERS,
-                json=mismatch_body("purchase-missing", buyer_address),
+                json={
+                    **mismatch_body(client, purchase_id, buyer_address),
+                    "purchase_id": "purchase-missing",
+                },
             ).status_code
             == 404
         )
@@ -889,7 +948,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         first = client.post(
             "/internal/evidence/payment-intents/reconciliation-checks",
             headers=INTERNAL_HEADERS,
-            json=check_body(purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
+            json=check_body(client, purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
         )
         assert first.status_code == 200
         assert first.json()["state"] == "RECONCILIATION_REQUIRED"
@@ -897,14 +956,14 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         repeated = client.post(
             "/internal/evidence/payment-intents/reconciliation-checks",
             headers=INTERNAL_HEADERS,
-            json=check_body(purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
+            json=check_body(client, purchase_id, 1, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"),
         )
         assert repeated.status_code == 200
         assert repeated.json() == first.json()
         conflicting = client.post(
             "/internal/evidence/payment-intents/reconciliation-checks",
             headers=INTERNAL_HEADERS,
-            json=check_body(purchase_id, 1, "RECEIPT_REVERTED"),
+            json=check_body(client, purchase_id, 1, "RECEIPT_REVERTED"),
         )
         assert conflicting.status_code == 409
 
@@ -912,7 +971,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
             json={
-                **mismatch_body(purchase_id, buyer_address),
+                **mismatch_body(client, purchase_id, buyer_address),
                 "expected_head_event_hash": "sha256:" + "ee" * 32,
             },
         )
@@ -920,7 +979,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         wrong_state = client.post(
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
-            json={**mismatch_body(purchase_id, buyer_address), "expected_state": "SETTLED"},
+            json={**mismatch_body(client, purchase_id, buyer_address), "expected_state": "SETTLED"},
         )
         assert wrong_state.status_code == 409
 
@@ -934,7 +993,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
                 "/internal/evidence/payment-intents/confirm-mismatch",
                 headers=INTERNAL_HEADERS,
                 json={
-                    **mismatch_body(purchase_id, buyer_address),
+                    **mismatch_body(client, purchase_id, buyer_address),
                     "transaction_ref": confused,
                 },
             )
@@ -943,14 +1002,14 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         exact = client.post(
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
-            json=mismatch_body(purchase_id, buyer_address, amount_units=100_000),
+            json=mismatch_body(client, purchase_id, buyer_address, amount_units=100_000),
         )
         assert exact.status_code == 422
 
         confirmed = client.post(
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
-            json=mismatch_body(purchase_id, buyer_address),
+            json=mismatch_body(client, purchase_id, buyer_address),
         )
         assert confirmed.status_code == 200
         assert confirmed.json()["state"] == "MISMATCH_CONFIRMED"
@@ -960,7 +1019,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
         again = client.post(
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
-            json=mismatch_body(purchase_id, buyer_address),
+            json=mismatch_body(client, purchase_id, buyer_address),
         )
         assert again.status_code == 200
         assert again.json() == confirmed.json()
@@ -968,7 +1027,7 @@ def test_terminal_endpoints_are_credentialed_typed_and_idempotent(container) -> 
             client.post(
                 "/internal/evidence/payment-intents/reconcile-no-transfer",
                 headers=INTERNAL_HEADERS,
-                json=no_transfer_body(purchase_id, attempts=1),
+                json=no_transfer_body(client, purchase_id, attempts=1),
             ).status_code
             == 409
         )
@@ -1002,7 +1061,10 @@ def test_bounded_reconciliation_reaches_a_terminal_no_transfer(container) -> Non
                     "/internal/evidence/payment-intents/reconciliation-checks",
                     headers=INTERNAL_HEADERS,
                     json=check_body(
-                        purchase_id, attempt, "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"
+                        client,
+                        purchase_id,
+                        attempt,
+                        "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
                     ),
                 ).status_code
                 == 200
@@ -1019,7 +1081,7 @@ def test_bounded_reconciliation_reaches_a_terminal_no_transfer(container) -> Non
         closed = client.post(
             "/internal/evidence/payment-intents/reconcile-no-transfer",
             headers=INTERNAL_HEADERS,
-            json=no_transfer_body(purchase_id),
+            json=no_transfer_body(client, purchase_id),
         )
         assert closed.status_code == 200
         assert closed.json()["state"] == "RECONCILED_NO_TRANSFER"
@@ -1068,7 +1130,7 @@ def test_read_paths_never_change_the_evidence_head(container) -> None:
         client.post(
             "/internal/evidence/payment-intents/confirm-mismatch",
             headers=INTERNAL_HEADERS,
-            json=mismatch_body(purchase_id, buyer_address),
+            json=mismatch_body(client, purchase_id, buyer_address),
         )
 
         def head() -> dict[str, object]:
@@ -1095,3 +1157,59 @@ def test_read_paths_never_change_the_evidence_head(container) -> None:
         assert client.get(f"/purchases/{purchase_id}").json()["audit"] is None
         assert client.get("/audit-alerts").json() == []
         assert head() == before
+
+
+def test_terminal_mutations_require_the_state_and_head_they_observed(container) -> None:
+    """M1: missing guards are 422, stale guards are 409, malformed hashes are 422."""
+    app = create_app(container)
+    with TestClient(app) as client:
+        purchase_id, buyer_address = reconciling_purchase(container, client)
+        body = mismatch_body(client, purchase_id, buyer_address)
+
+        for missing in ("expected_state", "expected_event_count", "expected_head_event_hash"):
+            without = {key: value for key, value in body.items() if key != missing}
+            assert (
+                client.post(
+                    "/internal/evidence/payment-intents/confirm-mismatch",
+                    headers=INTERNAL_HEADERS,
+                    json=without,
+                ).status_code
+                == 422
+            ), missing
+
+        for stale in (
+            {"expected_state": "AUTHORIZED"},
+            {"expected_event_count": 1},
+            {"expected_head_event_hash": "sha256:" + "ee" * 32},
+        ):
+            assert (
+                client.post(
+                    "/internal/evidence/payment-intents/confirm-mismatch",
+                    headers=INTERNAL_HEADERS,
+                    json={**body, **stale},
+                ).status_code
+                == 409
+            ), stale
+
+        for bad_hash in ("0x" + "AB" * 32, "0x" + "ab" * 31, "not-a-hash"):
+            assert (
+                client.post(
+                    "/internal/evidence/payment-intents/reconciliation",
+                    headers=INTERNAL_HEADERS,
+                    json={
+                        "purchase_id": purchase_id,
+                        "reason": "malformed submission",
+                        "transaction_hash": bad_hash,
+                    },
+                ).status_code
+                == 422
+            ), bad_hash
+
+        # The rejected attempts changed nothing, so the honest proof still closes it.
+        confirmed = client.post(
+            "/internal/evidence/payment-intents/confirm-mismatch",
+            headers=INTERNAL_HEADERS,
+            json=mismatch_body(client, purchase_id, buyer_address),
+        )
+        assert confirmed.status_code == 200
+        assert confirmed.json()["state"] == "MISMATCH_CONFIRMED"

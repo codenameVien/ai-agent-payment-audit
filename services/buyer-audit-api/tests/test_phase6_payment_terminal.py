@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -11,6 +12,7 @@ from buyer_audit_api.core.errors import (
     PaymentConflictError,
     PaymentEvidenceError,
 )
+from buyer_audit_api.core.hashing import sha256_bytes
 from buyer_audit_api.core.models import (
     EventType,
     EvidenceSource,
@@ -128,19 +130,41 @@ async def seed(
     )
 
 
-async def reconciling_service(
-    repository: InMemoryEvidenceRepository, clock
+async def synthetic_service(
+    repository: InMemoryEvidenceRepository, clock, *, purchase_id: str = PURCHASE_ID
 ) -> PaymentService:
+    """A purchase whose submission identity is an attested `localtx:` proof."""
     service = PaymentService(repository=repository, clock=clock)
-    await seed(repository, clock)
-    await service.claim(PURCHASE_ID)
+    await seed(repository, clock, purchase_id=purchase_id)
+    await service.claim(purchase_id)
     await service.authorize(
-        purchase_id=PURCHASE_ID,
+        purchase_id=purchase_id,
         authorization_hash="0xauthorization",
         signature="0xsignature",
     )
     await service.require_reconciliation(
-        purchase_id=PURCHASE_ID,
+        purchase_id=purchase_id,
+        reason="synthetic facilitator returned a local submission",
+        local_transaction_id=LOCAL_TX_ID,
+        scenario=SCENARIO,
+    )
+    return service
+
+
+async def onchain_service(
+    repository: InMemoryEvidenceRepository, clock, *, purchase_id: str = PURCHASE_ID
+) -> PaymentService:
+    """A purchase whose submission identity is a Base Sepolia transaction hash."""
+    service = PaymentService(repository=repository, clock=clock)
+    await seed(repository, clock, purchase_id=purchase_id)
+    await service.claim(purchase_id)
+    await service.authorize(
+        purchase_id=purchase_id,
+        authorization_hash="0xauthorization",
+        signature="0xsignature",
+    )
+    await service.require_reconciliation(
+        purchase_id=purchase_id,
         reason="facilitator returned submitted transaction",
         transaction_hash=EVM_TX,
     )
@@ -151,21 +175,36 @@ def check(
     attempt: int,
     outcome: ReconciliationVerifierOutcome,
     *,
+    submission_ref: str = LOCAL_TX_ID,
+    evidence_source: EvidenceSource = EvidenceSource.SYNTHETIC_LOCAL,
+    scenario: ScenarioMetadata | None = SCENARIO,
     confirmations: int = 3,
-    proof_suffix: str = "",
 ) -> ReconciliationCheck:
     return ReconciliationCheck(
         attempt_number=attempt,
         checked_at=datetime(2026, 9, 4, 12, attempt, tzinfo=UTC),
         checked_chain_id=84532,
-        submission_ref=EVM_TX,
+        submission_ref=submission_ref,
         verifier_outcome=outcome,
         finality_confirmations=confirmations,
-        proof_ref=f"sha256:{'1' * 63}{attempt}{proof_suffix}",
-        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
+        proof_ref=f"sha256:{'1' * 63}{attempt}",
+        evidence_source=evidence_source,
         receipt_status=1,
         block_number=46_349_821,
-        scenario=SCENARIO,
+        scenario=scenario,
+    )
+
+
+def onchain_check(
+    attempt: int, outcome: ReconciliationVerifierOutcome, *, confirmations: int = 3
+) -> ReconciliationCheck:
+    return check(
+        attempt,
+        outcome,
+        submission_ref=EVM_TX,
+        evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        scenario=None,
+        confirmations=confirmations,
     )
 
 
@@ -176,13 +215,8 @@ def mismatch_proof(
     recipient: str = SELLER,
     from_address: str = BUYER,
     proof_ref: str = "sha256:" + "22" * 32,
-    local: bool = True,
+    local_tx_id: str = LOCAL_TX_ID,
 ) -> ConfirmedMismatchProof:
-    reference = (
-        LocalTransactionRef(id=LOCAL_TX_ID, run_id=RUN_ID)
-        if local
-        else EvmTransactionRef(hash=EVM_TX)
-    )
     return ConfirmedMismatchProof(
         actual_transfer=ActualTransfer(
             amount_units=amount_units,
@@ -190,48 +224,98 @@ def mismatch_proof(
             from_address=from_address,
             to_address=recipient,
         ),
-        transaction_ref=reference,
+        transaction_ref=LocalTransactionRef(id=local_tx_id, run_id=RUN_ID),
         proof_ref=proof_ref,
-        evidence_source=(
-            EvidenceSource.SYNTHETIC_LOCAL if local else EvidenceSource.BASE_SEPOLIA_VERIFIED
-        ),
-        scenario=SCENARIO if local else None,
+        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
+        scenario=SCENARIO,
     )
 
 
-def no_transfer_proof(
+def onchain_mismatch_proof(
     *,
-    attempts: int = 3,
-    confirmations: int = 3,
-    proof_ref: str = "sha256:" + "33" * 32,
-) -> NoTransferProof:
-    return NoTransferProof(
-        reason_code="SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER",
-        checked_chain_id=84532,
-        attempt_count=attempts,
-        first_checked_at=datetime(2026, 9, 4, 12, 1, tzinfo=UTC),
-        last_checked_at=datetime(2026, 9, 4, 12, 9, tzinfo=UTC),
-        authorization_nonce_hash="sha256:" + "44" * 32,
-        finality_evidence={"confirmations": confirmations},
+    amount_units: int = 200_000,
+    token: str = TOKEN,
+    recipient: str = SELLER,
+    transaction_hash: str = EVM_TX,
+    proof_ref: str = "sha256:" + "66" * 32,
+) -> ConfirmedMismatchProof:
+    return ConfirmedMismatchProof(
+        actual_transfer=ActualTransfer(
+            amount_units=amount_units,
+            token=token,
+            from_address=BUYER,
+            to_address=recipient,
+        ),
+        transaction_ref=EvmTransactionRef(hash=transaction_hash),
         proof_ref=proof_ref,
-        evidence_source=EvidenceSource.SYNTHETIC_LOCAL,
-        submission_ref=LOCAL_TX_ID,
-        scenario=SCENARIO,
+        evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        scenario=None,
     )
 
 
 async def exhaust_bounded_checks(
     service: PaymentService,
     *,
+    purchase_id: str = PURCHASE_ID,
     outcome: ReconciliationVerifierOutcome = (
         ReconciliationVerifierOutcome.SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER
     ),
+    builder: Callable[[int, ReconciliationVerifierOutcome], ReconciliationCheck] = check,
+    confirmations: int | None = None,
 ) -> None:
     for attempt in (1, 2, 3):
+        recorded = builder(attempt, outcome)
+        if confirmations is not None:
+            recorded = replace(recorded, finality_confirmations=confirmations)
         await service.record_reconciliation_check(
-            purchase_id=PURCHASE_ID,
-            check=check(attempt, outcome),
+            purchase_id=purchase_id, check=recorded
         )
+
+
+async def build_no_transfer_proof(
+    repository: InMemoryEvidenceRepository,
+    *,
+    purchase_id: str = PURCHASE_ID,
+    **overrides: object,
+) -> NoTransferProof:
+    """A proof that restates the persisted reconciliation series exactly."""
+    intent = await repository.get_payment_intent(purchase_id)
+    assert intent is not None
+    events = await repository.list_events(purchase_id)
+    checks = [
+        event
+        for event in events
+        if event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
+    ]
+    first, last = checks[0], checks[-1]
+    submission = (
+        intent.local_transaction_id
+        if intent.local_transaction_id is not None
+        else intent.transaction_hash
+    )
+    assert submission is not None
+    scenario_payload = last.payload.get("scenario")
+    fields: dict[str, object] = {
+        "reason_code": str(last.payload["verifierOutcome"]),
+        "checked_chain_id": int(last.payload["checkedChainId"]),
+        "attempt_count": len(checks),
+        "first_checked_at": datetime.fromisoformat(str(first.payload["checkedAt"])),
+        "last_checked_at": datetime.fromisoformat(str(last.payload["checkedAt"])),
+        "authorization_nonce_hash": sha256_bytes(
+            (intent.authorization_nonce or intent.quote_id).encode("utf-8")
+        ),
+        "finality_evidence": {"confirmations": int(last.payload["finalityConfirmations"])},
+        "proof_ref": "sha256:" + "33" * 32,
+        "evidence_source": EvidenceSource(str(last.payload["evidenceSource"])),
+        "submission_ref": submission,
+        "scenario": (
+            ScenarioMetadata.from_payload(scenario_payload)
+            if scenario_payload is not None
+            else None
+        ),
+    }
+    fields.update(overrides)
+    return NoTransferProof(**fields)  # type: ignore[arg-type]
 
 
 async def policy_of(repository: InMemoryEvidenceRepository, clock, token: str = TOKEN):
@@ -245,7 +329,7 @@ async def policy_of(repository: InMemoryEvidenceRepository, clock, token: str = 
 @pytest.mark.asyncio
 async def test_reconciliation_check_appends_without_changing_payment_state(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     updated = await service.record_reconciliation_check(
         purchase_id=PURCHASE_ID,
@@ -272,7 +356,7 @@ async def test_same_attempt_evidence_is_idempotent_and_different_evidence_confli
     clock,
 ) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     first = await service.record_reconciliation_check(
         purchase_id=PURCHASE_ID,
         check=check(1, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND),
@@ -299,7 +383,7 @@ async def test_same_attempt_evidence_is_idempotent_and_different_evidence_confli
 @pytest.mark.asyncio
 async def test_reconciliation_attempts_must_be_consecutive(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     with pytest.raises(PaymentEvidenceError, match="consecutive"):
         await service.record_reconciliation_check(
@@ -315,7 +399,7 @@ async def test_reconciliation_attempts_must_be_consecutive(clock) -> None:
 @pytest.mark.asyncio
 async def test_concurrent_checks_keep_one_event_per_attempt_number(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     results = await asyncio.gather(
         *(
@@ -367,7 +451,7 @@ async def test_confirmed_mismatch_records_actual_outflow_exactly_once(
 ) -> None:
     del label
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     proof = mismatch_proof(**kwargs)  # type: ignore[arg-type]
 
     confirmed = await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=proof)
@@ -375,7 +459,8 @@ async def test_confirmed_mismatch_records_actual_outflow_exactly_once(
     assert confirmed.state is PaymentIntentState.MISMATCH_CONFIRMED
     assert confirmed.mismatched_fields == expected_fields
     assert confirmed.local_transaction_id == LOCAL_TX_ID
-    assert confirmed.transaction_hash == EVM_TX  # the submitted identity is preserved
+    assert confirmed.transaction_hash is None  # a synthetic run never fabricates a hash
+    assert confirmed.terminal_proof_fingerprint is not None
     policy = await policy_of(repository, clock)
     assert policy is not None
     assert policy.reserved_units == 0
@@ -395,7 +480,7 @@ async def test_confirmed_mismatch_records_actual_outflow_exactly_once(
 @pytest.mark.asyncio
 async def test_wrong_token_mismatch_never_creates_a_policy_for_the_other_token(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     await service.confirm_mismatch(
         purchase_id=PURCHASE_ID,
@@ -410,7 +495,7 @@ async def test_wrong_token_mismatch_never_creates_a_policy_for_the_other_token(c
 @pytest.mark.asyncio
 async def test_same_mismatch_proof_returns_the_existing_terminal_result(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     proof = mismatch_proof()
     first = await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=proof)
 
@@ -430,7 +515,7 @@ async def test_same_mismatch_proof_returns_the_existing_terminal_result(clock) -
 @pytest.mark.asyncio
 async def test_different_mismatch_proof_on_a_terminal_payment_is_a_conflict(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof())
     before = await repository.list_events(PURCHASE_ID)
 
@@ -449,7 +534,7 @@ async def test_different_mismatch_proof_on_a_terminal_payment_is_a_conflict(cloc
 @pytest.mark.asyncio
 async def test_proof_matching_the_quote_is_not_a_mismatch(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     with pytest.raises(PaymentEvidenceError, match="not a mismatch"):
         await service.confirm_mismatch(
@@ -464,7 +549,7 @@ async def test_proof_matching_the_quote_is_not_a_mismatch(clock) -> None:
 @pytest.mark.asyncio
 async def test_mismatch_proof_must_be_a_buyer_outflow(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
 
     with pytest.raises(PaymentEvidenceError, match="buyer outflow"):
         await service.confirm_mismatch(
@@ -476,7 +561,7 @@ async def test_mismatch_proof_must_be_a_buyer_outflow(clock) -> None:
 @pytest.mark.asyncio
 async def test_no_transfer_requires_exhausted_bounded_retries(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await service.record_reconciliation_check(
         purchase_id=PURCHASE_ID,
         check=check(
@@ -486,7 +571,8 @@ async def test_no_transfer_requires_exhausted_bounded_retries(clock) -> None:
 
     with pytest.raises(PaymentEvidenceError, match="not exhausted"):
         await service.reconcile_no_transfer(
-            purchase_id=PURCHASE_ID, proof=no_transfer_proof(attempts=1)
+            purchase_id=PURCHASE_ID,
+            proof=await build_no_transfer_proof(repository),
         )
     policy = await policy_of(repository, clock)
     assert policy is not None
@@ -496,14 +582,15 @@ async def test_no_transfer_requires_exhausted_bounded_retries(clock) -> None:
 @pytest.mark.asyncio
 async def test_transient_missing_receipt_can_never_confirm_no_transfer(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await exhaust_bounded_checks(
         service, outcome=ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND
     )
 
     with pytest.raises(PaymentEvidenceError, match="momentary missing receipt"):
         await service.reconcile_no_transfer(
-            purchase_id=PURCHASE_ID, proof=no_transfer_proof()
+            purchase_id=PURCHASE_ID,
+            proof=await build_no_transfer_proof(repository),
         )
     policy = await policy_of(repository, clock)
     assert policy is not None
@@ -517,33 +604,98 @@ async def test_transient_missing_receipt_can_never_confirm_no_transfer(clock) ->
 @pytest.mark.asyncio
 async def test_no_transfer_requires_configured_finality_evidence(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
-    await exhaust_bounded_checks(service)
+    service = await synthetic_service(repository, clock)
+    await exhaust_bounded_checks(service, confirmations=1)
 
     with pytest.raises(PaymentEvidenceError, match="finality evidence"):
         await service.reconcile_no_transfer(
-            purchase_id=PURCHASE_ID, proof=no_transfer_proof(confirmations=1)
+            purchase_id=PURCHASE_ID,
+            proof=await build_no_transfer_proof(repository),
         )
 
 
 @pytest.mark.asyncio
-async def test_no_transfer_proof_attempts_must_match_recorded_checks(clock) -> None:
+async def test_no_transfer_proof_cannot_inflate_the_recorded_finality(clock) -> None:
+    """H2: the proof may not claim more confirmations than the recorded check."""
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
+    await exhaust_bounded_checks(service, confirmations=1)
+
+    with pytest.raises(PaymentEvidenceError, match="finality does not match"):
+        await service.reconcile_no_transfer(
+            purchase_id=PURCHASE_ID,
+            proof=await build_no_transfer_proof(
+                repository, finality_evidence={"confirmations": 9}
+            ),
+        )
+    assert all(
+        event.type != EventType.PAYMENT_RECONCILED_NO_TRANSFER
+        for event in await repository.list_events(PURCHASE_ID)
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "overrides", "match"),
+    [
+        ("attempt count", {"attempt_count": 9}, "attempt count is not recorded"),
+        (
+            "submission",
+            {"submission_ref": f"localtx:{RUN_ID}:payment:000009"},
+            "not bound to the submitted payment",
+        ),
+        ("chain", {"checked_chain_id": 1}, "chain does not match"),
+        (
+            "nonce hash",
+            {"authorization_nonce_hash": "sha256:" + "ff" * 32},
+            "nonce hash does not bind",
+        ),
+        (
+            "first checked time",
+            {"first_checked_at": datetime(2020, 1, 1, tzinfo=UTC)},
+            "check window does not match",
+        ),
+        (
+            "last checked time",
+            {"last_checked_at": datetime(2030, 1, 1, tzinfo=UTC)},
+            "check window does not match",
+        ),
+        ("scenario", {"scenario": None}, "scenario does not match"),
+    ],
+    ids=[
+        "attempt count",
+        "submission",
+        "chain",
+        "nonce hash",
+        "first checked time",
+        "last checked time",
+        "scenario",
+    ],
+)
+async def test_no_transfer_proof_must_restate_the_recorded_series(
+    clock, label: str, overrides: dict[str, object], match: str
+) -> None:
+    del label
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
     await exhaust_bounded_checks(service)
 
-    with pytest.raises(PaymentEvidenceError, match="attempt count is not recorded"):
+    with pytest.raises(PaymentEvidenceError, match=match):
         await service.reconcile_no_transfer(
-            purchase_id=PURCHASE_ID, proof=no_transfer_proof(attempts=9)
+            purchase_id=PURCHASE_ID,
+            proof=await build_no_transfer_proof(repository, **overrides),
         )
+    policy = await policy_of(repository, clock)
+    assert policy is not None
+    assert policy.reserved_units == QUOTED_UNITS
 
 
 @pytest.mark.asyncio
 async def test_no_transfer_releases_the_reservation_exactly_once(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await exhaust_bounded_checks(service)
-    proof = no_transfer_proof()
+    proof = await build_no_transfer_proof(repository)
 
     closed = await asyncio.gather(
         *(
@@ -565,23 +717,187 @@ async def test_no_transfer_releases_the_reservation_exactly_once(clock) -> None:
     terminal = events[-1]
     assert terminal.payload["reasonCode"] == proof.reason_code
     assert terminal.payload["attemptCount"] == 3
+    assert terminal.payload["proofFingerprint"].startswith("sha256:")
+
+
+@pytest.mark.asyncio
+async def test_a_reused_proof_reference_with_other_fields_changed_conflicts(clock) -> None:
+    """H2: same-proof idempotency compares the whole proof, never the alias alone."""
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+    await exhaust_bounded_checks(service)
+    original = await build_no_transfer_proof(repository)
+    await service.reconcile_no_transfer(purchase_id=PURCHASE_ID, proof=original)
+    before = await repository.list_events(PURCHASE_ID)
+
+    with pytest.raises(PaymentConflictError, match="different no-transfer proof"):
+        await service.reconcile_no_transfer(
+            purchase_id=PURCHASE_ID,
+            proof=replace(original, reason_code="AUTHORIZATION_UNUSED_AFTER_EXPIRY"),
+        )
+
+    assert len(await repository.list_events(PURCHASE_ID)) == len(before)
+
+
+@pytest.mark.asyncio
+async def test_a_reused_mismatch_proof_reference_with_other_fields_changed_conflicts(
+    clock,
+) -> None:
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+    await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof())
+    before = await repository.list_events(PURCHASE_ID)
+
+    with pytest.raises(PaymentConflictError, match="different mismatch proof"):
+        await service.confirm_mismatch(
+            purchase_id=PURCHASE_ID,
+            proof=mismatch_proof(amount_units=150_000),
+        )
+
+    assert len(await repository.list_events(PURCHASE_ID)) == len(before)
+    assert len(await service.list_confirmed_outflows(PURCHASE_ID)) == 1
+
+
+@pytest.mark.asyncio
+async def test_mismatch_proof_must_be_the_submitted_transaction(clock) -> None:
+    """H2: an unrelated outflow can never terminalize this purchase."""
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+
+    with pytest.raises(PaymentEvidenceError, match="not the submitted transaction"):
+        await service.confirm_mismatch(
+            purchase_id=PURCHASE_ID,
+            proof=mismatch_proof(local_tx_id=f"localtx:{RUN_ID}:payment:000777"),
+        )
+    with pytest.raises(PaymentEvidenceError, match="not the submitted transaction"):
+        await service.confirm_mismatch(
+            purchase_id=PURCHASE_ID, proof=onchain_mismatch_proof()
+        )
+    policy = await policy_of(repository, clock)
+    assert policy is not None
+    assert policy.reserved_units == QUOTED_UNITS
+    assert await service.list_confirmed_outflows(PURCHASE_ID) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("label", "kwargs", "match"),
+    [
+        (
+            "source disagrees with reference",
+            {
+                "evidence_source": EvidenceSource.BASE_SEPOLIA_VERIFIED,
+                "reference": LocalTransactionRef(id=LOCAL_TX_ID, run_id=RUN_ID),
+            },
+            "source disagree",
+        ),
+        (
+            "historical source on a synthetic reference",
+            {
+                "evidence_source": EvidenceSource.HISTORICAL_ON_CHAIN,
+                "reference": LocalTransactionRef(id=LOCAL_TX_ID, run_id=RUN_ID),
+            },
+            "source disagree",
+        ),
+        (
+            "synthetic proof without a scenario",
+            {
+                "evidence_source": EvidenceSource.SYNTHETIC_LOCAL,
+                "reference": LocalTransactionRef(id=LOCAL_TX_ID, run_id=RUN_ID),
+                "scenario": None,
+            },
+            "exactly one scenario",
+        ),
+        (
+            "on-chain proof carrying a scenario",
+            {
+                "evidence_source": EvidenceSource.BASE_SEPOLIA_VERIFIED,
+                "reference": EvmTransactionRef(hash=EVM_TX),
+                "scenario": SCENARIO,
+            },
+            "exactly one scenario",
+        ),
+    ],
+    ids=[
+        "source disagrees with reference",
+        "historical source on a synthetic reference",
+        "synthetic proof without a scenario",
+        "on-chain proof carrying a scenario",
+    ],
+)
+def test_mismatch_proof_rejects_contradictory_provenance(
+    label: str, kwargs: dict[str, object], match: str
+) -> None:
+    """H1: proof source, transaction variant and scenario must be one consistent fact."""
+    del label
+    with pytest.raises(ValueError, match=match):
+        ConfirmedMismatchProof(
+            actual_transfer=ActualTransfer(
+                amount_units=200_000,
+                token=TOKEN,
+                from_address=BUYER,
+                to_address=SELLER,
+            ),
+            transaction_ref=kwargs["reference"],  # type: ignore[arg-type]
+            proof_ref="sha256:" + "88" * 32,
+            evidence_source=kwargs["evidence_source"],  # type: ignore[arg-type]
+            scenario=kwargs.get("scenario", SCENARIO),  # type: ignore[arg-type]
+        )
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_check_must_bind_the_submitted_identity(clock) -> None:
+    repository = InMemoryEvidenceRepository()
+    service = await synthetic_service(repository, clock)
+
+    with pytest.raises(PaymentEvidenceError, match="not bound to the submitted payment"):
+        await service.record_reconciliation_check(
+            purchase_id=PURCHASE_ID,
+            check=check(1, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND, submission_ref=EVM_TX),
+        )
+    with pytest.raises(PaymentEvidenceError, match="source contradicts"):
+        await service.record_reconciliation_check(
+            purchase_id=PURCHASE_ID,
+            check=check(
+                1,
+                ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND,
+                evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            ),
+        )
+    assert all(
+        event.type != EventType.PAYMENT_RECONCILIATION_CHECKED
+        for event in await repository.list_events(PURCHASE_ID)
+    )
 
 
 @pytest.mark.asyncio
 async def test_only_one_terminal_outcome_survives_a_race(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
-    await exhaust_bounded_checks(service)
+    service = await onchain_service(repository, clock)
+    await exhaust_bounded_checks(service, builder=onchain_check)
 
     results = await asyncio.gather(
-        service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof()),
-        service.reconcile_no_transfer(purchase_id=PURCHASE_ID, proof=no_transfer_proof()),
+        service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=onchain_mismatch_proof()),
+        service.reconcile_no_transfer(
+            purchase_id=PURCHASE_ID, proof=await build_no_transfer_proof(repository)
+        ),
         service.fail_confirmed(
             purchase_id=PURCHASE_ID,
             reason="receipt status zero",
             transaction_hash=EVM_TX,
             block_number=42,
             receipt_status=0,
+        ),
+        service.settle(
+            purchase_id=PURCHASE_ID,
+            transaction_hash=EVM_TX,
+            block_number=42,
+            transfer_log_index=3,
+            receipt_status=1,
+            token=TOKEN,
+            from_address=BUYER,
+            to_address=SELLER,
+            amount_units=QUOTED_UNITS,
         ),
         return_exceptions=True,
     )
@@ -616,7 +932,7 @@ async def test_only_one_terminal_outcome_survives_a_race(clock) -> None:
 @pytest.mark.asyncio
 async def test_settlement_after_a_confirmed_mismatch_is_rejected(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof())
     before = await repository.list_events(PURCHASE_ID)
 
@@ -639,9 +955,11 @@ async def test_settlement_after_a_confirmed_mismatch_is_rejected(clock) -> None:
 @pytest.mark.asyncio
 async def test_reconciliation_checks_stop_after_a_terminal_outcome(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await exhaust_bounded_checks(service)
-    await service.reconcile_no_transfer(purchase_id=PURCHASE_ID, proof=no_transfer_proof())
+    await service.reconcile_no_transfer(
+        purchase_id=PURCHASE_ID, proof=await build_no_transfer_proof(repository)
+    )
 
     with pytest.raises(PaymentConflictError, match="terminal outcome"):
         await service.record_reconciliation_check(
@@ -653,7 +971,7 @@ async def test_reconciliation_checks_stop_after_a_terminal_outcome(clock) -> Non
 @pytest.mark.asyncio
 async def test_terminal_purchase_still_loads_its_payment_view_and_claim(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     confirmed = await service.confirm_mismatch(
         purchase_id=PURCHASE_ID, proof=mismatch_proof()
     )
@@ -668,7 +986,9 @@ async def test_terminal_purchase_still_loads_its_payment_view_and_claim(clock) -
 @pytest.mark.asyncio
 async def test_historical_permit2_intent_cannot_reconcile_or_close(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
+    await exhaust_bounded_checks(service)
+    valid_proof = await build_no_transfer_proof(repository)
     stored = await repository.get_payment_intent(PURCHASE_ID)
     assert stored is not None
     repository._payment_intents[PURCHASE_ID] = replace(  # type: ignore[attr-defined]
@@ -678,12 +998,10 @@ async def test_historical_permit2_intent_cannot_reconcile_or_close(clock) -> Non
     for operation in (
         service.record_reconciliation_check(
             purchase_id=PURCHASE_ID,
-            check=check(1, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND),
+            check=check(4, ReconciliationVerifierOutcome.RECEIPT_NOT_FOUND),
         ),
         service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof()),
-        service.reconcile_no_transfer(
-            purchase_id=PURCHASE_ID, proof=no_transfer_proof()
-        ),
+        service.reconcile_no_transfer(purchase_id=PURCHASE_ID, proof=valid_proof),
     ):
         with pytest.raises(PaymentConflictError, match="read-only"):
             await operation
@@ -713,8 +1031,9 @@ async def test_confirmed_mismatch_over_the_daily_limit_stays_readable_and_blocks
     )
     await service.require_reconciliation(
         purchase_id=PURCHASE_ID,
-        reason="facilitator returned submitted transaction",
-        transaction_hash=EVM_TX,
+        reason="synthetic facilitator returned a local submission",
+        local_transaction_id=LOCAL_TX_ID,
+        scenario=SCENARIO,
     )
 
     await service.confirm_mismatch(
@@ -771,7 +1090,7 @@ def test_mismatched_quote_fields_is_canonically_ordered() -> None:
 @pytest.mark.asyncio
 async def test_one_synthetic_transaction_cannot_back_two_purchases(clock) -> None:
     repository = InMemoryEvidenceRepository()
-    service = await reconciling_service(repository, clock)
+    service = await synthetic_service(repository, clock)
     await service.confirm_mismatch(purchase_id=PURCHASE_ID, proof=mismatch_proof())
     second_purchase_id = "purchase-terminal-second"
     await seed(repository, clock, purchase_id=second_purchase_id, configure_policy=False)
@@ -783,8 +1102,9 @@ async def test_one_synthetic_transaction_cannot_back_two_purchases(clock) -> Non
     )
     await service.require_reconciliation(
         purchase_id=second_purchase_id,
-        reason="facilitator returned submitted transaction",
-        transaction_hash=EVM_TX,
+        reason="synthetic facilitator returned a local submission",
+        local_transaction_id=LOCAL_TX_ID,
+        scenario=SCENARIO,
     )
 
     with pytest.raises(PaymentConflictError, match="transaction is already recorded"):

@@ -108,6 +108,7 @@ class PurchaseProjection:
     mismatched_fields: tuple[str, ...]
     audit_severity: str | None
     finding_count: int
+    audit_covers_head: bool
     event_count: int
     head_event_hash: str
 
@@ -192,6 +193,26 @@ def _terminal_transaction_ref(
         raise EvidenceIntegrityError("terminal transaction hash is malformed") from exc
 
 
+def _payload_sources(event: EvidenceEvent) -> set[EvidenceSource]:
+    """Every evidence source declared by an event, including its nested transaction ref."""
+    sources: set[EvidenceSource] = set()
+    raw = event.payload.get("evidenceSource")
+    if isinstance(raw, str):
+        try:
+            sources.add(EvidenceSource(raw))
+        except ValueError as exc:
+            raise EvidenceIntegrityError(
+                f"unknown evidence source on {event.type.value}"
+            ) from exc
+    nested = event.payload.get("transactionRef")
+    if nested is not None:
+        try:
+            sources.add(transaction_ref_from_payload(nested).evidence_source)
+        except ValueError as exc:
+            raise EvidenceIntegrityError("nested transaction reference is malformed") from exc
+    return sources
+
+
 def _resolve_evidence_source(
     events: list[EvidenceEvent],
     *,
@@ -202,34 +223,25 @@ def _resolve_evidence_source(
     if scenario is not None:
         sources.add(EvidenceSource.SYNTHETIC_LOCAL)
     for event in events:
-        raw = event.payload.get("evidenceSource")
-        if raw == EvidenceSource.SYNTHETIC_LOCAL.value:
-            sources.add(EvidenceSource.SYNTHETIC_LOCAL)
+        sources |= _payload_sources(event)
     if _is_legacy_permit2(events):
         sources.add(EvidenceSource.HISTORICAL_ON_CHAIN)
-    if terminal is not None:
-        raw_terminal = terminal.payload.get("evidenceSource")
-        if isinstance(raw_terminal, str):
-            try:
-                sources.add(EvidenceSource(raw_terminal))
-            except ValueError as exc:
-                raise EvidenceIntegrityError("terminal evidence source is malformed") from exc
-        elif isinstance(terminal.payload.get("transactionHash"), str):
-            sources.add(
-                EvidenceSource.HISTORICAL_ON_CHAIN
-                if _is_legacy_permit2(events)
-                else EvidenceSource.BASE_SEPOLIA_VERIFIED
-            )
+    if (
+        terminal is not None
+        and not _payload_sources(terminal)
+        and isinstance(terminal.payload.get("transactionHash"), str)
+    ):
+        # A legacy terminal proof declares no source; its transfer method decides.
+        sources.add(
+            EvidenceSource.HISTORICAL_ON_CHAIN
+            if _is_legacy_permit2(events)
+            else EvidenceSource.BASE_SEPOLIA_VERIFIED
+        )
     if EvidenceSource.SYNTHETIC_LOCAL in sources and len(sources) > 1:
         raise EvidenceIntegrityError("purchase mixes synthetic and on-chain evidence sources")
-    for candidate in (
-        EvidenceSource.SYNTHETIC_LOCAL,
-        EvidenceSource.HISTORICAL_ON_CHAIN,
-        EvidenceSource.BASE_SEPOLIA_VERIFIED,
-    ):
-        if candidate in sources:
-            return candidate
-    return None
+    if len(sources) > 1:
+        raise EvidenceIntegrityError("purchase declares contradictory evidence sources")
+    return next(iter(sources)) if sources else None
 
 
 def _payment_status(
@@ -258,19 +270,29 @@ def _payment_status(
     return PaymentStatus.PAYMENT_NOT_STARTED
 
 
-def _audit_projection(events: list[EvidenceEvent]) -> tuple[AuditStatus, str | None, int]:
+def _audit_projection(
+    events: list[EvidenceEvent],
+) -> tuple[AuditStatus, str | None, int, bool]:
     audited = [event for event in events if event.type == EventType.AUDITED]
     if not audited:
-        return AuditStatus.PENDING_AUDIT, None, 0
+        return AuditStatus.PENDING_AUDIT, None, 0, False
     if len(audited) > 1:
         raise EvidenceIntegrityError("multiple persisted audit reports exist")
-    payload = audited[0].payload
+    audited_event = audited[0]
+    payload = audited_event.payload
     verdict = str(payload.get("severity", ""))
     status = _AUDIT_STATUS_BY_VERDICT.get(verdict)
     if status is None:
         raise EvidenceIntegrityError("persisted audit verdict is malformed")
     findings = payload.get("findings")
-    return status, verdict, len(findings) if isinstance(findings, list) else 0
+    # H4: a read model must disclose when evidence advanced past the audited head.
+    covers_head = audited_event.sequence == len(events)
+    return (
+        status,
+        verdict,
+        len(findings) if isinstance(findings, list) else 0,
+        covers_head,
+    )
 
 
 class PurchaseProjectionService:
@@ -300,13 +322,26 @@ class PurchaseProjectionService:
             events, scenario=scenario, terminal=terminal
         )
         transaction_ref = _terminal_transaction_ref(terminal, resolved_source=evidence_source)
-        if isinstance(transaction_ref, LocalTransactionRef) and (
-            scenario is not None and transaction_ref.run_id != scenario.run_id
-        ):
-            raise EvidenceIntegrityError("local transaction reference belongs to another run")
+        if transaction_ref is not None:
+            # H1: the resolved source and the terminal reference must be the same fact.
+            if (
+                evidence_source is not None
+                and transaction_ref.evidence_source is not evidence_source
+            ):
+                raise EvidenceIntegrityError(
+                    "terminal transaction reference contradicts the evidence source"
+                )
+            if isinstance(transaction_ref, LocalTransactionRef) and (
+                scenario is None or transaction_ref.run_id != scenario.run_id
+            ):
+                raise EvidenceIntegrityError(
+                    "local transaction reference belongs to another run"
+                )
 
         payment_status = _payment_status(events, terminal, payment_intent)
-        audit_status, audit_severity, finding_count = _audit_projection(events)
+        audit_status, audit_severity, finding_count, audit_covers_head = _audit_projection(
+            events
+        )
 
         requested = events[0]
         lifecycle = [event for event in events if event.type not in _NON_LIFECYCLE_EVENT_TYPES]
@@ -352,6 +387,7 @@ class PurchaseProjectionService:
             mismatched_fields=mismatched_fields,
             audit_severity=audit_severity,
             finding_count=finding_count,
+            audit_covers_head=audit_covers_head,
             event_count=len(events),
             head_event_hash=events[-1].event_hash,
         )

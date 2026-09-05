@@ -285,15 +285,19 @@ class InternalPaymentAuthorizeRequest(InternalPaymentClaimRequest):
 
 class InternalPaymentReconciliationRequest(InternalPaymentClaimRequest):
     reason: str = Field(min_length=1)
-    transaction_hash: str | None = Field(default=None, pattern=r"^0x[0-9a-fA-F]{64}$")
+    transaction_hash: str | None = Field(default=None, pattern=EVM_TRANSACTION_HASH_REGEX)
+    local_transaction_id: str | None = Field(
+        default=None, pattern=LOCAL_TRANSACTION_ID_REGEX
+    )
+    scenario: ScenarioRefModel | None = None
 
 
 class InternalPaymentTransactionBindingRequest(InternalPaymentClaimRequest):
-    transaction_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
 
 
 class InternalPaymentSettlementRequest(InternalPaymentClaimRequest):
-    transaction_hash: str
+    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
     block_number: int = Field(ge=0)
     transfer_log_index: int = Field(ge=0)
     receipt_status: int
@@ -305,17 +309,17 @@ class InternalPaymentSettlementRequest(InternalPaymentClaimRequest):
 
 class InternalPaymentFailureRequest(InternalPaymentClaimRequest):
     reason: str = Field(min_length=1)
-    transaction_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
     block_number: int = Field(ge=0)
     receipt_status: int
 
 
 class InternalTerminalProofRequest(InternalPaymentClaimRequest):
-    """Shared expected-state and expected-head guards for terminal mutations."""
+    """Design 18.12.2: every terminal mutation states the state and head it observed."""
 
-    expected_state: PaymentIntentState | None = None
-    expected_event_count: int | None = Field(default=None, ge=1)
-    expected_head_event_hash: str | None = Field(default=None, min_length=1)
+    expected_state: PaymentIntentState
+    expected_event_count: int = Field(ge=1)
+    expected_head_event_hash: str = Field(pattern=SHA256_REGEX)
 
 
 class InternalReconciliationCheckRequest(InternalTerminalProofRequest):
@@ -479,7 +483,7 @@ class ExternalAnchorRequest(BaseModel):
 
     anchored_event_count: int = Field(ge=1)
     anchored_head_event_hash: str = Field(min_length=1)
-    transaction_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
     chain_id: int = Field(ge=1)
     contract_address: str = Field(min_length=1)
 
@@ -515,8 +519,8 @@ class ReputationRecordRequest(BaseModel):
 
     erc8004_agent_id: str = Field(pattern=r"^[0-9]+$")
     objective_value: int
-    feedback_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
-    transaction_hash: str = Field(pattern=r"^0x[0-9a-fA-F]{64}$")
+    feedback_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
+    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
     chain_id: int = Field(ge=1)
     registry_address: str = Field(min_length=1)
 
@@ -575,6 +579,7 @@ class PurchaseSummaryResponse(BaseModel):
     transaction_hash: str | None
     audit_severity: str | None
     finding_count: int
+    audit_covers_head: bool = False
     lifecycle_status: str
     payment_status: str
     audit_status: str

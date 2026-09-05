@@ -217,16 +217,43 @@ def _report_from_event(event: EvidenceEvent) -> AuditReport:
         raise EvidenceIntegrityError("stored audit report is malformed") from exc
 
 
+@dataclass(frozen=True, slots=True)
+class PersistedAudit:
+    """A persisted audit with the position it actually describes."""
+
+    report: AuditReport
+    audited_sequence: int
+    audited_head_event_hash: str | None
+    covers_head: bool
+
+
 class AuditReportReader:
     """Parses persisted audit evidence. It never evaluates rules and never writes."""
 
     def persisted(self, events: list[EvidenceEvent]) -> AuditReport | None:
+        found = self.persisted_audit(events)
+        return None if found is None else found.report
+
+    def persisted_audit(self, events: list[EvidenceEvent]) -> PersistedAudit | None:
         audited = [event for event in events if event.type == EventType.AUDITED]
         if not audited:
             return None
         if len(audited) != 1:
             raise EvidenceIntegrityError("multiple audit reports exist")
-        return _report_from_event(audited[0])
+        audited_event = audited[0]
+        report = _report_from_event(audited_event)
+        index = events.index(audited_event)
+        audited_head = events[index - 1].event_hash if index > 0 else None
+        if report.evidence_head_event_hash != audited_head:
+            raise EvidenceIntegrityError(
+                "stored audit does not describe the head it was appended to"
+            )
+        return PersistedAudit(
+            report=report,
+            audited_sequence=audited_event.sequence,
+            audited_head_event_hash=audited_head,
+            covers_head=audited_event.sequence == len(events),
+        )
 
 
 class AuditEvaluator:
@@ -983,9 +1010,15 @@ class AuditService:
             expected_event_count=head.event_count,
             expected_head_event_hash=head.head_event_hash,
         )
-        persisted = self._reader.persisted(events)
+        persisted = self._reader.persisted_audit(events)
         if persisted is not None:
-            return persisted
+            if not persisted.covers_head:
+                # P6-AC-03.5: a changed head must never silently return a stale report.
+                raise EvidenceIntegrityError(
+                    "evidence head advanced after the terminal audit; "
+                    "an explicit correction or re-audit policy is required"
+                )
+            return persisted.report
 
         deterministic = self._evaluator.deterministic_findings(events)
         semantic = await self._semantic.advise(

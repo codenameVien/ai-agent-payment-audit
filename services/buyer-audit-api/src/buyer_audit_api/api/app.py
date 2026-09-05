@@ -90,6 +90,7 @@ from buyer_audit_api.core.models import (
 )
 from buyer_audit_api.core.payment import (
     PaymentIntent,
+    PaymentIntentState,
     PaymentRepository,
     PaymentService,
     PaymentView,
@@ -262,6 +263,7 @@ def _summary_response(projection: PurchaseProjection) -> PurchaseSummaryResponse
         transaction_hash=projection.legacy_transaction_hash,
         audit_severity=projection.audit_severity,
         finding_count=projection.finding_count,
+        audit_covers_head=projection.audit_covers_head,
         lifecycle_status=projection.lifecycle_status,
         payment_status=projection.payment_status.value,
         audit_status=projection.audit_status.value,
@@ -451,21 +453,36 @@ def create_app(container: AppContainer) -> FastAPI:
 
     async def terminal_context(
         body: InternalTerminalProofRequest,
+        *,
+        terminal_state: PaymentIntentState | None = None,
+        attempt_number: int | None = None,
     ) -> tuple[PaymentIntent, list[EvidenceEvent]]:
+        """M1: every terminal mutation proves the state and head it observed.
+
+        A replay of evidence this purchase already holds skips the compare-and-set
+        precondition, because the service then compares the complete immutable proof and
+        answers with the committed result or a conflict.
+        """
         intent = await payment_service.get_payment_intent(body.purchase_id)
         if intent is None:
             raise HTTPException(status_code=404, detail="payment intent not found")
         events = await verified_events(body.purchase_id)
         if not events:
             raise HTTPException(status_code=404, detail="purchase not found")
-        if body.expected_state is not None and intent.state != body.expected_state:
+        replayed = terminal_state is not None and intent.state is terminal_state
+        if attempt_number is not None:
+            replayed = replayed or any(
+                event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
+                and event.payload.get("attemptNumber") == attempt_number
+                for event in events
+            )
+        if replayed:
+            return intent, events
+        if intent.state != body.expected_state:
             raise HTTPException(status_code=409, detail="payment state changed before request")
-        if body.expected_event_count is not None and body.expected_event_count != len(events):
+        if body.expected_event_count != len(events):
             raise HTTPException(status_code=409, detail="evidence head changed before request")
-        if (
-            body.expected_head_event_hash is not None
-            and body.expected_head_event_hash != events[-1].event_hash
-        ):
+        if body.expected_head_event_hash != events[-1].event_hash:
             raise HTTPException(status_code=409, detail="evidence head changed before request")
         return intent, events
 
@@ -903,6 +920,10 @@ def create_app(container: AppContainer) -> FastAPI:
                     purchase_id=body.purchase_id,
                     reason=body.reason,
                     transaction_hash=body.transaction_hash,
+                    local_transaction_id=body.local_transaction_id,
+                    scenario=(
+                        body.scenario.to_core() if body.scenario is not None else None
+                    ),
                 )
             )
         except (
@@ -1004,7 +1025,7 @@ def create_app(container: AppContainer) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> PaymentIntentResponse:
         require_internal(authorization)
-        await terminal_context(body)
+        await terminal_context(body, attempt_number=body.attempt_number)
         try:
             return _payment_intent_response(
                 await payment_service.record_reconciliation_check(
@@ -1031,7 +1052,9 @@ def create_app(container: AppContainer) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> PaymentIntentResponse:
         require_internal(authorization)
-        await terminal_context(body)
+        await terminal_context(
+            body, terminal_state=PaymentIntentState.MISMATCH_CONFIRMED
+        )
         try:
             return _payment_intent_response(
                 await payment_service.confirm_mismatch(
@@ -1058,7 +1081,9 @@ def create_app(container: AppContainer) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> PaymentIntentResponse:
         require_internal(authorization)
-        await terminal_context(body)
+        await terminal_context(
+            body, terminal_state=PaymentIntentState.RECONCILED_NO_TRANSFER
+        )
         try:
             return _payment_intent_response(
                 await payment_service.reconcile_no_transfer(
@@ -1795,15 +1820,21 @@ def create_app(container: AppContainer) -> FastAPI:
             raise HTTPException(status_code=404)
         return [_event_response(event) for event in events]
 
-    @app.get(
-        "/purchases/{purchase_id}/sensitive/{payload_id}",
+    @app.post(
+        "/purchases/{purchase_id}/sensitive/{payload_id}/access",
         response_model=SensitivePayloadResponse,
+        status_code=201,
     )
-    async def read_sensitive(
+    async def access_sensitive(
         purchase_id: str,
         payload_id: str,
         pbl_session: str | None = Cookie(default=None),
     ) -> SensitivePayloadResponse:
+        """H4: reading sensitive material is an explicit mutation, never a GET.
+
+        Every read of an encrypted payload must leave an append-only access record, so
+        this operation is a POST and the GET/read contract stays strictly zero-write.
+        """
         owner = require_owner(pbl_session)
         events = await verified_events(purchase_id)
         if not events or events[0].actor.get("id") != owner.lower():
