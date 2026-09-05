@@ -40,6 +40,7 @@ function fakeContracts(args: {
   journal: string[];
   found?: { transactionHash: Hex; blockNumber: number; logIndex: number } | null;
   events?: RawFeedbackEvent[];
+  head?: bigint;
 }): ChainJournal {
   const giveFeedback: Parameters<Erc8004Contracts["giveFeedback"]>[0][] = [];
   const contracts: Erc8004Contracts = {
@@ -61,6 +62,10 @@ function fakeContracts(args: {
     async queryFeedback() {
       args.journal.push("queryFeedback");
       return args.events ?? [];
+    },
+    async latestBlock() {
+      args.journal.push("latestBlock");
+      return args.head ?? 1000n;
     },
   };
   return { journal: args.journal, giveFeedback, contracts };
@@ -95,6 +100,12 @@ function job(overrides: Partial<ReputationPublishJob> = {}): ReputationPublishJo
     feedbackHash: null,
     transactionRef: null,
     receiptProofRef: null,
+    clientAddress: null,
+    feedbackUri: null,
+    blockNumber: null,
+    logIndex: null,
+    evidenceSource: null,
+    confirmedProof: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -103,6 +114,7 @@ function job(overrides: Partial<ReputationPublishJob> = {}): ReputationPublishJo
 
 function proof(overrides: Partial<ConfirmedFeedbackProof> = {}): ConfirmedFeedbackProof {
   return {
+    registryAddress: REGISTRY,
     transactionRef: {
       kind: "EVM",
       hash: TX,
@@ -174,7 +186,7 @@ function fakeOutbox(args: {
       current = {
         ...current,
         status: "SUBMITTED_UNKNOWN",
-        transactionRef: call.transactionRef,
+        transactionRef: call.transactionRef ?? null,
       };
       return current;
     },
@@ -191,6 +203,12 @@ function fakeOutbox(args: {
         receiptProofRef: call.proof.receiptProofRef,
         feedbackHash: call.proof.feedbackHash,
       };
+      return current;
+    },
+    async recordConflict(call) {
+      args.journal.push("recordConflict");
+      calls.push({ name: "recordConflict", args: call });
+      current = { ...current, status: "CONFLICT" };
       return current;
     },
   };
@@ -492,7 +510,8 @@ test("a 409 on markPrepared is a policy failure with zero writes", async () => {
     },
   );
   assert.equal(chain.giveFeedback.length, 0);
-  assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared"]);
+  // The conflict itself is recorded before the policy error surfaces.
+  assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared", "recordConflict"]);
 });
 
 test("a 409 on markConfirmed is a policy failure and is never retried", async () => {
@@ -516,6 +535,7 @@ test("an empty outbox yields no job and no chain traffic", async () => {
     async markPrepared() { throw new Error("unreachable"); },
     async markSubmittedUnknown() { throw new Error("unreachable"); },
     async markConfirmed() { throw new Error("unreachable"); },
+    async recordConflict() { throw new Error("unreachable"); },
   };
   const loop = publisher({ ...chain, outbox, journal, confirm: () => proof() });
   assert.equal(await loop.publishClaimed(), null);
@@ -570,10 +590,13 @@ test("query provenance carries coordinates and excludes untrusted or mistagged l
     registryAddress: REGISTRY,
     erc8004AgentId: "1",
     trustedClients: [CLIENT],
-    fromBlock: 800,
-    toBlock: 1000,
+    lookbackBlocks: 500,
   });
-  assert.deepEqual(journal, ["queryFeedback"]);
+  // The head is resolved here, never named by the caller.
+  assert.deepEqual(journal, ["latestBlock", "queryFeedback"]);
+  assert.equal(result.latestBlock, 1000);
+  assert.equal(result.scope.toBlock, 1000);
+  assert.equal(result.scope.fromBlock, 501);
   assert.equal(result.scope.tag1, FEEDBACK_TAG1);
   assert.equal(result.scope.tag2, FEEDBACK_TAG2);
   assert.equal(result.scope.erc8004AgentId, "1");
@@ -586,28 +609,16 @@ test("query provenance carries coordinates and excludes untrusted or mistagged l
   assert.equal(event.clientAddress, event.clientAddress.toLowerCase());
   assert.equal(event.transactionRef.kind, "EVM");
 
-  // An empty trusted-client list can never aggregate, and the range must be ordered.
+  // An empty trusted-client list can never aggregate.
   await assert.rejects(
     () => service.queryObjectiveFeedback({
       chainId: 84532,
       registryAddress: REGISTRY,
       erc8004AgentId: "1",
       trustedClients: [],
-      fromBlock: 800,
-      toBlock: 1000,
+      lookbackBlocks: 500,
     }),
     /must not be empty/,
-  );
-  await assert.rejects(
-    () => service.queryObjectiveFeedback({
-      chainId: 84532,
-      registryAddress: REGISTRY,
-      erc8004AgentId: "1",
-      trustedClients: [CLIENT],
-      fromBlock: 1000,
-      toBlock: 800,
-    }),
-    /block range is invalid/,
   );
 });
 
@@ -726,4 +737,119 @@ test("the viem log filter drops untrusted clients, wrong tags and coordinate-les
     feedbackHash: FEEDBACK_HASH,
   });
   assert.deepEqual(found, { transactionHash: TX, blockNumber: 901, logIndex: 4 });
+});
+
+test("a restarted PREPARED job with no bound submission never broadcasts again", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const staged = job({ status: "PREPARED", feedbackHash: FEEDBACK_HASH });
+  const { outbox, calls } = fakeOutbox({ initial: staged, journal });
+  const driven = await publisher({ ...chain, outbox, journal, confirm: () => proof() })
+    .drive(staged);
+  // The reviewer's reproduction: a durably PREPARED job whose reference was never bound
+  // used to re-prepare and re-broadcast whenever find-before-submit missed.
+  assert.equal(driven.status, "SUBMITTED_UNKNOWN");
+  assert.equal(chain.giveFeedback.length, 0);
+  assert.equal(calls.filter((call) => call.name === "markPrepared").length, 0);
+  assert.deepEqual(journal, ["findFeedback", "markSubmittedUnknown"]);
+  const unresolved = calls.find((call) => call.name === "markSubmittedUnknown")?.args as {
+    reason: string;
+  };
+  assert.equal("transactionRef" in unresolved, false);
+  assert.match(unresolved.reason, /unresolved from PREPARED/);
+});
+
+test("a restarted SUBMITTED_UNKNOWN job with no reference stays unresolved", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const staged = job({ status: "SUBMITTED_UNKNOWN", feedbackHash: FEEDBACK_HASH });
+  const { outbox, calls } = fakeOutbox({ initial: staged, journal });
+  const driven = await publisher({ ...chain, outbox, journal, confirm: () => proof() })
+    .drive(staged);
+  assert.equal(driven.status, "SUBMITTED_UNKNOWN");
+  assert.equal(chain.giveFeedback.length, 0);
+  assert.equal(calls.filter((call) => call.name === "markPrepared").length, 0);
+  const unresolved = calls.find((call) => call.name === "markSubmittedUnknown")?.args as {
+    reason: string;
+  };
+  assert.equal("transactionRef" in unresolved, false);
+  assert.match(unresolved.reason, /unresolved from SUBMITTED_UNKNOWN/);
+});
+
+test("a LEASED job commits the whole intent once and broadcasts exactly once", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const leased = job({ status: "LEASED", workerId: "worker-a" });
+  const { outbox, calls } = fakeOutbox({ initial: leased, journal });
+  const driven = await publisher({ ...chain, outbox, journal, confirm: () => proof() })
+    .drive(leased);
+  assert.equal(driven.status, "CONFIRMED");
+  const prepared = calls.filter((call) => call.name === "markPrepared");
+  assert.equal(prepared.length, 1);
+  const commitment = prepared[0]?.args as {
+    clientAddress: Address;
+    feedbackUri: string;
+    feedbackHash: Hex;
+    transactionRef?: TransactionRef;
+  };
+  // PREPARED is the full pre-broadcast commitment, minus a reference that cannot exist yet.
+  assert.equal(commitment.clientAddress, CLIENT);
+  assert.equal(commitment.feedbackUri, AUDIT_BUNDLE);
+  assert.equal(commitment.feedbackHash, FEEDBACK_HASH);
+  assert.equal(commitment.transactionRef, undefined);
+  assert.equal(chain.giveFeedback.length, 1);
+  assert.deepEqual(journal, [
+    "findFeedback",
+    "markPrepared",
+    "giveFeedback",
+    "confirm",
+    "markConfirmed",
+  ]);
+  // The reference is bound exactly once, by the confirmation.
+  assert.equal(driven.transactionRef?.kind, "EVM");
+});
+
+test("an outbox conflict is recorded against the publish identity exactly once", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const { outbox, calls } = fakeOutbox({ initial: job(), journal, conflictOn: "prepared" });
+  await assert.rejects(
+    () => publisher({ ...chain, outbox, journal, confirm: () => proof() }).publishClaimed(),
+    (error: unknown) => {
+      assert.ok(error instanceof Erc8004PolicyError);
+      assert.match(error.message, /reputation outbox conflict/);
+      return true;
+    },
+  );
+  const conflicts = calls.filter((call) => call.name === "recordConflict");
+  assert.equal(conflicts.length, 1);
+  assert.deepEqual(conflicts[0]?.args, {
+    identityHash: `sha256:${"11".repeat(32)}`,
+    requestedFingerprint: FINGERPRINT,
+    reasonCode: "OUTBOX_TRANSITION_CONFLICT",
+  });
+  assert.equal(chain.giveFeedback.length, 0);
+});
+
+test("a failed conflict recording never hides the conflict that caused it", async () => {
+  const journal: string[] = [];
+  const chain = fakeContracts({ journal });
+  const base = fakeOutbox({ initial: job(), journal, conflictOn: "prepared" });
+  const outbox: ReputationOutboxApi = {
+    ...base.outbox,
+    async recordConflict() {
+      journal.push("recordConflict");
+      throw new Error("evidence api is unreachable");
+    },
+  };
+  await assert.rejects(
+    () => publisher({ ...chain, outbox, journal, confirm: () => proof() }).publishClaimed(),
+    (error: unknown) => {
+      assert.ok(error instanceof Erc8004PolicyError);
+      assert.match(error.message, /reputation outbox conflict/);
+      return true;
+    },
+  );
+  assert.deepEqual(journal, ["claim", "findFeedback", "markPrepared", "recordConflict"]);
+  assert.equal(chain.giveFeedback.length, 0);
 });

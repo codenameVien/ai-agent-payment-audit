@@ -4,6 +4,7 @@ import {
   BASE_SEPOLIA_CHAIN_ID,
   type ConfirmedFeedbackProof,
   type EvidenceApi,
+  type EvidenceSource,
   type PaymentIntent,
   type PaymentView,
   type ReputationOutboxApi,
@@ -401,6 +402,26 @@ type TransactionRefJson =
       evidence_source: "SYNTHETIC_LOCAL";
     };
 
+/**
+ * The confirmed-feedback proof as the Evidence API stores it. `registry_address` binds the
+ * proof to the registry the receipt was read against, so it cannot float between chains.
+ */
+interface ReputationProofJson {
+  transaction_ref: TransactionRefJson;
+  registry_address: string;
+  receipt_proof_ref: string;
+  client_address: string;
+  erc8004_agent_id: string;
+  value: 0 | 100;
+  value_decimals: 0;
+  feedback_hash: Hex;
+  block_number: number;
+  log_index: number;
+  tag1: string;
+  tag2: string;
+  feedback_uri: string;
+}
+
 interface ReputationJobJson {
   job_id: string;
   status: ReputationOutboxStatus;
@@ -429,6 +450,12 @@ interface ReputationJobJson {
   feedback_hash: Hex | null;
   transaction_ref: TransactionRefJson | null;
   receipt_proof_ref: string | null;
+  client_address: string | null;
+  feedback_uri: string | null;
+  block_number: number | null;
+  log_index: number | null;
+  evidence_source: EvidenceSource | null;
+  confirmed_proof: ReputationProofJson | null;
   created_at: string;
   updated_at: string;
 }
@@ -474,6 +501,42 @@ function decodeTransactionRef(body: TransactionRefJson): TransactionRef {
   };
 }
 
+function encodeProof(proof: ConfirmedFeedbackProof): ReputationProofJson {
+  return {
+    transaction_ref: encodeTransactionRef(proof.transactionRef),
+    registry_address: proof.registryAddress.toLowerCase(),
+    receipt_proof_ref: proof.receiptProofRef,
+    client_address: proof.clientAddress.toLowerCase(),
+    erc8004_agent_id: proof.erc8004AgentId,
+    value: proof.value,
+    value_decimals: proof.valueDecimals,
+    feedback_hash: proof.feedbackHash,
+    block_number: proof.blockNumber,
+    log_index: proof.logIndex,
+    tag1: proof.tag1,
+    tag2: proof.tag2,
+    feedback_uri: proof.feedbackUri,
+  };
+}
+
+function decodeProof(body: ReputationProofJson): ConfirmedFeedbackProof {
+  return {
+    transactionRef: decodeTransactionRef(body.transaction_ref),
+    registryAddress: body.registry_address.toLowerCase() as Address,
+    receiptProofRef: body.receipt_proof_ref,
+    clientAddress: body.client_address.toLowerCase() as Address,
+    erc8004AgentId: body.erc8004_agent_id,
+    value: body.value,
+    valueDecimals: body.value_decimals,
+    feedbackHash: body.feedback_hash,
+    blockNumber: body.block_number,
+    logIndex: body.log_index,
+    tag1: body.tag1,
+    tag2: body.tag2,
+    feedbackUri: body.feedback_uri,
+  };
+}
+
 function decodeJob(body: ReputationJobJson): ReputationPublishJob {
   return {
     jobId: body.job_id,
@@ -505,6 +568,12 @@ function decodeJob(body: ReputationJobJson): ReputationPublishJob {
       ? null
       : decodeTransactionRef(body.transaction_ref),
     receiptProofRef: body.receipt_proof_ref,
+    clientAddress: body.client_address ?? null,
+    feedbackUri: body.feedback_uri ?? null,
+    blockNumber: body.block_number ?? null,
+    logIndex: body.log_index ?? null,
+    evidenceSource: body.evidence_source ?? null,
+    confirmedProof: body.confirmed_proof == null ? null : decodeProof(body.confirmed_proof),
     createdAt: body.created_at,
     updatedAt: body.updated_at,
   };
@@ -542,7 +611,7 @@ export class ReputationOutboxHttpClient implements ReputationOutboxApi {
       },
     );
     if (response.status === 404) return null;
-    return decodeJob(await this.#decode(response));
+    return decodeJob(await this.#decode<ReputationJobJson>(response));
   }
 
   async get(jobId: string): Promise<ReputationPublishJob | null> {
@@ -551,92 +620,110 @@ export class ReputationOutboxHttpClient implements ReputationOutboxApi {
       { headers: { authorization: this.#authorization } },
     );
     if (response.status === 404) return null;
-    return decodeJob(await this.#decode(response));
+    return decodeJob(await this.#decode<ReputationJobJson>(response));
   }
 
+  /** PREPARED is the whole pre-broadcast commitment: client and audit bundle included. */
   async markPrepared(args: {
     jobId: string;
     workerId: string;
     payloadFingerprint: string;
     transactionRef?: TransactionRef;
     feedbackHash: Hex;
+    clientAddress: Address;
+    feedbackUri: string;
   }): Promise<ReputationPublishJob> {
-    return this.#transition(args.jobId, "prepared", {
-      worker_id: args.workerId,
-      payload_fingerprint: args.payloadFingerprint,
-      feedback_hash: args.feedbackHash,
-      ...(args.transactionRef === undefined
-        ? {}
-        : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
-    });
+    return decodeJob(
+      await this.#post<ReputationJobJson>(
+        `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/prepared`,
+        {
+          worker_id: args.workerId,
+          payload_fingerprint: args.payloadFingerprint,
+          feedback_hash: args.feedbackHash,
+          client_address: args.clientAddress.toLowerCase(),
+          feedback_uri: args.feedbackUri,
+          ...(args.transactionRef === undefined
+            ? {}
+            : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
+        },
+      ),
+    );
   }
 
   async markSubmittedUnknown(args: {
     jobId: string;
     workerId: string;
     payloadFingerprint: string;
-    transactionRef: TransactionRef;
+    transactionRef?: TransactionRef;
     reason: string;
   }): Promise<ReputationPublishJob> {
-    return this.#transition(args.jobId, "submitted-unknown", {
-      worker_id: args.workerId,
-      payload_fingerprint: args.payloadFingerprint,
-      transaction_ref: encodeTransactionRef(args.transactionRef),
-      reason: args.reason,
-    });
+    return decodeJob(
+      await this.#post<ReputationJobJson>(
+        `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/submitted-unknown`,
+        {
+          worker_id: args.workerId,
+          payload_fingerprint: args.payloadFingerprint,
+          reason: args.reason,
+          // The key is omitted, never sent as null: "no transaction can be named" is the
+          // state itself, and a null field would look like a resolved absence.
+          ...(args.transactionRef === undefined
+            ? {}
+            : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
+        },
+      ),
+    );
   }
 
+  /** The confirmation and its append-only REPUTATION_RECORDED event are one atomic unit. */
   async markConfirmed(args: {
     jobId: string;
     workerId: string;
     payloadFingerprint: string;
     proof: ConfirmedFeedbackProof;
   }): Promise<ReputationPublishJob> {
-    return this.#transition(args.jobId, "confirmed", {
-      worker_id: args.workerId,
-      payload_fingerprint: args.payloadFingerprint,
-      proof: {
-        transaction_ref: encodeTransactionRef(args.proof.transactionRef),
-        receipt_proof_ref: args.proof.receiptProofRef,
-        client_address: args.proof.clientAddress.toLowerCase(),
-        erc8004_agent_id: args.proof.erc8004AgentId,
-        value: args.proof.value,
-        value_decimals: args.proof.valueDecimals,
-        feedback_hash: args.proof.feedbackHash,
-        block_number: args.proof.blockNumber,
-        log_index: args.proof.logIndex,
-        tag1: args.proof.tag1,
-        tag2: args.proof.tag2,
-        feedback_uri: args.proof.feedbackUri,
-      },
-    });
-  }
-
-  async #transition(
-    jobId: string,
-    action: "prepared" | "submitted-unknown" | "confirmed",
-    body: unknown,
-  ): Promise<ReputationPublishJob> {
-    const response = await this.#fetch(
-      `${this.#baseUrl}/internal/evidence/reputation-outbox/${encodeURIComponent(jobId)}/${action}`,
+    const recorded = await this.#post<{ job: ReputationJobJson }>(
+      `/internal/evidence/reputation-outbox/${encodeURIComponent(args.jobId)}/confirmed`,
       {
-        method: "POST",
-        headers: {
-          authorization: this.#authorization,
-          "content-type": "application/json",
-        },
-        body: JSON.stringify(body),
+        worker_id: args.workerId,
+        payload_fingerprint: args.payloadFingerprint,
+        proof: encodeProof(args.proof),
       },
     );
-    return decodeJob(await this.#decode(response));
+    return decodeJob(recorded.job);
+  }
+
+  async recordConflict(args: {
+    identityHash: string;
+    requestedFingerprint: string;
+    reasonCode: string;
+  }): Promise<ReputationPublishJob> {
+    // `sha256:<hex>` is one path segment. Percent-encoding the colon would address a
+    // different identity than the one the outbox keys on.
+    const recorded = await this.#post<{ job: ReputationJobJson }>(
+      `/internal/evidence/reputation-outbox/identity/${args.identityHash}/conflict`,
+      { requested_fingerprint: args.requestedFingerprint, reason_code: args.reasonCode },
+    );
+    return decodeJob(recorded.job);
+  }
+
+  async #post<T>(path: string, body: unknown): Promise<T> {
+    const response = await this.#fetch(`${this.#baseUrl}${path}`, {
+      method: "POST",
+      headers: {
+        authorization: this.#authorization,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify(body),
+    });
+    return this.#decode<T>(response);
   }
 
   /** A 409 is a durable-state refusal, never a transport failure worth retrying. */
-  async #decode(response: Response): Promise<ReputationJobJson> {
+  async #decode<T>(response: Response): Promise<T> {
     if (response.status === 409) {
       const detail = await response.text();
       throw new ReputationOutboxConflictError(detail.slice(0, 300));
     }
-    return decodeJson<ReputationJobJson>(response);
+    return decodeJson<T>(response);
   }
 }

@@ -380,7 +380,13 @@ class TerminalAuditCoordinator:
         )
         if match is None:
             return None
+        # The ERC-8004 agent ID is an *identity* fact, so it comes from the verified
+        # `quoteIdentityEvidence` the buyer recorded at selection time - the same source
+        # the read models report. A seller-supplied quote field is not identity evidence,
+        # and reading it there made a purchase with verified identity defer as
+        # `ATTRIBUTION_INSUFFICIENT`.
         identity_verified = False
+        agent_id = "0"
         if isinstance(evidence, list):
             identity = next(
                 (
@@ -391,29 +397,67 @@ class TerminalAuditCoordinator:
                 ),
                 None,
             )
-            identity_verified = bool(
-                identity is not None and identity.get("identityVerified") is True
-            )
+            if identity is not None:
+                identity_verified = identity.get("identityVerified") is True
+                raw_agent_id = identity.get("erc8004AgentId")
+                if raw_agent_id is not None:
+                    agent_id = str(raw_agent_id)
         return (
             str(match.get("seller_agent_id", "")),
-            str(match.get("erc8004_agent_id", "0")),
+            agent_id,
             identity_verified,
         )
 
     def _delivery_matches_quote(
         self, events: list[EvidenceEvent], delivered: EvidenceEvent
     ) -> bool:
+        """Compares the delivery against the **signed quote** the buyer selected.
+
+        The signed quote is the contract the seller is judged against, and it is what the
+        delivery endpoint already validates. The `DECIDED.winner` summary only has to
+        name the winning quote, so requiring provider/model fields there made a correct
+        delivery look unattributable.
+        """
+        quote = self._winning_signed_quote(events)
+        if quote is None:
+            return False
+        payload = delivered.payload
+        for delivered_key, quote_key in (
+            ("providerId", "provider_id"),
+            ("modelId", "model_id"),
+            ("modelVersion", "model_version"),
+        ):
+            expected = quote.get(quote_key)
+            if expected is None:
+                continue
+            if str(payload.get(delivered_key, "")) != str(expected):
+                return False
+        return True
+
+    def _winning_signed_quote(
+        self, events: list[EvidenceEvent]
+    ) -> dict[str, object] | None:
         decided = next(
             (event for event in events if event.type == EventType.DECIDED), None
         )
-        if decided is None:
-            return False
+        quoted = next(
+            (event for event in events if event.type == EventType.QUOTED), None
+        )
+        if decided is None or quoted is None:
+            return None
         winner = decided.payload.get("winner")
-        if not isinstance(winner, dict):
-            return False
-        return (
-            str(delivered.payload.get("providerId", "")) == str(winner.get("provider_id"))
-            and str(delivered.payload.get("modelId", "")) == str(winner.get("model_id"))
+        quotes = quoted.payload.get("signedQuotes")
+        if not isinstance(winner, dict) or not isinstance(quotes, list):
+            return None
+        winning_quote_id = str(winner.get("quote_id", ""))
+        return next(
+            (
+                item
+                for item in quotes
+                if isinstance(item, dict)
+                and str(item.get("quote_id")) == winning_quote_id
+            ),
+            None,
         )
 
     def _has_conflicting_proof(self, events: list[EvidenceEvent]) -> bool:

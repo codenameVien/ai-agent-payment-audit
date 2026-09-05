@@ -584,20 +584,35 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
         assert report.status_code == 200
         assert report.json()["severity"] == "NORMAL"
         assert report.json()["findings"] == []
-        reputation_tx = "0x" + "ef" * 32
-        reputation = client.post(
-            f"/internal/evidence/purchases/{purchase_id}/reputation",
-            headers=INTERNAL_HEADERS,
-            json={
-                "erc8004_agent_id": "1",
-                "objective_value": 100,
-                "feedback_hash": "0x" + report.json()["audit_bundle_hash"].split(":")[-1],
-                "transaction_hash": reputation_tx,
-                "chain_id": 84532,
-                "registry_address": CONTRACT,
-            },
+        # The Phase 5 tx-only writer is gone: a bare transaction hash can no longer
+        # append `REPUTATION_RECORDED`, so the route does not exist at all.
+        assert (
+            client.post(
+                f"/internal/evidence/purchases/{purchase_id}/reputation",
+                headers=INTERNAL_HEADERS,
+                json={
+                    "erc8004_agent_id": "1",
+                    "objective_value": 100,
+                    "feedback_hash": "0x" + "ef" * 32,
+                    "transaction_hash": "0x" + "ef" * 32,
+                    "chain_id": 84532,
+                    "registry_address": CONTRACT,
+                },
+            ).status_code
+            == 404
         )
-        assert reputation.status_code == 200
+        assert (
+            client.get(
+                f"/internal/evidence/purchases/{purchase_id}/reputation-intent"
+                "?erc8004_agent_id=1",
+                headers=INTERNAL_HEADERS,
+            ).status_code
+            == 404
+        )
+        before = client.get(f"/purchases/{purchase_id}/events")
+        assert before.status_code == 200
+        assert [item["type"] for item in before.json()].count("REPUTATION_RECORDED") == 0
+
         terminal_retry = client.post(
             "/internal/evidence/payment-intents/claim",
             headers=INTERNAL_HEADERS,
@@ -606,6 +621,24 @@ def test_internal_payment_api_is_credentialed_and_claims_from_evidence(container
         assert terminal_retry.status_code == 200
         assert terminal_retry.json()["state"] == "SETTLED"
         assert terminal_retry.json()["transaction_hash"] == "0x" + "ab" * 32
+
+        # The only writer is the durable outbox, and it needs a full proof.
+        reputation_tx = "0x" + "ef" * 32
+        publish_through_the_outbox(
+            container, client, purchase_id, transaction_hash=reputation_tx
+        )
+
+        # `REPUTATION_DECIDED` and `REPUTATION_RECORDED` are post-payment singletons, so
+        # the payment lifecycle stays valid and every payment surface keeps working after
+        # a finalize and a confirmed publication.
+        after_publish = client.post(
+            "/internal/evidence/payment-intents/claim",
+            headers=INTERNAL_HEADERS,
+            json={"purchase_id": purchase_id},
+        )
+        assert after_publish.status_code == 200, after_publish.text
+        assert after_publish.json()["state"] == "SETTLED"
+        assert after_publish.json()["transaction_hash"] == "0x" + "ab" * 32
 
         wallet = client.get("/wallet")
         assert wallet.status_code == 200
@@ -1249,6 +1282,105 @@ def head_guards(client: TestClient, purchase_id: str) -> dict[str, object]:
     }
 
 
+def wire_reputation_in_place(container) -> None:
+    """Wires the outbox into an app that is already serving.
+
+    `AppContainer` is a mutable dataclass, so a running app sees the coordinator without
+    rebuilding it. This lets one test drive the whole HTTP publication path.
+    """
+    container.terminal_coordinator = TerminalAuditCoordinator(
+        orchestration=container.repository,
+        outbox=container.repository,
+        clock=container.clock,
+        chain_id=84532,
+        registry_address=REPUTATION_REGISTRY,
+    )
+    container.reputation_outbox = container.repository
+    container.reputation_snapshots = container.repository
+
+
+def publish_through_the_outbox(
+    container,
+    client: TestClient,
+    purchase_id: str,
+    *,
+    transaction_hash: str,
+) -> dict[str, object]:
+    """Drives finalize -> claim -> prepared -> confirmed over the real HTTP surface.
+
+    This is the *only* way a `REPUTATION_RECORDED` event can exist, so the read models
+    that depend on one are exercised through the proof-carrying path rather than through
+    a hand-written event.
+    """
+    wire_reputation_in_place(container)
+    finalized = client.post(
+        f"/internal/evidence/purchases/{purchase_id}/audit/finalize",
+        headers=INTERNAL_HEADERS,
+        json=head_guards(client, purchase_id),
+    )
+    assert finalized.status_code == 200, finalized.text
+    job = finalized.json()["job"]
+    assert job is not None
+    bundle = job["decision"]["audit_bundle_hash"]
+
+    claimed = client.post(
+        "/internal/evidence/reputation-outbox/claim",
+        headers=INTERNAL_HEADERS,
+        json={"worker_id": "worker-api", "lease_seconds": 60},
+    )
+    assert claimed.status_code == 200, claimed.text
+    transition = {
+        "worker_id": "worker-api",
+        "payload_fingerprint": job["payload_fingerprint"],
+    }
+    prepared = client.post(
+        f"/internal/evidence/reputation-outbox/{job['job_id']}/prepared",
+        headers=INTERNAL_HEADERS,
+        json={
+            **transition,
+            "feedback_hash": "0x" + "ee" * 32,
+            "client_address": FEEDBACK_CLIENT,
+            "feedback_uri": bundle,
+        },
+    )
+    assert prepared.status_code == 200, prepared.text
+    assert prepared.json()["transaction_ref"] is None
+
+    confirmed = client.post(
+        f"/internal/evidence/reputation-outbox/{job['job_id']}/confirmed",
+        headers=INTERNAL_HEADERS,
+        json={
+            **transition,
+            "proof": {
+                "transaction_ref": {
+                    "kind": "EVM",
+                    "hash": transaction_hash,
+                    "chain_id": 84532,
+                    "evidence_source": "BASE_SEPOLIA_VERIFIED",
+                    "block_number": 77,
+                    "log_index": 1,
+                },
+                "receipt_proof_ref": "sha256:" + "88" * 32,
+                "registry_address": REPUTATION_REGISTRY,
+                "client_address": FEEDBACK_CLIENT,
+                "erc8004_agent_id": job["decision"]["erc8004_agent_id"],
+                "value": job["decision"]["value"],
+                "value_decimals": 0,
+                "feedback_hash": "0x" + "ee" * 32,
+                "block_number": 77,
+                "log_index": 1,
+                "tag1": "pbl-audit",
+                "tag2": "payment-outcome",
+                "feedback_uri": bundle,
+            },
+        },
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    assert confirmed.json()["job"]["status"] == "CONFIRMED"
+    assert confirmed.json()["event"]["type"] == "REPUTATION_RECORDED"
+    return confirmed.json()
+
+
 def test_terminal_finalize_creates_one_decision_and_one_claimable_job(container) -> None:
     """P6-AC-05.1/P6-AC-05.3 across the real HTTP boundary."""
     wired = reputation_container(container)
@@ -1380,6 +1512,12 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
         )
 
         prepared_path = f"/internal/evidence/reputation-outbox/{job_id}/prepared"
+        bundle = job["decision"]["audit_bundle_hash"]
+        commitment = {
+            "feedback_hash": "0x" + "ee" * 32,
+            "client_address": FEEDBACK_CLIENT,
+            "feedback_uri": bundle,
+        }
         # A malformed feedback hash never reaches the core.
         assert (
             client.post(
@@ -1388,7 +1526,35 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
                 json={
                     "worker_id": "worker-a",
                     "payload_fingerprint": fingerprint,
+                    **commitment,
                     "feedback_hash": "0x" + "EE" * 32,
+                },
+            ).status_code
+            == 422
+        )
+        # So does an incomplete commitment: the client and the URI are mandatory.
+        assert (
+            client.post(
+                prepared_path,
+                headers=INTERNAL_HEADERS,
+                json={
+                    "worker_id": "worker-a",
+                    "payload_fingerprint": fingerprint,
+                    "feedback_hash": "0x" + "ee" * 32,
+                },
+            ).status_code
+            == 422
+        )
+        # A feedback URI that is not the decided audit bundle is refused by the core.
+        assert (
+            client.post(
+                prepared_path,
+                headers=INTERNAL_HEADERS,
+                json={
+                    "worker_id": "worker-a",
+                    "payload_fingerprint": fingerprint,
+                    **commitment,
+                    "feedback_uri": "sha256:" + "13" * 32,
                 },
             ).status_code
             == 422
@@ -1401,7 +1567,7 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
                 json={
                     "worker_id": "worker-b",
                     "payload_fingerprint": fingerprint,
-                    "feedback_hash": "0x" + "ee" * 32,
+                    **commitment,
                 },
             ).status_code
             == 409
@@ -1413,13 +1579,29 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
             json={
                 "worker_id": "worker-a",
                 "payload_fingerprint": fingerprint,
-                "feedback_hash": "0x" + "ee" * 32,
+                **commitment,
             },
         )
         assert prepared.status_code == 200
         assert prepared.json()["status"] == "PREPARED"
         # No transaction reference is invented before the submission exists.
         assert prepared.json()["transaction_ref"] is None
+        assert prepared.json()["client_address"] == FEEDBACK_CLIENT
+        assert prepared.json()["feedback_uri"] == bundle
+
+        # C2: an unresolved submission is recorded without a reference at all.
+        unresolved = client.post(
+            f"/internal/evidence/reputation-outbox/{job_id}/submitted-unknown",
+            headers=INTERNAL_HEADERS,
+            json={
+                "worker_id": "worker-a",
+                "payload_fingerprint": fingerprint,
+                "reason": "recorded reputation intent is unresolved",
+            },
+        )
+        assert unresolved.status_code == 200, unresolved.text
+        assert unresolved.json()["status"] == "SUBMITTED_UNKNOWN"
+        assert unresolved.json()["transaction_ref"] is None
 
         unknown = client.post(
             f"/internal/evidence/reputation-outbox/{job_id}/submitted-unknown",
@@ -1441,7 +1623,7 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
         assert unknown.json()["transaction_ref"]["hash"] == FEEDBACK_TX
 
         confirmed_path = f"/internal/evidence/reputation-outbox/{job_id}/confirmed"
-        proof_body = {
+        proof_body: dict[str, object] = {
             "worker_id": "worker-a",
             "payload_fingerprint": fingerprint,
             "proof": {
@@ -1454,6 +1636,7 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
                     "log_index": 2,
                 },
                 "receipt_proof_ref": "sha256:" + "88" * 32,
+                "registry_address": REPUTATION_REGISTRY,
                 "client_address": FEEDBACK_CLIENT,
                 "erc8004_agent_id": agent_id,
                 "value": 0,
@@ -1463,38 +1646,58 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
                 "log_index": 2,
                 "tag1": "pbl-audit",
                 "tag2": "payment-outcome",
+                "feedback_uri": bundle,
             },
         }
-        # A proof for a different agent is refused before anything is recorded.
-        wrong_agent = {
-            **proof_body,
-            "proof": {**proof_body["proof"], "erc8004_agent_id": "9"},  # type: ignore[dict-item]
+        base_proof = dict(proof_body["proof"])  # type: ignore[arg-type]
+
+        # Every binding the reviewer found unchecked is refused before anything is
+        # recorded, and none of them leaves an event behind.
+        historical_ref = {
+            **base_proof["transaction_ref"],  # type: ignore[dict-item]
+            "evidence_source": "HISTORICAL_ON_CHAIN",
         }
-        assert (
-            client.post(confirmed_path, headers=INTERNAL_HEADERS, json=wrong_agent).status_code
-            == 422
-        )
+        for label, overrides in (
+            ("agent", {"erc8004_agent_id": "9"}),
+            ("registry", {"registry_address": "0x" + "11" * 20}),
+            ("client", {"client_address": "0x" + "00" * 19 + "aa"}),
+            ("bundle", {"feedback_uri": "sha256:" + "13" * 32}),
+            ("payload", {"feedback_hash": "0x" + "22" * 32}),
+            ("source", {"transaction_ref": historical_ref}),
+        ):
+            response = client.post(
+                confirmed_path,
+                headers=INTERNAL_HEADERS,
+                json={**proof_body, "proof": {**base_proof, **overrides}},
+            )
+            assert response.status_code == 422, (label, response.text)
+        stored = asyncio.run(container.repository.list_events(purchase_id))
+        assert [item.type for item in stored].count(EventType.REPUTATION_RECORDED) == 0
 
         confirmed = client.post(confirmed_path, headers=INTERNAL_HEADERS, json=proof_body)
         assert confirmed.status_code == 200
-        assert confirmed.json()["status"] == "CONFIRMED"
-        assert confirmed.json()["receipt_proof_ref"] == "sha256:" + "88" * 32
+        assert confirmed.json()["job"]["status"] == "CONFIRMED"
+        assert confirmed.json()["job"]["receipt_proof_ref"] == "sha256:" + "88" * 32
+        # C1: the confirmation and the append-only publication are one answer.
+        recorded = confirmed.json()["event"]
+        assert recorded["type"] == "REPUTATION_RECORDED"
+        assert recorded["payload"]["publishIdentityHash"] == job["publish_identity_hash"]
+        assert recorded["payload"]["transactionHash"] == FEEDBACK_TX
+        assert recorded["payload"]["receiptProofRef"] == "sha256:" + "88" * 32
 
         # Same proof retry returns the committed record; a different one conflicts.
-        assert (
-            client.post(confirmed_path, headers=INTERNAL_HEADERS, json=proof_body).status_code
-            == 200
-        )
+        retry = client.post(confirmed_path, headers=INTERNAL_HEADERS, json=proof_body)
+        assert retry.status_code == 200
+        assert retry.json()["event"]["event_hash"] == recorded["event_hash"]
         other = {
             **proof_body,
-            "proof": {
-                **proof_body["proof"],  # type: ignore[dict-item]
-                "receipt_proof_ref": "sha256:" + "11" * 32,
-            },
+            "proof": {**base_proof, "receipt_proof_ref": "sha256:" + "11" * 32},
         }
         assert (
             client.post(confirmed_path, headers=INTERNAL_HEADERS, json=other).status_code == 409
         )
+        after = asyncio.run(container.repository.list_events(purchase_id))
+        assert [item.type for item in after].count(EventType.REPUTATION_RECORDED) == 1
         # A confirmed job is terminal: nothing is claimable any more.
         assert (
             client.post(
@@ -1504,6 +1707,103 @@ def test_reputation_outbox_transitions_are_leased_typed_and_idempotent(container
             ).status_code
             == 404
         )
+        # A confirmed publication can never be recorded as a conflict.
+        assert (
+            client.post(
+                "/internal/evidence/reputation-outbox/identity/"
+                f"{job['publish_identity_hash']}/conflict",
+                headers=INTERNAL_HEADERS,
+                json={
+                    "requested_fingerprint": "sha256:" + "00" * 32,
+                    "reason_code": "FINGERPRINT_MISMATCH",
+                },
+            ).status_code
+            == 409
+        )
+
+
+def test_a_publication_conflict_is_recorded_over_http(container) -> None:
+    """H4: the conflict endpoint is reachable and leaves append-only evidence."""
+    wired = reputation_container(container)
+    app = create_app(wired)  # type: ignore[arg-type]
+    with TestClient(app) as client:
+        purchase_id, buyer_address = reconciling_purchase(container, client)
+        assert (
+            client.post(
+                "/internal/evidence/payment-intents/confirm-mismatch",
+                headers=INTERNAL_HEADERS,
+                json=mismatch_body(client, purchase_id, buyer_address),
+            ).status_code
+            == 200
+        )
+        finalized = client.post(
+            f"/internal/evidence/purchases/{purchase_id}/audit/finalize",
+            headers=INTERNAL_HEADERS,
+            json=head_guards(client, purchase_id),
+        )
+        assert finalized.status_code == 200
+        job = finalized.json()["job"]
+        path = (
+            "/internal/evidence/reputation-outbox/identity/"
+            f"{job['publish_identity_hash']}/conflict"
+        )
+        body = {
+            "requested_fingerprint": "sha256:" + "00" * 32,
+            "reason_code": "OUTBOX_TRANSITION_CONFLICT",
+        }
+
+        assert client.post(path, json=body).status_code == 401
+        assert (
+            client.post(
+                "/internal/evidence/reputation-outbox/identity/sha256:"
+                + "ff" * 32
+                + "/conflict",
+                headers=INTERNAL_HEADERS,
+                json=body,
+            ).status_code
+            == 404
+        )
+
+        recorded = client.post(path, headers=INTERNAL_HEADERS, json=body)
+        assert recorded.status_code == 200, recorded.text
+        assert recorded.json()["job"]["status"] == "CONFLICT"
+        event = recorded.json()["event"]
+        assert event["type"] == "REPUTATION_PUBLICATION_CONFLICT"
+        assert event["payload"] == {
+            "existingFingerprint": job["payload_fingerprint"],
+            "publishIdentityHash": job["publish_identity_hash"],
+            "reasonCode": "OUTBOX_TRANSITION_CONFLICT",
+            "requestedFingerprint": "sha256:" + "00" * 32,
+        }
+
+        # The same conflict is idempotent; a different one is preserved alongside it.
+        again = client.post(path, headers=INTERNAL_HEADERS, json=body)
+        assert again.status_code == 200
+        assert again.json()["event"]["event_hash"] == event["event_hash"]
+        different = client.post(
+            path,
+            headers=INTERNAL_HEADERS,
+            json={
+                "requested_fingerprint": "sha256:" + "22" * 32,
+                "reason_code": "FINGERPRINT_MISMATCH",
+            },
+        )
+        assert different.status_code == 200
+        assert different.json()["event"]["event_hash"] != event["event_hash"]
+
+        types = [
+            item.type
+            for item in asyncio.run(container.repository.list_events(purchase_id))
+        ]
+        assert types.count(EventType.REPUTATION_PUBLICATION_CONFLICT) == 2
+        # A repeatable conflict finding never invalidates the payment lifecycle.
+        claim = client.post(
+            "/internal/evidence/payment-intents/claim",
+            headers=INTERNAL_HEADERS,
+            json={"purchase_id": purchase_id},
+        )
+        assert claim.status_code == 200, claim.text
+        assert claim.json()["state"] == "MISMATCH_CONFIRMED"
 
 
 def test_reputation_outbox_is_disabled_without_a_configured_store(container) -> None:

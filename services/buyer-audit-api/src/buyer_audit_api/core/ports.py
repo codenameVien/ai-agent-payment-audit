@@ -100,6 +100,8 @@ class ReputationOutboxPort(Protocol):
         payload_fingerprint: str,
         transaction_ref: TransactionRef | None,
         feedback_hash: str,
+        client_address: str,
+        feedback_uri: str,
         now: datetime,
     ) -> ReputationPublishJob: ...
 
@@ -109,7 +111,7 @@ class ReputationOutboxPort(Protocol):
         job_id: str,
         worker_id: str,
         payload_fingerprint: str,
-        transaction_ref: TransactionRef,
+        transaction_ref: TransactionRef | None,
         reason: str,
         now: datetime,
     ) -> ReputationPublishJob: ...
@@ -122,7 +124,11 @@ class ReputationOutboxPort(Protocol):
         payload_fingerprint: str,
         proof: ConfirmedFeedbackProof,
         now: datetime,
-    ) -> ReputationPublishJob: ...
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """Design 18.8/18.6.4: the append-only `REPUTATION_RECORDED` event and the
+        `CONFIRMED` job are one atomic unit. There is no way to reach one without the
+        other, and no proof-free path to either."""
+        ...
 
     async def record_conflict(
         self,
@@ -131,7 +137,10 @@ class ReputationOutboxPort(Protocol):
         requested_fingerprint: str,
         reason_code: str,
         now: datetime,
-    ) -> ReputationPublishJob: ...
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """The `CONFLICT` status and its append-only
+        `REPUTATION_PUBLICATION_CONFLICT` finding are one atomic unit."""
+        ...
 
     async def list_recoverable_jobs(
         self, *, now: datetime
@@ -146,8 +155,14 @@ class ReputationSnapshotPort(Protocol):
     async def get_snapshot(self, snapshot_id: str) -> ReputationSnapshot | None: ...
 
     async def latest_snapshot(
-        self, seller_agent_id: str
-    ) -> ReputationSnapshot | None: ...
+        self, *, seller_agent_id: str, query_fingerprint: str
+    ) -> ReputationSnapshot | None:
+        """The newest stored answer to **exactly this question**, or nothing.
+
+        Keying on the seller alone would let one agent's score answer another agent's
+        query, so the query fingerprint - chain, registry, ERC-8004 agent, trusted-client
+        allow-list and tag pair - is part of the lookup, not a post-hoc check."""
+        ...
 
 
 class TerminalOrchestrationPort(Protocol):

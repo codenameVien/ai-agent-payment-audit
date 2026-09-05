@@ -37,6 +37,56 @@ _AUXILIARY_EVENT_TYPES = {
     EventType.PAYMENT_ATTEMPT_REJECTED,
 }
 
+# Post-payment singletons: each may appear at most once, and only after a terminal
+# payment event.
+_POST_PAYMENT_SINGLETONS = {
+    EventType.DELIVERED,
+    EventType.AUDITED,
+    EventType.REPUTATION_DECIDED,
+    EventType.REPUTATION_RECORDED,
+    EventType.EVIDENCE_ANCHORED,
+}
+
+
+def _post_payment_tail_is_valid(rest: list[EventType]) -> bool:
+    """Design 18.6.1/18.8: the ordered post-payment tail of one purchase.
+
+    The tail is not an unordered bag. `REPUTATION_DECIDED` is only meaningful once a
+    terminal audit exists, and a publication conflict is only meaningful once there is a
+    decision to conflict with, so accepting them in any position would drop exactly the
+    fail-closed ordering this packet is supposed to add.
+
+    - every member must be a known post-payment event;
+    - the singletons appear at most once;
+    - `REPUTATION_DECIDED` requires a preceding `AUDITED`;
+    - `REPUTATION_PUBLICATION_CONFLICT` requires a preceding `REPUTATION_DECIDED` and
+      may then repeat, because it is an append-only finding;
+    - when a chain carries both, `REPUTATION_RECORDED` must follow its decision. A
+      Phase 5 purchase that only ever had `REPUTATION_RECORDED` keeps loading, because
+      history is read as it was written and is never backfilled.
+    """
+    seen: set[EventType] = set()
+    decided_at: int | None = None
+    recorded_at: int | None = None
+    for index, event_type in enumerate(rest):
+        if event_type is EventType.REPUTATION_PUBLICATION_CONFLICT:
+            if EventType.REPUTATION_DECIDED not in seen:
+                return False
+            continue
+        if event_type not in _POST_PAYMENT_SINGLETONS or event_type in seen:
+            return False
+        if event_type is EventType.REPUTATION_DECIDED:
+            if EventType.AUDITED not in seen:
+                return False
+            decided_at = index
+        if event_type is EventType.REPUTATION_RECORDED:
+            recorded_at = index
+        seen.add(event_type)
+    if decided_at is not None and recorded_at is not None and recorded_at < decided_at:
+        return False
+    return True
+
+
 # H1: a new EIP-3009 execution submits to Base Sepolia. Historical on-chain evidence is
 # read-only and can never prove an active submission, so it is not a valid submitted source.
 _ACTIVE_EVM_SOURCE = EvidenceSource.BASE_SEPOLIA_VERIFIED
@@ -1389,12 +1439,6 @@ class PaymentService:
             ),
         )
         tail = business_types[3:]
-        post_payment_types = {
-            EventType.DELIVERED,
-            EventType.AUDITED,
-            EventType.REPUTATION_RECORDED,
-            EventType.EVIDENCE_ANCHORED,
-        }
         lifecycle_valid = any(
             tail[: len(payment_prefix)] == payment_prefix
             and (
@@ -1404,8 +1448,7 @@ class PaymentService:
                     and payment_prefix[-1] in TERMINAL_PAYMENT_EVENT_TYPES
                 )
             )
-            and all(item in post_payment_types for item in tail[len(payment_prefix) :])
-            and len(tail[len(payment_prefix) :]) == len(set(tail[len(payment_prefix) :]))
+            and _post_payment_tail_is_valid(tail[len(payment_prefix) :])
             for payment_prefix in allowed_payment_prefixes
         )
         if business_types[:3] != prefix or not lifecycle_valid:

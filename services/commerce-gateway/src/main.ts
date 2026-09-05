@@ -188,8 +188,7 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
         jobId?: unknown;
         erc8004AgentId?: unknown;
         trustedClients?: unknown;
-        fromBlock?: unknown;
-        toBlock?: unknown;
+        lookbackBlocks?: unknown;
       };
       let result;
       if (request.method === "POST" && request.url === "/reputation") {
@@ -211,8 +210,10 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
         ) {
           throw new Error("trustedClients must be an array of addresses");
         }
-        if (typeof body.fromBlock !== "number" || typeof body.toBlock !== "number") {
-          throw new Error("fromBlock and toBlock are required");
+        // The caller names a window size, never a window: the head is resolved server-side
+        // so a query cannot pin a stale range or scan the whole chain.
+        if (typeof body.lookbackBlocks !== "number") {
+          throw new Error("lookbackBlocks is required");
         }
         const query = await runtime.erc8004.queryObjectiveFeedback({
           chainId: baseSepolia.id,
@@ -221,8 +222,7 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
           trustedClients: (body.trustedClients as string[]).map(
             (client) => client.toLowerCase() as Address,
           ),
-          fromBlock: body.fromBlock,
-          toBlock: body.toBlock,
+          lookbackBlocks: body.lookbackBlocks,
         });
         result = {
           chainId: query.scope.chainId,
@@ -233,6 +233,7 @@ export function createCommerceGatewayServer(env: NodeJS.ProcessEnv = process.env
           tag2: query.scope.tag2,
           fromBlock: query.scope.fromBlock,
           toBlock: query.scope.toBlock,
+          latestBlock: query.latestBlock,
           queriedAt: query.queriedAt,
           events: query.events,
         };

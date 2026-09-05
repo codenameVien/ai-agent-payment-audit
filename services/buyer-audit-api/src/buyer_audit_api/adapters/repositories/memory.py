@@ -37,7 +37,11 @@ from buyer_audit_api.core.reputation import (
     ReputationDecision,
     ReputationPublishJob,
     ReputationSnapshot,
+    assert_prepared_commitment,
     assert_proof_matches_job,
+    conflict_is_identical,
+    publication_conflict_payload,
+    reputation_recorded_payload,
     submission_identity,
 )
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
@@ -760,6 +764,8 @@ class InMemoryEvidenceRepository:
         payload_fingerprint: str,
         transaction_ref: TransactionRef | None,
         feedback_hash: str,
+        client_address: str,
+        feedback_uri: str,
         now: datetime,
     ) -> ReputationPublishJob:
         async with self._lock:
@@ -770,16 +776,20 @@ class InMemoryEvidenceRepository:
                 now=now,
                 allowed=frozenset({OutboxStatus.LEASED, OutboxStatus.PREPARED}),
             )
-            if job.status is OutboxStatus.PREPARED and job.feedback_hash != feedback_hash:
-                raise PaymentConflictError(
-                    "reputation job is already prepared with another feedback hash"
-                )
+            assert_prepared_commitment(
+                job=job,
+                feedback_hash=feedback_hash,
+                client_address=client_address,
+                feedback_uri=feedback_uri,
+            )
             bound = self._bind_once_locked(job, transaction_ref)
             prepared = replace(
                 job,
                 status=OutboxStatus.PREPARED,
                 transaction_ref=bound,
                 feedback_hash=feedback_hash,
+                client_address=client_address,
+                feedback_uri=feedback_uri,
                 updated_at=now,
             )
             self._outbox[job_id] = prepared
@@ -791,7 +801,7 @@ class InMemoryEvidenceRepository:
         job_id: str,
         worker_id: str,
         payload_fingerprint: str,
-        transaction_ref: TransactionRef,
+        transaction_ref: TransactionRef | None,
         reason: str,
         now: datetime,
     ) -> ReputationPublishJob:
@@ -827,7 +837,8 @@ class InMemoryEvidenceRepository:
         payload_fingerprint: str,
         proof: ConfirmedFeedbackProof,
         now: datetime,
-    ) -> ReputationPublishJob:
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """One atomic unit: append-only `REPUTATION_RECORDED` plus the `CONFIRMED` job."""
         async with self._lock:
             job = self._outbox.get(job_id)
             if job is None:
@@ -837,8 +848,11 @@ class InMemoryEvidenceRepository:
                     "reputation job has a different payload fingerprint"
                 )
             if job.status is OutboxStatus.CONFIRMED:
-                if job.receipt_proof_ref == proof.receipt_proof_ref:
-                    return deepcopy(job)
+                # Retrying the *same* proof is idempotent; anything else is a conflict,
+                # never a mutation of a recorded external effect.
+                stored = job.confirmed_proof
+                if stored is not None and stored.proof_hash == proof.proof_hash:
+                    return self._recorded_event_locked(job), deepcopy(job)
                 raise PaymentConflictError("reputation job has a different confirmation")
             if job.is_terminal:
                 raise PaymentConflictError(
@@ -849,6 +863,23 @@ class InMemoryEvidenceRepository:
                     "reputation job lease is not held by this worker"
                 )
             assert_proof_matches_job(job=job, proof=proof)
+            purchase_id = job.identity.purchase_id
+            event, current, heads = self._create_event_locked(
+                purchase_id=purchase_id,
+                event_type=EventType.REPUTATION_RECORDED,
+                occurred_at=now,
+                actor={"id": "erc8004-reputation-writer", "type": "service"},
+                payload=reputation_recorded_payload(job=job, proof=proof),
+                evidence_refs=(
+                    job.decision.audit_bundle_hash,
+                    job.identity_hash,
+                    proof.receipt_proof_ref,
+                ),
+                # The publisher never sees the purchase head; the append is serialized
+                # with the status change, so the head it extends is the one it read.
+                expected_event_count=None,
+                expected_head_event_hash=None,
+            )
             self._bind_transaction_locked(job_id, proof.transaction_ref)
             confirmed = replace(
                 job,
@@ -856,14 +887,33 @@ class InMemoryEvidenceRepository:
                 transaction_ref=proof.transaction_ref,
                 receipt_proof_ref=proof.receipt_proof_ref,
                 feedback_hash=proof.feedback_hash,
+                client_address=proof.client_address,
+                feedback_uri=proof.feedback_uri,
                 block_number=proof.block_number,
                 log_index=proof.log_index,
                 evidence_source=proof.transaction_ref.evidence_source,
+                confirmed_proof=proof,
                 lease_expires_at=None,
                 updated_at=now,
             )
+            self._commit_event_locked(event, current, heads)
             self._outbox[job_id] = confirmed
-            return deepcopy(confirmed)
+            return deepcopy(event), deepcopy(confirmed)
+
+    def _recorded_event_locked(self, job: ReputationPublishJob) -> EvidenceEvent:
+        """The already-appended record of this job's publication."""
+        events = self._events.get(job.identity.purchase_id, [])
+        recorded = [
+            event
+            for event in events
+            if event.type == EventType.REPUTATION_RECORDED
+            and event.payload.get("publishIdentityHash") == job.identity_hash
+        ]
+        if not recorded:
+            raise EvidenceIntegrityError(
+                "a confirmed job has no append-only reputation record"
+            )
+        return deepcopy(recorded[-1])
 
     async def record_conflict(
         self,
@@ -872,7 +922,8 @@ class InMemoryEvidenceRepository:
         requested_fingerprint: str,
         reason_code: str,
         now: datetime,
-    ) -> ReputationPublishJob:
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """One atomic unit: `CONFLICT` plus its append-only conflict finding."""
         async with self._lock:
             job_id = self._outbox_by_identity.get(identity_hash)
             if job_id is None:
@@ -882,14 +933,42 @@ class InMemoryEvidenceRepository:
                 raise PaymentConflictError(
                     "a confirmed publication cannot be turned into a conflict"
                 )
+            payload = publication_conflict_payload(
+                identity_hash=identity_hash,
+                existing_fingerprint=job.payload_fingerprint,
+                requested_fingerprint=requested_fingerprint,
+                reason_code=reason_code,
+            )
+            purchase_id = job.identity.purchase_id
+            existing = [
+                event
+                for event in self._events.get(purchase_id, [])
+                if event.type == EventType.REPUTATION_PUBLICATION_CONFLICT
+                and conflict_is_identical(event.payload, payload)
+            ]
+            if existing:
+                # The same conflict recorded twice is one conflict. A *different* one
+                # appends its own finding and neither erases the other.
+                return deepcopy(existing[-1]), deepcopy(job)
+            event, current, heads = self._create_event_locked(
+                purchase_id=purchase_id,
+                event_type=EventType.REPUTATION_PUBLICATION_CONFLICT,
+                occurred_at=now,
+                actor={"id": "reputation-outbox", "type": "service"},
+                payload=payload,
+                evidence_refs=(identity_hash, job.decision.audit_bundle_hash),
+                expected_event_count=None,
+                expected_head_event_hash=None,
+            )
             conflicted = replace(
                 job,
                 status=OutboxStatus.CONFLICT,
                 lease_expires_at=None,
                 updated_at=now,
             )
+            self._commit_event_locked(event, current, heads)
             self._outbox[job_id] = conflicted
-            return deepcopy(conflicted)
+            return deepcopy(event), deepcopy(conflicted)
 
     async def list_recoverable_jobs(
         self, *, now: datetime
@@ -936,13 +1015,14 @@ class InMemoryEvidenceRepository:
             return deepcopy(snapshot) if snapshot is not None else None
 
     async def latest_snapshot(
-        self, seller_agent_id: str
+        self, *, seller_agent_id: str, query_fingerprint: str
     ) -> ReputationSnapshot | None:
         async with self._lock:
             matching = [
                 snapshot
                 for snapshot in self._snapshots.values()
                 if snapshot.seller_agent_id == seller_agent_id
+                and snapshot.scope.query_fingerprint == query_fingerprint
             ]
             if not matching:
                 return None

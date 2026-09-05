@@ -31,6 +31,7 @@ function fakeContracts() {
     async giveFeedback(args) { feedback.push(args); return HASH; },
     async findFeedback() { return null; },
     async queryFeedback() { return []; },
+    async latestBlock() { return 1000n; },
   };
   return { contracts, feedback };
 }
@@ -64,6 +65,12 @@ function job(overrides: Partial<ReputationPublishJob> = {}): ReputationPublishJo
     feedbackHash: null,
     transactionRef: null,
     receiptProofRef: null,
+    clientAddress: null,
+    feedbackUri: null,
+    blockNumber: null,
+    logIndex: null,
+    evidenceSource: null,
+    confirmedProof: null,
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     ...overrides,
@@ -72,6 +79,7 @@ function job(overrides: Partial<ReputationPublishJob> = {}): ReputationPublishJo
 
 function proof(overrides: Partial<ConfirmedFeedbackProof> = {}): ConfirmedFeedbackProof {
   return {
+    registryAddress: REGISTRY,
     transactionRef: {
       kind: "EVM",
       hash: HASH,
@@ -124,7 +132,11 @@ function fakeOutbox(initial: ReputationPublishJob) {
     },
     async markSubmittedUnknown(args) {
       calls.push({ name: "markSubmittedUnknown", args });
-      current = { ...current, status: "SUBMITTED_UNKNOWN", transactionRef: args.transactionRef };
+      current = {
+        ...current,
+        status: "SUBMITTED_UNKNOWN",
+        transactionRef: args.transactionRef ?? null,
+      };
       return current;
     },
     async markConfirmed(args) {
@@ -136,6 +148,11 @@ function fakeOutbox(initial: ReputationPublishJob) {
         receiptProofRef: args.proof.receiptProofRef,
         feedbackHash: args.proof.feedbackHash,
       };
+      return current;
+    },
+    async recordConflict(args) {
+      calls.push({ name: "recordConflict", args });
+      current = { ...current, status: "CONFLICT" };
       return current;
     },
   };
@@ -308,4 +325,85 @@ test("concurrent reputation publication is serialized by the durable claim", asy
   assert.equal(feedback.length, 1);
   assert.equal(calls.filter((call) => call.name === "claim").length, 2);
   assert.equal(calls.filter((call) => call.name === "markPrepared").length, 1);
+});
+
+test("a confirmed proof is refused unless it matches the whole commitment", async () => {
+  const otherRegistry = "0x00000000000000000000000000000000000000ff" as Address;
+  const otherClient = "0x00000000000000000000000000000000000000ee" as Address;
+  // Each of these matches the agent, the value and the tags, and is still a different fact.
+  const forgeries: Partial<ConfirmedFeedbackProof>[] = [
+    { registryAddress: otherRegistry },
+    { feedbackUri: `sha256:${"99".repeat(32)}` },
+    { clientAddress: otherClient },
+    { feedbackHash: `0x${"ab".repeat(32)}` as Hex },
+  ];
+  for (const overrides of forgeries) {
+    const { contracts } = fakeContracts();
+    const { outbox, calls } = fakeOutbox(job({ feedbackHash: FEEDBACK_HASH }));
+    const publisher = new Erc8004ReputationPublisher({
+      service: new Erc8004Service(contracts, CLIENT),
+      outbox,
+      receipts: { async confirm() { return proof(overrides); } },
+      chainId: 84532,
+      registryAddress: REGISTRY,
+      workerId: "worker-a",
+      writeMode: "live",
+    });
+    await assert.rejects(
+      () => publisher.publishClaimed(),
+      /confirmed feedback proof does not match the outbox job/,
+    );
+    assert.equal(calls.some((call) => call.name === "markConfirmed"), false);
+  }
+});
+
+test("a feedback query reads a bounded window ending at the chain head", async () => {
+  const { contracts } = fakeContracts();
+  const ranges: { fromBlock: bigint; toBlock: bigint }[] = [];
+  contracts.queryFeedback = async (args) => {
+    ranges.push({ fromBlock: args.fromBlock, toBlock: args.toBlock });
+    return [];
+  };
+  const service = new Erc8004Service(contracts, CLIENT);
+  const result = await service.queryObjectiveFeedback({
+    chainId: 84532,
+    registryAddress: REGISTRY,
+    erc8004AgentId: "1",
+    trustedClients: [CLIENT],
+    lookbackBlocks: 100,
+  });
+  assert.equal(result.latestBlock, 1000);
+  assert.equal(result.scope.toBlock, 1000);
+  assert.equal(result.scope.fromBlock, 901);
+  assert.deepEqual(ranges, [{ fromBlock: 901n, toBlock: 1000n }]);
+
+  // A head shorter than the window clamps to genesis instead of underflowing.
+  contracts.latestBlock = async () => 5n;
+  const shallow = await service.queryObjectiveFeedback({
+    chainId: 84532,
+    registryAddress: REGISTRY,
+    erc8004AgentId: "1",
+    trustedClients: [CLIENT],
+    lookbackBlocks: 1000,
+  });
+  assert.equal(shallow.latestBlock, 5);
+  assert.equal(shallow.scope.fromBlock, 0);
+  assert.equal(shallow.scope.toBlock, 5);
+  assert.deepEqual(ranges[1], { fromBlock: 0n, toBlock: 5n });
+
+  // An empty, negative, fractional or unbounded window is refused before any chain read.
+  const reads = ranges.length;
+  for (const lookbackBlocks of [0, -1, 1.5, 100_001]) {
+    await assert.rejects(
+      () => service.queryObjectiveFeedback({
+        chainId: 84532,
+        registryAddress: REGISTRY,
+        erc8004AgentId: "1",
+        trustedClients: [CLIENT],
+        lookbackBlocks,
+      }),
+      /lookbackBlocks must be an integer in 1\.\.100000/,
+    );
+  }
+  assert.equal(ranges.length, reads);
 });

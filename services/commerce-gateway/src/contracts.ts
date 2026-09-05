@@ -447,6 +447,13 @@ export interface ReputationPublishJob {
   feedbackHash: Hex | null;
   transactionRef: TransactionRef | null;
   receiptProofRef: string | null;
+  /** The feedback client and audit-bundle URI committed at PREPARED, before any broadcast. */
+  clientAddress: string | null;
+  feedbackUri: string | null;
+  blockNumber: number | null;
+  logIndex: number | null;
+  evidenceSource: EvidenceSource | null;
+  confirmedProof: ConfirmedFeedbackProof | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -457,6 +464,8 @@ export interface ReputationPublishJob {
  */
 export interface ConfirmedFeedbackProof {
   transactionRef: TransactionRef;
+  /** The registry the receipt was actually read against, so a proof cannot float between registries. */
+  registryAddress: Address;
   receiptProofRef: string;
   clientAddress: Address;
   erc8004AgentId: string;
@@ -494,6 +503,8 @@ export interface RawFeedbackEvent {
 
 export interface FeedbackQueryResult {
   scope: FeedbackQueryScope;
+  /** The head the gateway resolved the range against. */
+  latestBlock: number;
   queriedAt: string;
   events: RawFeedbackEvent[];
 }
@@ -509,12 +520,19 @@ export interface ReputationOutboxApi {
     /** Absent before broadcast: an EVM hash only exists once the submission does. */
     transactionRef?: TransactionRef;
     feedbackHash: Hex;
+    /** PREPARED is the full pre-broadcast commitment, not just the hash. */
+    clientAddress: Address;
+    feedbackUri: string;
   }): Promise<ReputationPublishJob>;
   markSubmittedUnknown(args: {
     jobId: string;
     workerId: string;
     payloadFingerprint: string;
-    transactionRef: TransactionRef;
+    /**
+     * Absent when an external effect may exist and cannot be named: the fail-closed
+     * reconciliation state records the doubt instead of inventing a reference.
+     */
+    transactionRef?: TransactionRef;
     reason: string;
   }): Promise<ReputationPublishJob>;
   markConfirmed(args: {
@@ -522,5 +540,11 @@ export interface ReputationOutboxApi {
     workerId: string;
     payloadFingerprint: string;
     proof: ConfirmedFeedbackProof;
+  }): Promise<ReputationPublishJob>;
+  /** Records that a second payload claimed one publish identity. Terminal for the loser. */
+  recordConflict(args: {
+    identityHash: string;
+    requestedFingerprint: string;
+    reasonCode: string;
   }): Promise<ReputationPublishJob>;
 }

@@ -196,6 +196,10 @@ export class ViemErc8004Contracts implements Erc8004Contracts {
     }
     return events;
   }
+
+  latestBlock(): Promise<bigint> {
+    return this.#publicClient.getBlockNumber();
+  }
 }
 
 export class ViemReputationReceiptConfirmer implements ReputationReceiptConfirmer {
@@ -216,6 +220,9 @@ export class ViemReputationReceiptConfirmer implements ReputationReceiptConfirme
     const receipt = await this.#publicClient.waitForTransactionReceipt({
       hash: args.transactionHash,
     });
+    // No receipt, a failed receipt, or a receipt against another contract is not a
+    // publication: the caller gets nothing rather than a proof-shaped object.
+    if (!receipt) return null;
     if (
       receipt.status !== "success" ||
       receipt.to?.toLowerCase() !== args.registryAddress.toLowerCase()
@@ -247,6 +254,7 @@ export class ViemReputationReceiptConfirmer implements ReputationReceiptConfirme
         .update(`${args.transactionHash}:${log.logIndex}:feedback`)
         .digest("hex")}`;
       return {
+        registryAddress: log.address.toLowerCase() as Address,
         transactionRef: {
           kind: "EVM",
           hash: args.transactionHash,

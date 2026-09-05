@@ -15,6 +15,7 @@ Nothing here decides *when* to run; `core/terminal.py` owns orchestration.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -25,14 +26,16 @@ from buyer_audit_api.core.audit import (
     AuditReport,
     AuditSeverity,
 )
-from buyer_audit_api.core.errors import PaymentEvidenceError
+from buyer_audit_api.core.errors import PaymentConflictError, PaymentEvidenceError
 from buyer_audit_api.core.hashing import sha256_json
 from buyer_audit_api.core.models import (
     EventType,
     EvidenceEvent,
     EvidenceSource,
+    EvmTransactionRef,
     JsonObject,
     TransactionRef,
+    transaction_ref_from_payload,
 )
 from buyer_audit_api.core.payment import PaymentIntentState
 from buyer_audit_api.core.projections import PaymentStatus
@@ -52,6 +55,25 @@ PUBLISH_FAILURE_VALUE = 0
 
 # P6-AC-06.3: a snapshot older than this is still usable but must be labelled STALE.
 DEFAULT_FRESHNESS_WINDOW = timedelta(hours=24)
+
+# `P6-AC-06.1` and requirements 12.10: the trusted feedback-client allow-list is
+# **deployment configuration**, and an unknown client is never counted. This module
+# only names the config key; the composition root parses it and no wallet address is
+# ever compiled in. An absent or empty declaration is a valid fail-closed production
+# state: no client is trusted, no query is issued, and every candidate scores neutral.
+FEEDBACK_CLIENTS_ENV = "PBL_AUDIT_FEEDBACK_CLIENTS"
+FEEDBACK_CLIENT_PATTERN = re.compile(r"^0x[0-9a-f]{40}$")
+
+# Design 18.9: the query is a bounded window ending at the chain head, never an
+# unbounded scan and never the genesis block alone.
+REPUTATION_LOOKBACK_BLOCKS = 10_000
+MAX_REPUTATION_LOOKBACK_BLOCKS = 100_000
+
+# The only evidence sources a reputation query may carry. A synthetic or historical
+# label can never enter a Base Sepolia query answer.
+QUERYABLE_EVIDENCE_SOURCES: frozenset[EvidenceSource] = frozenset(
+    {EvidenceSource.BASE_SEPOLIA_VERIFIED}
+)
 
 
 class DecisionKind(StrEnum):
@@ -433,11 +455,14 @@ class ReputationPublishJob:
     worker_id: str | None = None
     lease_expires_at: datetime | None = None
     feedback_hash: str | None = None
+    client_address: str | None = None
+    feedback_uri: str | None = None
     transaction_ref: TransactionRef | None = None
     receipt_proof_ref: str | None = None
     block_number: int | None = None
     log_index: int | None = None
     evidence_source: EvidenceSource | None = None
+    confirmed_proof: ConfirmedFeedbackProof | None = None
 
     def __post_init__(self) -> None:
         if self.identity_hash != self.identity.identity_hash:
@@ -446,24 +471,43 @@ class ReputationPublishJob:
             raise ValueError("outbox job fingerprint does not describe its decision")
         if self.attempt_count < 0:
             raise ValueError("outbox attempt count cannot be negative")
-        if self.status is OutboxStatus.PREPARED and self.feedback_hash is None:
+        if self.client_address is not None and (
+            self.client_address != self.client_address.lower()
+        ):
+            raise ValueError("outbox job clientAddress must be lowercase")
+        if self.status is OutboxStatus.PREPARED and (
+            self.feedback_hash is None
+            or self.client_address is None
+            or self.feedback_uri is None
+        ):
             # PREPARED is the durable record of an *intent to submit*. An EVM transaction
-            # hash only exists after the submission, so what is frozen here is the
-            # immutable payload commitment; the reference is bound exactly once later.
-            raise ValueError("a prepared job requires the committed feedback hash")
-        if (
-            self.status is OutboxStatus.SUBMITTED_UNKNOWN
-            and self.transaction_ref is None
-        ):
+            # hash only exists after the submission, so what is frozen here is the full
+            # payload commitment - hash, client and feedback URI - and the reference is
+            # bound exactly once later.
             raise ValueError(
-                "SUBMITTED_UNKNOWN requires a submitted transaction reference"
+                "a prepared job requires the committed feedback hash, client and URI"
             )
-        if self.status is OutboxStatus.CONFIRMED and (
-            self.receipt_proof_ref is None or self.transaction_ref is None
-        ):
+        if self.status is OutboxStatus.SUBMITTED_UNKNOWN and self.feedback_hash is None:
+            # A submission whose outcome is unknown still names what was committed. The
+            # transaction reference stays absent when the broadcast can not be named:
+            # that is the fail-closed reconciliation state, never a licence to resubmit.
             raise ValueError(
-                "a confirmed job requires a receipt proof and its transaction reference"
+                "an unknown submission requires the committed feedback hash"
             )
+        if self.status is OutboxStatus.CONFIRMED:
+            if (
+                self.receipt_proof_ref is None
+                or self.transaction_ref is None
+                or self.confirmed_proof is None
+                or self.block_number is None
+                or self.log_index is None
+                or self.evidence_source is None
+            ):
+                raise ValueError(
+                    "a confirmed job requires its full receipt and feedback-event proof"
+                )
+            if self.confirmed_proof.receipt_proof_ref != self.receipt_proof_ref:
+                raise ValueError("a confirmed job must keep the proof it accepted")
 
     @property
     def is_terminal(self) -> bool:
@@ -549,9 +593,36 @@ class ReputationQueryScope:
 
     @property
     def query_fingerprint(self) -> str:
-        """Identifies the question, not the answer; unique together with `toBlock`."""
+        """Identifies the question, not the window or the answer.
+
+        `fromBlock`/`toBlock` are excluded because the window is derived from the chain
+        head: the same question asked twice differs only by how far the chain has moved.
+        Together with `toBlock` this is the unique key of one stored answer, and it is
+        what a fallback compares so a snapshot of another agent, registry, chain, tag
+        pair or client allow-list can never be reused.
+        """
         return sha256_json(
-            {key: value for key, value in self.to_payload().items() if key != "toBlock"}
+            {
+                key: value
+                for key, value in self.to_payload().items()
+                if key not in ("fromBlock", "toBlock")
+            }
+        )
+
+    @property
+    def window_size(self) -> int:
+        return self.to_block - self.from_block + 1
+
+    def contains_block(self, block_number: int) -> bool:
+        return self.from_block <= block_number <= self.to_block
+
+    def resolved_for_lookback(self, lookback_blocks: int) -> bool:
+        """Design 18.9: a bounded window that actually ends at a resolved chain head."""
+        if lookback_blocks < 1 or self.to_block < 1:
+            return False
+        return (
+            self.window_size <= lookback_blocks
+            and self.from_block == max(0, self.to_block - lookback_blocks + 1)
         )
 
 
@@ -589,6 +660,25 @@ class ReputationSnapshot:
             for event in self.raw_values
         ):
             raise ValueError("a snapshot event does not match the queried tags")
+        if self.evidence_source not in QUERYABLE_EVIDENCE_SOURCES:
+            raise ValueError("a reputation snapshot is only a verified Base answer")
+        for event in self.raw_values:
+            if not self.scope.contains_block(event.block_number):
+                raise ValueError("a snapshot event lies outside the queried block range")
+            reference = event.transaction_ref
+            if reference.evidence_source is not self.evidence_source:
+                raise ValueError("a snapshot event carries a different evidence source")
+            if not isinstance(reference, EvmTransactionRef):
+                raise ValueError("a verified snapshot event requires a chain reference")
+            if reference.chain_id != self.scope.chain_id:
+                raise ValueError("a snapshot event was read from another chain")
+            if (
+                reference.block_number is not None
+                and reference.block_number != event.block_number
+            ):
+                raise ValueError("a snapshot event contradicts its transaction block")
+            if reference.log_index is not None and reference.log_index != event.log_index:
+                raise ValueError("a snapshot event contradicts its transaction log index")
 
     @property
     def event_count(self) -> int:
@@ -684,10 +774,20 @@ class ReputationAggregationPolicy:
     ) -> ReputationSnapshot:
         """Design 18.9: a failed query reuses a fresh-enough confirmed snapshot as STALE.
 
-        Anything older, or nothing at all, is `NO_EVIDENCE/50`. A query failure never
-        becomes a favourable score.
+        Reuse requires the stored snapshot to answer **exactly this question**: the same
+        seller agent and the same query fingerprint - chain, registry, ERC-8004 agent,
+        trusted-client allow-list and tag pair. A snapshot of another agent or another
+        allow-list is not this agent's reputation, so it is `NO_EVIDENCE/50`. Anything
+        older than the window is also `NO_EVIDENCE/50`. A query failure never becomes a
+        favourable score.
         """
-        if snapshot is not None and now - snapshot.queried_at <= self._freshness_window:
+        reusable = (
+            snapshot is not None
+            and snapshot.seller_agent_id == seller_agent_id
+            and snapshot.scope.query_fingerprint == scope.query_fingerprint
+            and now - snapshot.queried_at <= self._freshness_window
+        )
+        if snapshot is not None and reusable:
             return ReputationSnapshot(
                 snapshot_id=snapshot.snapshot_id,
                 seller_agent_id=snapshot.seller_agent_id,
@@ -723,6 +823,7 @@ class ConfirmedFeedbackProof:
 
     transaction_ref: TransactionRef
     receipt_proof_ref: str
+    registry_address: str
     client_address: str
     erc8004_agent_id: str
     value: int
@@ -747,6 +848,21 @@ class ConfirmedFeedbackProof:
             raise ValueError("objective feedback valueDecimals must be 0")
         if self.client_address != self.client_address.lower():
             raise ValueError("confirmed feedback clientAddress must be lowercase")
+        if self.registry_address != self.registry_address.lower():
+            raise ValueError("confirmed feedback registryAddress must be lowercase")
+        if not self.registry_address.strip():
+            raise ValueError("a confirmed feedback proof requires the registry it read")
+        reference = self.transaction_ref
+        if isinstance(reference, EvmTransactionRef):
+            # The decoded event coordinates and the reference that carries them are one
+            # observation. Two different answers in one proof is not a proof.
+            if (
+                reference.block_number is not None
+                and reference.block_number != self.block_number
+            ):
+                raise ValueError("confirmed feedback contradicts its transaction block")
+            if reference.log_index is not None and reference.log_index != self.log_index:
+                raise ValueError("confirmed feedback contradicts its transaction log index")
 
     def to_payload(self) -> JsonObject:
         return {
@@ -757,6 +873,7 @@ class ConfirmedFeedbackProof:
             "feedbackUri": self.feedback_uri,
             "logIndex": self.log_index,
             "receiptProofRef": self.receipt_proof_ref,
+            "registryAddress": self.registry_address,
             "tag1": self.tag1,
             "tag2": self.tag2,
             "transactionRef": self.transaction_ref.to_payload(),
@@ -764,37 +881,192 @@ class ConfirmedFeedbackProof:
             "valueDecimals": self.value_decimals,
         }
 
+    @property
+    def proof_hash(self) -> str:
+        return sha256_json(self.to_payload())
 
-def submission_identity(reference: TransactionRef) -> tuple[str, str]:
-    """The part of a reference that a submission commits to.
 
-    Confirmation legitimately discovers `blockNumber`/`logIndex`, so binding a proof to a
-    prepared submission compares only the identity the submitter actually chose.
+def submission_identity(reference: TransactionRef) -> tuple[str, ...]:
+    """The part of a reference that a submission irrevocably commits to.
+
+    Confirmation legitimately discovers `blockNumber`/`logIndex`, so those are excluded.
+    The evidence source and chain are **not** discovered: they are chosen when the
+    submission is made, so reclassifying a Base submission as historical - or moving it
+    to another chain - is a different submission, never the same one confirmed.
     """
-    if reference.kind == "EVM":
-        return ("EVM", reference.hash)
-    return ("LOCAL", f"{reference.run_id}:{reference.id}")
+    if isinstance(reference, EvmTransactionRef):
+        return (
+            "EVM",
+            reference.hash,
+            reference.evidence_source.value,
+            str(reference.chain_id),
+        )
+    return ("LOCAL", f"{reference.run_id}:{reference.id}", reference.evidence_source.value)
+
+
+def assert_prepared_commitment(
+    *,
+    job: ReputationPublishJob,
+    feedback_hash: str,
+    client_address: str,
+    feedback_uri: str,
+) -> None:
+    """`P6-AC-05.4`: what `PREPARED` freezes can never be re-prepared differently.
+
+    The commitment is the feedback hash, the client that will sign it and the feedback
+    URI, which must be the decided audit bundle. A second prepare with any other value
+    is a conflict, not a new attempt.
+    """
+    if client_address != client_address.lower():
+        raise PaymentEvidenceError("prepared clientAddress must be lowercase")
+    if feedback_uri != job.decision.audit_bundle_hash:
+        raise PaymentEvidenceError(
+            "a prepared submission must commit to the decided audit bundle"
+        )
+    if job.status is not OutboxStatus.PREPARED:
+        return
+    for name, existing, requested in (
+        ("feedback hash", job.feedback_hash, feedback_hash),
+        ("client", job.client_address, client_address),
+        ("feedback URI", job.feedback_uri, feedback_uri),
+    ):
+        if existing is not None and existing != requested:
+            raise PaymentConflictError(
+                f"reputation job is already prepared with another {name}"
+            )
 
 
 def assert_proof_matches_job(
     *, job: ReputationPublishJob, proof: ConfirmedFeedbackProof
 ) -> None:
-    """`P6-AC-05.5`: identity, tags, chain, registry and value must all agree."""
+    """`P6-AC-05.5`: the proof must match the entire commitment this job already made.
+
+    Identity, fingerprint-bound decision, registry, chain, evidence source, prepared
+    feedback hash, prepared client, the audit-bundle feedback URI, the bound submission
+    reference and any already-known event coordinates all have to agree. Anything less
+    lets a second, differently-shaped external effect be recorded as this job's outcome.
+    """
     if proof.erc8004_agent_id != job.decision.erc8004_agent_id:
         raise PaymentEvidenceError("confirmed feedback belongs to another agent")
     if proof.tag1 != job.identity.tag1 or proof.tag2 != job.identity.tag2:
         raise PaymentEvidenceError("confirmed feedback carries different tags")
     if job.decision.value is None or proof.value != job.decision.value:
         raise PaymentEvidenceError("confirmed feedback value is not the decided value")
-    if proof.transaction_ref.kind == "EVM":
-        if proof.transaction_ref.chain_id != job.identity.chain_id:
+    if proof.registry_address != job.identity.registry_address:
+        raise PaymentEvidenceError("confirmed feedback was read from another registry")
+    if proof.feedback_uri != job.decision.audit_bundle_hash:
+        raise PaymentEvidenceError(
+            "confirmed feedback does not commit to this audit bundle"
+        )
+    reference = proof.transaction_ref
+    if isinstance(reference, EvmTransactionRef):
+        if reference.chain_id != job.identity.chain_id:
             raise PaymentEvidenceError("confirmed feedback is on another chain")
+        if reference.evidence_source not in QUERYABLE_EVIDENCE_SOURCES | {
+            EvidenceSource.HISTORICAL_ON_CHAIN
+        }:
+            raise PaymentEvidenceError("confirmed feedback carries an unusable source")
+    if job.feedback_hash is not None and proof.feedback_hash != job.feedback_hash:
+        raise PaymentEvidenceError(
+            "confirmed feedback is not the payload this job prepared"
+        )
+    if job.client_address is not None and proof.client_address != job.client_address:
+        raise PaymentEvidenceError("confirmed feedback was written by another client")
+    if job.feedback_uri is not None and proof.feedback_uri != job.feedback_uri:
+        raise PaymentEvidenceError("confirmed feedback changed the prepared feedback URI")
     if job.transaction_ref is not None and (
         submission_identity(job.transaction_ref) != submission_identity(proof.transaction_ref)
     ):
         raise PaymentEvidenceError(
             "confirmed feedback is not the submitted transaction of this job"
         )
+    if job.block_number is not None and proof.block_number != job.block_number:
+        raise PaymentEvidenceError("confirmed feedback moved to another block")
+    if job.log_index is not None and proof.log_index != job.log_index:
+        raise PaymentEvidenceError("confirmed feedback moved to another log index")
+
+
+def reputation_recorded_payload(
+    *, job: ReputationPublishJob, proof: ConfirmedFeedbackProof
+) -> JsonObject:
+    """Design 18.6.1: the extended `REPUTATION_RECORDED` payload.
+
+    The legacy keys stay exactly where the existing parser reads them, so historical
+    rows and new rows are read by one reader without a backfill. `transactionHash` is
+    present only for a chain reference: a synthetic run has no chain hash and must never
+    be rendered as one.
+    """
+    payload: JsonObject = {
+        "blockNumber": proof.block_number,
+        "chainId": job.identity.chain_id,
+        "clientAddress": proof.client_address,
+        "erc8004AgentId": proof.erc8004_agent_id,
+        "evidenceSource": proof.transaction_ref.evidence_source.value,
+        "feedbackHash": proof.feedback_hash,
+        "feedbackUri": proof.feedback_uri,
+        "logIndex": proof.log_index,
+        "objectiveValue": proof.value,
+        "publishIdentityHash": job.identity_hash,
+        "receiptProofRef": proof.receipt_proof_ref,
+        "registryAddress": proof.registry_address,
+        "tag1": proof.tag1,
+        "tag2": proof.tag2,
+        "transactionRef": proof.transaction_ref.to_payload(),
+        "value": proof.value,
+        "valueDecimals": proof.value_decimals,
+    }
+    reference = proof.transaction_ref
+    if isinstance(reference, EvmTransactionRef):
+        payload["transactionHash"] = reference.hash
+    return payload
+
+
+def publication_conflict_payload(
+    *,
+    identity_hash: str,
+    existing_fingerprint: str,
+    requested_fingerprint: str,
+    reason_code: str,
+) -> JsonObject:
+    """Design 18.6.1: the append-only `REPUTATION_PUBLICATION_CONFLICT` payload."""
+    if not reason_code.strip():
+        raise ValueError("a publication conflict requires a reason code")
+    return {
+        "existingFingerprint": existing_fingerprint,
+        "publishIdentityHash": identity_hash,
+        "reasonCode": reason_code,
+        "requestedFingerprint": requested_fingerprint,
+    }
+
+
+def conflict_is_identical(payload: JsonObject, candidate: JsonObject) -> bool:
+    """Same identity, same requested fingerprint, same reason: one conflict, recorded once."""
+    keys = ("publishIdentityHash", "requestedFingerprint", "reasonCode")
+    return all(payload.get(key) == candidate.get(key) for key in keys)
+
+
+def proof_from_payload(value: object) -> ConfirmedFeedbackProof:
+    """Rebuilds a stored proof. It never writes and never invents a missing field."""
+    if not isinstance(value, dict):
+        raise ValueError("stored confirmed feedback proof is malformed")
+    try:
+        return ConfirmedFeedbackProof(
+            transaction_ref=transaction_ref_from_payload(value["transactionRef"]),
+            receipt_proof_ref=str(value["receiptProofRef"]),
+            registry_address=str(value["registryAddress"]),
+            client_address=str(value["clientAddress"]),
+            erc8004_agent_id=str(value["erc8004AgentId"]),
+            value=int(value["value"]),
+            value_decimals=int(value["valueDecimals"]),
+            feedback_hash=str(value["feedbackHash"]),
+            block_number=int(value["blockNumber"]),
+            log_index=int(value["logIndex"]),
+            tag1=str(value["tag1"]),
+            tag2=str(value["tag2"]),
+            feedback_uri=str(value["feedbackUri"]),
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("stored confirmed feedback proof is malformed") from exc
 
 
 @dataclass(frozen=True, slots=True)

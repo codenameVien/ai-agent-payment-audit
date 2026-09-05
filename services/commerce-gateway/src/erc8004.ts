@@ -84,6 +84,8 @@ export interface Erc8004Contracts {
     fromBlock: bigint;
     toBlock: bigint;
   }): Promise<RawFeedbackEvent[]>;
+  /** The current chain head. Read-only, so it is safe in any write mode. */
+  latestBlock(): Promise<bigint>;
 }
 
 export class Erc8004PolicyError extends Error {
@@ -101,6 +103,9 @@ export class ReputationOutboxConflictError extends Error {
   }
 }
 
+/** A read window wider than this is a chain scan, not a query. */
+const MAX_FEEDBACK_LOOKBACK_BLOCKS = 100_000;
+
 export class Erc8004Service {
   readonly #contracts: Erc8004Contracts;
   readonly #clientAddress: Address;
@@ -108,6 +113,11 @@ export class Erc8004Service {
   constructor(contracts: Erc8004Contracts, clientAddress: Address) {
     this.#contracts = contracts;
     this.#clientAddress = clientAddress;
+  }
+
+  /** The address this service writes feedback from. Never overridable by a caller. */
+  get clientAddress(): Address {
+    return this.#clientAddress;
   }
 
   async verifyQuoteSigner(agentId: bigint, signer: Address): Promise<AgentIdentity> {
@@ -179,28 +189,37 @@ export class Erc8004Service {
     registryAddress: Address;
     erc8004AgentId: string;
     trustedClients: readonly Address[];
-    fromBlock: number;
-    toBlock: number;
+    /** How many blocks back from the head to read. The caller never names the window. */
+    lookbackBlocks: number;
   }): Promise<FeedbackQueryResult> {
     if (args.trustedClients.length === 0) {
       throw new Erc8004PolicyError("trusted client list must not be empty");
     }
     if (
-      !Number.isSafeInteger(args.fromBlock) ||
-      !Number.isSafeInteger(args.toBlock) ||
-      args.fromBlock < 0 ||
-      args.toBlock < args.fromBlock
+      !Number.isSafeInteger(args.lookbackBlocks) ||
+      args.lookbackBlocks < 1 ||
+      args.lookbackBlocks > MAX_FEEDBACK_LOOKBACK_BLOCKS
     ) {
-      throw new Erc8004PolicyError("feedback query block range is invalid");
+      throw new Erc8004PolicyError(
+        `feedback query lookbackBlocks must be an integer in 1..${MAX_FEEDBACK_LOOKBACK_BLOCKS}`,
+      );
     }
     const agentId = BigInt(args.erc8004AgentId);
+    // The range is a bounded suffix of the head resolved here, so a caller can neither
+    // pin a stale window nor ask for a full-chain scan.
+    const head = await this.#contracts.latestBlock();
+    const toBlock = Number(head);
+    if (!Number.isSafeInteger(toBlock) || toBlock < 0) {
+      throw new Erc8004PolicyError("chain head is not a usable block number");
+    }
+    const fromBlock = Math.max(0, toBlock - args.lookbackBlocks + 1);
     const events = await this.#contracts.queryFeedback({
       agentId,
       trustedClients: args.trustedClients,
       tag1: FEEDBACK_TAG1,
       tag2: FEEDBACK_TAG2,
-      fromBlock: BigInt(args.fromBlock),
-      toBlock: BigInt(args.toBlock),
+      fromBlock: BigInt(fromBlock),
+      toBlock: BigInt(toBlock),
     });
     return {
       scope: {
@@ -210,9 +229,10 @@ export class Erc8004Service {
         trustedClients: args.trustedClients,
         tag1: FEEDBACK_TAG1,
         tag2: FEEDBACK_TAG2,
-        fromBlock: args.fromBlock,
-        toBlock: args.toBlock,
+        fromBlock,
+        toBlock,
       },
+      latestBlock: toBlock,
       queriedAt: new Date().toISOString(),
       events,
     };
@@ -220,6 +240,9 @@ export class Erc8004Service {
 }
 
 const DEFAULT_LEASE_SECONDS = 60;
+
+/** Every durable-state refusal this loop can lose is the same kind of race. */
+const OUTBOX_CONFLICT_REASON_CODE = "OUTBOX_TRANSITION_CONFLICT";
 
 /**
  * There is deliberately no pre-broadcast transaction reference. Inventing a
@@ -299,6 +322,10 @@ export class Erc8004ReputationPublisher {
     if (job.identity.tag1 !== FEEDBACK_TAG1 || job.identity.tag2 !== FEEDBACK_TAG2) {
       throw new Erc8004PolicyError("reputation job carries unknown feedback tags");
     }
+    // The status observed on entry decides whether a broadcast is still permitted. A job
+    // that was already PREPARED or SUBMITTED_UNKNOWN before this attempt began carries a
+    // durable commitment, so preparing it again would authorise a second publication.
+    const startingStatus = job.status;
     const agentId = BigInt(job.decision.erc8004AgentId);
     const objectiveValue = objectiveValueOf(job.decision.value);
     const feedbackHash = job.feedbackHash ?? keccak256(stringToHex(job.payloadFingerprint));
@@ -348,20 +375,31 @@ export class Erc8004ReputationPublisher {
       }
       return this.#submittedUnknown(
         job,
-        recorded,
         "recorded reputation transaction is not confirmable yet",
+        recorded,
       );
     }
 
-    // PENDING, LEASED, or PREPARED with no bound submission: the intent was recorded but
-    // the broadcast never happened, and the find-before-submit step above found nothing.
-    // Persist the commitment first so a crash after the broadcast stays discoverable.
-    const prepared = await this.#guard(() =>
+    if (startingStatus !== "PENDING" && startingStatus !== "LEASED") {
+      // Committed before this attempt, no reference bound, and nothing matching on chain:
+      // an external effect may exist that cannot be named. Fail closed into reconciliation
+      // rather than broadcast a transaction the durable record already promised.
+      return this.#submittedUnknown(
+        job,
+        `recorded reputation intent is unresolved from ${startingStatus}: no transaction can be named`,
+      );
+    }
+
+    // PENDING or LEASED: nothing has been committed yet, so this attempt owns the single
+    // broadcast. Persist the whole commitment first so a crash after it stays discoverable.
+    const prepared = await this.#guard(job, () =>
       this.#outbox.markPrepared({
         jobId: job.jobId,
         workerId: this.#workerId,
         payloadFingerprint: job.payloadFingerprint,
         feedbackHash,
+        clientAddress: this.#service.clientAddress,
+        feedbackUri: job.decision.auditBundleHash,
       }),
     );
     const transactionHash = await this.#service.submitObjectiveFeedback({
@@ -381,18 +419,23 @@ export class Erc8004ReputationPublisher {
     if (proof === null) {
       return this.#submittedUnknown(
         prepared,
+        "reputation transaction was broadcast without a confirmed NewFeedback event",
         {
           kind: "EVM",
           hash: transactionHash,
           chainId: BASE_SEPOLIA_CHAIN_ID,
           evidenceSource: "BASE_SEPOLIA_VERIFIED",
         },
-        "reputation transaction was broadcast without a confirmed NewFeedback event",
       );
     }
     return this.#confirm(prepared, proof, { agentId, objectiveValue, feedbackHash });
   }
 
+  /**
+   * A proof is accepted only when it matches the entire commitment: the agent, the value,
+   * the hash, the tags, the registry it was read from, the client that wrote it and the
+   * audit bundle it points at. A proof that matches only some of those is a different fact.
+   */
   #confirm(
     job: ReputationPublishJob,
     proof: ConfirmedFeedbackProof,
@@ -403,11 +446,16 @@ export class Erc8004ReputationPublisher {
       proof.value !== expected.objectiveValue ||
       proof.feedbackHash.toLowerCase() !== expected.feedbackHash.toLowerCase() ||
       proof.tag1 !== FEEDBACK_TAG1 ||
-      proof.tag2 !== FEEDBACK_TAG2
+      proof.tag2 !== FEEDBACK_TAG2 ||
+      proof.registryAddress.toLowerCase() !== this.#registryAddress.toLowerCase() ||
+      proof.clientAddress.toLowerCase() !== this.#service.clientAddress.toLowerCase() ||
+      proof.feedbackUri !== job.decision.auditBundleHash ||
+      (job.feedbackHash !== null &&
+        proof.feedbackHash.toLowerCase() !== job.feedbackHash.toLowerCase())
     ) {
       throw new Erc8004PolicyError("confirmed feedback proof does not match the outbox job");
     }
-    return this.#guard(() =>
+    return this.#guard(job, () =>
       this.#outbox.markConfirmed({
         jobId: job.jobId,
         workerId: this.#workerId,
@@ -419,26 +467,37 @@ export class Erc8004ReputationPublisher {
 
   #submittedUnknown(
     job: ReputationPublishJob,
-    transactionRef: TransactionRef,
     reason: string,
+    transactionRef?: TransactionRef,
   ): Promise<ReputationPublishJob> {
-    return this.#guard(() =>
+    return this.#guard(job, () =>
       this.#outbox.markSubmittedUnknown({
         jobId: job.jobId,
         workerId: this.#workerId,
         payloadFingerprint: job.payloadFingerprint,
-        transactionRef,
         reason,
+        ...(transactionRef === undefined ? {} : { transactionRef }),
       }),
     );
   }
 
   /** A durable-state conflict is terminal for this attempt: never retried with a new write. */
-  async #guard<T>(operation: () => Promise<T>): Promise<T> {
+  async #guard<T>(job: ReputationPublishJob, operation: () => Promise<T>): Promise<T> {
     try {
       return await operation();
     } catch (error) {
       if (error instanceof ReputationOutboxConflictError) {
+        // The losing payload is itself evidence, so it is recorded against the publish
+        // identity. That write must never be able to hide the conflict that caused it.
+        try {
+          await this.#outbox.recordConflict({
+            identityHash: job.identityHash,
+            requestedFingerprint: job.payloadFingerprint,
+            reasonCode: OUTBOX_CONFLICT_REASON_CODE,
+          });
+        } catch {
+          // Deliberately swallowed: the original conflict is the error that matters.
+        }
         throw new Erc8004PolicyError(`reputation outbox conflict: ${error.message}`);
       }
       throw error;

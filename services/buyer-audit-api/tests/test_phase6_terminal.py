@@ -283,12 +283,19 @@ def identity(purchase_id: str = PURCHASE_ID) -> PublishIdentity:
 
 
 def proof(
-    *, transaction_ref=None, value: int = 100, **overrides: object
+    *, job=None, transaction_ref=None, value: int = 100, **overrides: object
 ) -> ConfirmedFeedbackProof:
+    """A full proof: receipt reference, registry, client, coordinates and the URI.
+
+    The feedback URI is the decided audit bundle, so a proof is always built against a
+    job rather than in isolation - that binding is what `assert_proof_matches_job`
+    checks and what the rejected implementation never enforced.
+    """
     fields: dict[str, object] = {
         "transaction_ref": transaction_ref
         or EvmTransactionRef(hash=FEEDBACK_TX, block_number=99, log_index=2),
         "receipt_proof_ref": "sha256:" + "88" * 32,
+        "registry_address": REGISTRY,
         "client_address": CLIENT,
         "erc8004_agent_id": AGENT_ID,
         "value": value,
@@ -298,9 +305,50 @@ def proof(
         "log_index": 2,
         "tag1": FEEDBACK_TAG1,
         "tag2": FEEDBACK_TAG2,
+        "feedback_uri": (
+            BUNDLE_PLACEHOLDER if job is None else job.decision.audit_bundle_hash
+        ),
     }
     fields.update(overrides)
     return ConfirmedFeedbackProof(**fields)  # type: ignore[arg-type]
+
+
+BUNDLE_PLACEHOLDER = "sha256:" + "00" * 32
+
+
+_DEFAULT_REFERENCE = object()
+
+
+async def prepare(
+    repository: InMemoryEvidenceRepository,
+    job,
+    *,
+    worker_id: str = "worker-a",
+    transaction_ref: object = _DEFAULT_REFERENCE,
+    feedback_hash: str = "0x" + "ee" * 32,
+    client_address: str = CLIENT,
+    now=None,
+):
+    """Records the full pre-broadcast commitment for `job`.
+
+    `transaction_ref=None` records the commitment with **no** reference at all, which is
+    what really happens before a broadcast.
+    """
+    reference = (
+        EvmTransactionRef(hash=FEEDBACK_TX)
+        if transaction_ref is _DEFAULT_REFERENCE
+        else transaction_ref
+    )
+    return await repository.mark_prepared(
+        job_id=job.job_id,
+        worker_id=worker_id,
+        payload_fingerprint=job.payload_fingerprint,
+        transaction_ref=reference,  # type: ignore[arg-type]
+        feedback_hash=feedback_hash,
+        client_address=client_address,
+        feedback_uri=job.decision.audit_bundle_hash,
+        now=DECIDED_AT if now is None else now,
+    )
 
 
 # --------------------------------------------------------------------------------------
@@ -545,37 +593,53 @@ async def test_a_prepared_job_is_never_prepared_twice_with_another_transaction(
     )
     assert leased is not None
 
-    prepared = await repository.mark_prepared(
-        job_id=job.job_id,
-        worker_id="worker-a",
-        payload_fingerprint=job.payload_fingerprint,
-        transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-        feedback_hash="0x" + "ee" * 32,
-        now=DECIDED_AT,
-    )
+    prepared = await prepare(repository, job)
     assert prepared.status is OutboxStatus.PREPARED
+    assert prepared.client_address == CLIENT
+    assert prepared.feedback_uri == job.decision.audit_bundle_hash
 
     # Same submission: the committed record comes back.
-    again = await repository.mark_prepared(
-        job_id=job.job_id,
-        worker_id="worker-a",
-        payload_fingerprint=job.payload_fingerprint,
-        transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-        feedback_hash="0x" + "ee" * 32,
-        now=DECIDED_AT,
-    )
+    again = await prepare(repository, job)
     assert again.transaction_ref == prepared.transaction_ref
 
     # A different submission for an already-prepared job is a conflict, not a new write.
     with pytest.raises(
         PaymentConflictError, match="already bound to another submitted transaction"
     ):
+        await prepare(
+            repository, job, transaction_ref=EvmTransactionRef(hash="0x" + "99" * 32)
+        )
+
+    # H1: neither may the frozen payload or the signing client change.
+    with pytest.raises(PaymentConflictError, match="another feedback hash"):
+        await prepare(repository, job, feedback_hash="0x" + "77" * 32)
+    with pytest.raises(PaymentConflictError, match="another client"):
+        await prepare(
+            repository, job, client_address="0x" + "00" * 19 + "aa"
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_prepared_commitment_must_bind_the_decided_audit_bundle(clock) -> None:
+    """H1: the feedback URI is the audit bundle; nothing else may be committed to."""
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+    await repository.claim_job(
+        worker_id="worker-a",
+        lease_until=DECIDED_AT + timedelta(seconds=30),
+        now=DECIDED_AT,
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="decided audit bundle"):
         await repository.mark_prepared(
             job_id=job.job_id,
             worker_id="worker-a",
             payload_fingerprint=job.payload_fingerprint,
-            transaction_ref=EvmTransactionRef(hash="0x" + "99" * 32),
+            transaction_ref=None,
             feedback_hash="0x" + "ee" * 32,
+            client_address=CLIENT,
+            feedback_uri="sha256:" + "13" * 32,
             now=DECIDED_AT,
         )
 
@@ -598,6 +662,8 @@ async def test_a_different_fingerprint_can_never_move_a_job(clock) -> None:
             payload_fingerprint="sha256:" + "00" * 32,
             transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
             feedback_hash="0x" + "ee" * 32,
+            client_address=CLIENT,
+            feedback_uri=job.decision.audit_bundle_hash,
             now=DECIDED_AT,
         )
 
@@ -614,14 +680,7 @@ async def test_a_worker_without_the_lease_cannot_move_a_job(clock) -> None:
     )
 
     with pytest.raises(PaymentConflictError, match="lease is not held"):
-        await repository.mark_prepared(
-            job_id=job.job_id,
-            worker_id="worker-b",
-            payload_fingerprint=job.payload_fingerprint,
-            transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-            feedback_hash="0x" + "ee" * 32,
-            now=DECIDED_AT,
-        )
+        await prepare(repository, job, worker_id="worker-b")
 
 
 @pytest.mark.asyncio
@@ -645,25 +704,11 @@ async def test_one_feedback_transaction_cannot_back_two_jobs(clock) -> None:
 
     lease_until = DECIDED_AT + timedelta(seconds=30)
     await repository.claim_job(worker_id="w1", lease_until=lease_until, now=DECIDED_AT)
-    await repository.mark_prepared(
-        job_id=first.job_id,
-        worker_id="w1",
-        payload_fingerprint=first.payload_fingerprint,
-        transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-        feedback_hash="0x" + "ee" * 32,
-        now=DECIDED_AT,
-    )
+    await prepare(repository, first, worker_id="w1")
     await repository.claim_job(worker_id="w2", lease_until=lease_until, now=DECIDED_AT)
 
     with pytest.raises(PaymentConflictError, match="transaction reference is already recorded"):
-        await repository.mark_prepared(
-            job_id=second.job_id,
-            worker_id="w2",
-            payload_fingerprint=second.payload_fingerprint,
-            transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-            feedback_hash="0x" + "ee" * 32,
-            now=DECIDED_AT,
-        )
+        await prepare(repository, second, worker_id="w2")
 
 
 # --------------------------------------------------------------------------------------
@@ -679,14 +724,7 @@ async def prepared_job(repository: InMemoryEvidenceRepository, clock):
         lease_until=DECIDED_AT + timedelta(seconds=30),
         now=DECIDED_AT,
     )
-    return await repository.mark_prepared(
-        job_id=job.job_id,
-        worker_id="worker-a",
-        payload_fingerprint=job.payload_fingerprint,
-        transaction_ref=EvmTransactionRef(hash=FEEDBACK_TX),
-        feedback_hash="0x" + "ee" * 32,
-        now=DECIDED_AT,
-    )
+    return await prepare(repository, job)
 
 
 @pytest.mark.asyncio
@@ -719,6 +757,47 @@ async def test_an_unknown_submission_must_restate_the_prepared_transaction(clock
 
 
 @pytest.mark.asyncio
+async def test_an_unnameable_submission_is_recorded_without_a_reference(clock) -> None:
+    """C2: the fail-closed sink for a broadcast whose transaction cannot be named.
+
+    The reviewer reproduced a restarted `PREPARED` job with no reference re-broadcasting
+    because there was nowhere honest to go. `SUBMITTED_UNKNOWN` without a reference is
+    that place: the commitment is kept, the job stays recoverable and read-only lookups
+    continue, but no new submission is ever built.
+    """
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+    await repository.claim_job(
+        worker_id="worker-a",
+        lease_until=DECIDED_AT + timedelta(seconds=30),
+        now=DECIDED_AT,
+    )
+    prepared = await prepare(repository, job, transaction_ref=None)
+    assert prepared.transaction_ref is None
+
+    unresolved = await repository.mark_submitted_unknown(
+        job_id=job.job_id,
+        worker_id="worker-a",
+        payload_fingerprint=job.payload_fingerprint,
+        transaction_ref=None,
+        reason="recorded reputation intent is unresolved",
+        now=DECIDED_AT,
+    )
+
+    assert unresolved.status is OutboxStatus.SUBMITTED_UNKNOWN
+    assert unresolved.transaction_ref is None
+    assert unresolved.feedback_hash == prepared.feedback_hash
+    assert unresolved.client_address == CLIENT
+    assert not unresolved.is_terminal
+    # It stays visible to recovery, and a later confirmation can still bind a reference.
+    later = DECIDED_AT + timedelta(minutes=10)
+    assert [item.job_id for item in await repository.list_recoverable_jobs(now=later)] == [
+        job.job_id
+    ]
+
+
+@pytest.mark.asyncio
 async def test_a_recovered_job_is_still_claimable_after_a_restart(clock) -> None:
     repository = await settled_delivered()
     job = await prepared_job(repository, clock)
@@ -739,50 +818,61 @@ async def test_confirmation_requires_a_matching_agent_value_and_transaction(cloc
     repository = await settled_delivered()
     job = await prepared_job(repository, clock)
 
-    with pytest.raises(PaymentEvidenceError, match="another agent"):
-        await repository.mark_confirmed(
-            job_id=job.job_id,
-            worker_id="worker-a",
-            payload_fingerprint=job.payload_fingerprint,
-            proof=proof(erc8004_agent_id="9"),
-            now=DECIDED_AT,
-        )
-    with pytest.raises(PaymentEvidenceError, match="not the decided value"):
-        await repository.mark_confirmed(
-            job_id=job.job_id,
-            worker_id="worker-a",
-            payload_fingerprint=job.payload_fingerprint,
-            proof=proof(value=0),
-            now=DECIDED_AT,
-        )
-    with pytest.raises(PaymentEvidenceError, match="not the submitted transaction"):
-        await repository.mark_confirmed(
-            job_id=job.job_id,
-            worker_id="worker-a",
-            payload_fingerprint=job.payload_fingerprint,
-            proof=proof(
-                transaction_ref=EvmTransactionRef(
-                    hash="0x" + "55" * 32, block_number=1, log_index=0
-                )
-            ),
-            now=DECIDED_AT,
-        )
+    async def rejects(match: str, **overrides: object) -> None:
+        with pytest.raises(PaymentEvidenceError, match=match):
+            await repository.mark_confirmed(
+                job_id=job.job_id,
+                worker_id="worker-a",
+                payload_fingerprint=job.payload_fingerprint,
+                proof=proof(job=job, **overrides),
+                now=DECIDED_AT,
+            )
+
+    await rejects("another agent", erc8004_agent_id="9")
+    await rejects("not the decided value", value=0)
+    await rejects("another registry", registry_address="0x" + "11" * 20)
+    await rejects("commit to this audit bundle", feedback_uri="sha256:" + "13" * 32)
+    await rejects("written by another client", client_address="0x" + "00" * 19 + "aa")
+    await rejects("not the payload this job prepared", feedback_hash="0x" + "22" * 32)
+    await rejects(
+        "not the submitted transaction",
+        transaction_ref=EvmTransactionRef(
+            hash="0x" + "55" * 32, block_number=1, log_index=0
+        ),
+        block_number=1,
+        log_index=0,
+    )
+    # Reviewer probe: the same hash relabelled as historical evidence.
+    await rejects(
+        "not the submitted transaction",
+        transaction_ref=EvmTransactionRef(
+            hash=FEEDBACK_TX,
+            block_number=99,
+            log_index=2,
+            evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN,
+        ),
+    )
 
     stored = await repository.get_job(job.job_id)
     assert stored is not None
     assert stored.status is OutboxStatus.PREPARED
+    # C1: no rejected proof left any success evidence behind.
+    events = await repository.list_events(PURCHASE_ID)
+    assert [event for event in events if event.type == EventType.REPUTATION_RECORDED] == []
 
 
 @pytest.mark.asyncio
 async def test_a_confirmed_job_is_terminal_and_idempotent(clock) -> None:
+    """C1: `CONFIRMED` and the append-only `REPUTATION_RECORDED` are one unit."""
     repository = await settled_delivered()
     job = await prepared_job(repository, clock)
+    before = len(await repository.list_events(PURCHASE_ID))
 
-    confirmed = await repository.mark_confirmed(
+    event, confirmed = await repository.mark_confirmed(
         job_id=job.job_id,
         worker_id="worker-a",
         payload_fingerprint=job.payload_fingerprint,
-        proof=proof(),
+        proof=proof(job=job),
         now=DECIDED_AT,
     )
 
@@ -791,24 +881,60 @@ async def test_a_confirmed_job_is_terminal_and_idempotent(clock) -> None:
     assert confirmed.block_number == 99
     assert confirmed.log_index == 2
     assert confirmed.is_terminal is True
+    assert confirmed.confirmed_proof is not None
+    assert confirmed.confirmed_proof.proof_hash == proof(job=job).proof_hash
 
-    again = await repository.mark_confirmed(
+    # The publication is in the purchase chain, with its whole provenance.
+    assert event.type is EventType.REPUTATION_RECORDED
+    events = await repository.list_events(PURCHASE_ID)
+    assert len(events) == before + 1
+    assert events[-1].event_hash == event.event_hash
+    payload = event.payload
+    assert payload["publishIdentityHash"] == job.identity_hash
+    assert payload["transactionHash"] == FEEDBACK_TX
+    assert payload["clientAddress"] == CLIENT
+    assert payload["receiptProofRef"] == "sha256:" + "88" * 32
+    assert payload["blockNumber"] == 99
+    assert payload["logIndex"] == 2
+    assert payload["feedbackUri"] == job.decision.audit_bundle_hash
+    assert payload["evidenceSource"] == EvidenceSource.BASE_SEPOLIA_VERIFIED.value
+    # The legacy keys the existing parser reads are still exactly where they were.
+    assert payload["objectiveValue"] == 100
+    assert payload["erc8004AgentId"] == AGENT_ID
+    assert payload["chainId"] == CHAIN_ID
+    assert payload["registryAddress"] == REGISTRY
+    verify_event_chain(
+        events,
+        expected_event_count=len(events),
+        expected_head_event_hash=events[-1].event_hash,
+    )
+
+    # The same proof again is idempotent: no second event, no second effect.
+    again_event, again = await repository.mark_confirmed(
         job_id=job.job_id,
         worker_id="worker-a",
         payload_fingerprint=job.payload_fingerprint,
-        proof=proof(),
+        proof=proof(job=job),
         now=DECIDED_AT,
     )
     assert again.status is OutboxStatus.CONFIRMED
+    assert again_event.event_hash == event.event_hash
+    assert len(await repository.list_events(PURCHASE_ID)) == before + 1
 
-    with pytest.raises(PaymentConflictError, match="different confirmation"):
-        await repository.mark_confirmed(
-            job_id=job.job_id,
-            worker_id="worker-a",
-            payload_fingerprint=job.payload_fingerprint,
-            proof=proof(receipt_proof_ref="sha256:" + "11" * 32),
-            now=DECIDED_AT,
-        )
+    # Any different proof is a conflict, never a mutation of a recorded effect.
+    for overrides in (
+        {"receipt_proof_ref": "sha256:" + "11" * 32},
+        {"block_number": 100, "transaction_ref": EvmTransactionRef(hash=FEEDBACK_TX)},
+    ):
+        with pytest.raises(PaymentConflictError, match="different confirmation"):
+            await repository.mark_confirmed(
+                job_id=job.job_id,
+                worker_id="worker-a",
+                payload_fingerprint=job.payload_fingerprint,
+                proof=proof(job=job, **overrides),  # type: ignore[arg-type]
+                now=DECIDED_AT,
+            )
+    assert len(await repository.list_events(PURCHASE_ID)) == before + 1
     assert await repository.claim_job(
         worker_id="w9",
         lease_until=DECIDED_AT + timedelta(seconds=30),
@@ -824,9 +950,10 @@ async def test_a_confirmed_publication_cannot_be_turned_into_a_conflict(clock) -
         job_id=job.job_id,
         worker_id="worker-a",
         payload_fingerprint=job.payload_fingerprint,
-        proof=proof(),
+        proof=proof(job=job),
         now=DECIDED_AT,
     )
+    before = len(await repository.list_events(PURCHASE_ID))
 
     with pytest.raises(PaymentConflictError, match="cannot be turned into a conflict"):
         await repository.record_conflict(
@@ -835,15 +962,22 @@ async def test_a_confirmed_publication_cannot_be_turned_into_a_conflict(clock) -
             reason_code="FINGERPRINT_MISMATCH",
             now=DECIDED_AT,
         )
+    assert len(await repository.list_events(PURCHASE_ID)) == before
 
 
 @pytest.mark.asyncio
-async def test_a_conflict_stops_the_job_without_a_new_transaction(clock) -> None:
+async def test_a_conflict_stops_the_job_and_leaves_append_only_evidence(clock) -> None:
+    """H4: every publication conflict records `REPUTATION_PUBLICATION_CONFLICT`.
+
+    The rejected implementation only flipped the outbox status, so the amendment's
+    conflict event type was never consumed and an operator had no evidence to read.
+    """
     repository = await settled_delivered()
     job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
     assert job is not None
+    before = len(await repository.list_events(PURCHASE_ID))
 
-    conflicted = await repository.record_conflict(
+    event, conflicted = await repository.record_conflict(
         identity_hash=job.identity_hash,
         requested_fingerprint="sha256:" + "00" * 32,
         reason_code="FINGERPRINT_MISMATCH",
@@ -853,11 +987,70 @@ async def test_a_conflict_stops_the_job_without_a_new_transaction(clock) -> None
     assert conflicted.status is OutboxStatus.CONFLICT
     assert conflicted.is_terminal is True
     assert conflicted.transaction_ref is None
+    assert event.type is EventType.REPUTATION_PUBLICATION_CONFLICT
+    assert event.payload == {
+        "existingFingerprint": job.payload_fingerprint,
+        "publishIdentityHash": job.identity_hash,
+        "reasonCode": "FINGERPRINT_MISMATCH",
+        "requestedFingerprint": "sha256:" + "00" * 32,
+    }
+    events = await repository.list_events(PURCHASE_ID)
+    assert len(events) == before + 1
+    verify_event_chain(
+        events,
+        expected_event_count=len(events),
+        expected_head_event_hash=events[-1].event_hash,
+    )
     assert await repository.claim_job(
         worker_id="w1",
         lease_until=DECIDED_AT + timedelta(seconds=30),
         now=DECIDED_AT,
     ) is None
+
+
+@pytest.mark.asyncio
+async def test_the_same_conflict_is_recorded_once_and_a_different_one_is_kept(
+    clock,
+) -> None:
+    """H4: retrying one conflict is idempotent; a different conflict is preserved."""
+    repository = await settled_delivered()
+    job = (await coordinator(repository, clock).finalize_if_eligible(PURCHASE_ID)).job
+    assert job is not None
+
+    first, _ = await repository.record_conflict(
+        identity_hash=job.identity_hash,
+        requested_fingerprint="sha256:" + "00" * 32,
+        reason_code="FINGERPRINT_MISMATCH",
+        now=DECIDED_AT,
+    )
+    repeated, _ = await repository.record_conflict(
+        identity_hash=job.identity_hash,
+        requested_fingerprint="sha256:" + "00" * 32,
+        reason_code="FINGERPRINT_MISMATCH",
+        now=DECIDED_AT + timedelta(seconds=1),
+    )
+    assert repeated.event_hash == first.event_hash
+
+    other, _ = await repository.record_conflict(
+        identity_hash=job.identity_hash,
+        requested_fingerprint="sha256:" + "22" * 32,
+        reason_code="OUTBOX_TRANSITION_CONFLICT",
+        now=DECIDED_AT + timedelta(seconds=2),
+    )
+    assert other.event_hash != first.event_hash
+
+    events = await repository.list_events(PURCHASE_ID)
+    conflicts = [
+        event
+        for event in events
+        if event.type == EventType.REPUTATION_PUBLICATION_CONFLICT
+    ]
+    assert len(conflicts) == 2
+    verify_event_chain(
+        events,
+        expected_event_count=len(events),
+        expected_head_event_hash=events[-1].event_hash,
+    )
 
 
 @pytest.mark.asyncio
@@ -871,25 +1064,21 @@ async def test_a_local_feedback_submission_is_accepted_for_a_synthetic_run(clock
         lease_until=DECIDED_AT + timedelta(seconds=30),
         now=DECIDED_AT,
     )
-    await repository.mark_prepared(
-        job_id=job.job_id,
-        worker_id="worker-a",
-        payload_fingerprint=job.payload_fingerprint,
-        transaction_ref=local,
-        feedback_hash="0x" + "ee" * 32,
-        now=DECIDED_AT,
-    )
+    await prepare(repository, job, transaction_ref=local)
 
-    confirmed = await repository.mark_confirmed(
+    event, confirmed = await repository.mark_confirmed(
         job_id=job.job_id,
         worker_id="worker-a",
         payload_fingerprint=job.payload_fingerprint,
-        proof=proof(transaction_ref=local),
+        proof=proof(job=job, transaction_ref=local),
         now=DECIDED_AT,
     )
 
     assert confirmed.status is OutboxStatus.CONFIRMED
     assert confirmed.evidence_source is EvidenceSource.SYNTHETIC_LOCAL
+    # A synthetic run has no chain hash, so the payload must not pretend otherwise.
+    assert "transactionHash" not in event.payload
+    assert event.payload["evidenceSource"] == EvidenceSource.SYNTHETIC_LOCAL.value
 
 
 # --------------------------------------------------------------------------------------
@@ -1007,7 +1196,20 @@ async def test_snapshots_are_immutable_once_stored(clock) -> None:
     stored = await repository.put_snapshot(snapshot)
     assert stored.snapshot_hash == snapshot.snapshot_hash
     assert await repository.get_snapshot("snap-terminal-1") == snapshot
-    assert await repository.latest_snapshot(SELLER_AGENT) == snapshot
+    assert (
+        await repository.latest_snapshot(
+            seller_agent_id=SELLER_AGENT,
+            query_fingerprint=scope.query_fingerprint,
+        )
+        == snapshot
+    )
+    # H2: the same seller asked a *different* question has no stored answer.
+    assert (
+        await repository.latest_snapshot(
+            seller_agent_id=SELLER_AGENT, query_fingerprint="sha256:" + "00" * 32
+        )
+        is None
+    )
 
     # Re-storing the identical snapshot is a no-op; a different answer is a conflict.
     assert (await repository.put_snapshot(snapshot)).snapshot_hash == snapshot.snapshot_hash

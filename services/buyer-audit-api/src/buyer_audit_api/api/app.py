@@ -41,6 +41,7 @@ from buyer_audit_api.api.schemas import (
     InternalReconciliationCheckRequest,
     InternalReputationClaimRequest,
     InternalReputationConfirmedRequest,
+    InternalReputationConflictRequest,
     InternalReputationPreparedRequest,
     InternalReputationSubmittedUnknownRequest,
     InternalTerminalProofRequest,
@@ -55,9 +56,8 @@ from buyer_audit_api.api.schemas import (
     PurchaseRunResponse,
     PurchaseSummaryResponse,
     ReputationDecisionResponse,
-    ReputationIntentResponse,
     ReputationJobResponse,
-    ReputationRecordRequest,
+    ReputationOutboxEventResponse,
     ReputationSnapshotResponse,
     ScenarioResponse,
     SellerAgentSummaryResponse,
@@ -329,6 +329,14 @@ def _reputation_job_response(job: ReputationPublishJob) -> ReputationJobResponse
         feedback_hash=job.feedback_hash,
         transaction_ref=transaction_ref_response(job.transaction_ref),
         receipt_proof_ref=job.receipt_proof_ref,
+        client_address=job.client_address,
+        feedback_uri=job.feedback_uri,
+        block_number=job.block_number,
+        log_index=job.log_index,
+        evidence_source=job.evidence_source,
+        confirmed_proof=(
+            None if job.confirmed_proof is None else job.confirmed_proof.to_payload()
+        ),
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -1318,6 +1326,8 @@ def create_app(container: AppContainer) -> FastAPI:
                     None if body.transaction_ref is None else body.transaction_ref.to_core()
                 ),
                 feedback_hash=body.feedback_hash,
+                client_address=body.client_address,
+                feedback_uri=body.feedback_uri,
                 now=container.clock.now(),
             )
         except _OUTBOX_ERRORS as exc:
@@ -1339,7 +1349,9 @@ def create_app(container: AppContainer) -> FastAPI:
                 job_id=job_id,
                 worker_id=body.worker_id,
                 payload_fingerprint=body.payload_fingerprint,
-                transaction_ref=body.transaction_ref.to_core(),
+                transaction_ref=(
+                    None if body.transaction_ref is None else body.transaction_ref.to_core()
+                ),
                 reason=body.reason,
                 now=container.clock.now(),
             )
@@ -1349,16 +1361,17 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.post(
         "/internal/evidence/reputation-outbox/{job_id}/confirmed",
-        response_model=ReputationJobResponse,
+        response_model=ReputationOutboxEventResponse,
     )
     async def mark_reputation_confirmed(
         job_id: str,
         body: InternalReputationConfirmedRequest,
         authorization: str | None = Header(default=None),
-    ) -> ReputationJobResponse:
+    ) -> ReputationOutboxEventResponse:
+        """Design 18.8: the only path to `REPUTATION_RECORDED`, and it needs a proof."""
         require_internal(authorization)
         try:
-            job = await require_outbox().mark_confirmed(
+            event, job = await require_outbox().mark_confirmed(
                 job_id=job_id,
                 worker_id=body.worker_id,
                 payload_fingerprint=body.payload_fingerprint,
@@ -1367,7 +1380,33 @@ def create_app(container: AppContainer) -> FastAPI:
             )
         except _OUTBOX_ERRORS as exc:
             raise _outbox_error(exc) from exc
-        return _reputation_job_response(job)
+        return ReputationOutboxEventResponse(
+            job=_reputation_job_response(job), event=_event_response(event)
+        )
+
+    @app.post(
+        "/internal/evidence/reputation-outbox/identity/{identity_hash}/conflict",
+        response_model=ReputationOutboxEventResponse,
+    )
+    async def record_reputation_conflict(
+        identity_hash: str,
+        body: InternalReputationConflictRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationOutboxEventResponse:
+        """A publication conflict always leaves append-only evidence behind."""
+        require_internal(authorization)
+        try:
+            event, job = await require_outbox().record_conflict(
+                identity_hash=identity_hash,
+                requested_fingerprint=body.requested_fingerprint,
+                reason_code=body.reason_code,
+                now=container.clock.now(),
+            )
+        except _OUTBOX_ERRORS as exc:
+            raise _outbox_error(exc) from exc
+        return ReputationOutboxEventResponse(
+            job=_reputation_job_response(job), event=_event_response(event)
+        )
 
     @app.post(
         "/internal/evidence/purchases/{purchase_id}/delivery",
@@ -1532,140 +1571,14 @@ def create_app(container: AppContainer) -> FastAPI:
         except (EvidenceIntegrityError, EvidenceTransitionError, ValueError) as exc:
             raise HTTPException(status_code=409, detail=str(exc)) from exc
 
-    @app.post(
-        "/internal/evidence/purchases/{purchase_id}/reputation",
-        response_model=EventResponse,
-    )
-    async def record_reputation(
-        purchase_id: str,
-        body: ReputationRecordRequest,
-        authorization: str | None = Header(default=None),
-    ) -> EventResponse:
-        require_internal(authorization)
-        events = await verified_events(purchase_id)
-        if not events:
-            raise HTTPException(status_code=404, detail="purchase not found")
-        existing = [event for event in events if event.type == EventType.REPUTATION_RECORDED]
-        audit = next((event for event in events if event.type == EventType.AUDITED), None)
-        if audit is None:
-            raise HTTPException(status_code=409, detail="reputation requires audit")
-        expected_feedback_hash = "0x" + str(audit.payload.get("auditBundleHash", "")).split(":")[-1]
-        if body.feedback_hash.lower() != expected_feedback_hash.lower():
-            raise HTTPException(status_code=409, detail="feedback hash does not bind audit bundle")
-        has_settlement = any(event.type == EventType.PAYMENT_SETTLED for event in events)
-        has_failure = any(event.type == EventType.PAYMENT_FAILED for event in events)
-        expected_value = 100 if has_settlement else 0 if has_failure else None
-        if expected_value is None or body.objective_value != expected_value:
-            raise HTTPException(status_code=409, detail="objective feedback outcome mismatch")
-        quoted = next((event for event in events if event.type == EventType.QUOTED), None)
-        decided = next((event for event in events if event.type == EventType.DECIDED), None)
-        winner = decided.payload.get("winner", {}) if decided is not None else {}
-        winner_quote_id = winner.get("quote_id") if isinstance(winner, dict) else None
-        identities = quoted.payload.get("quoteIdentityEvidence", []) if quoted else []
-        selected_identity = next(
-            (
-                item
-                for item in identities
-                if isinstance(item, dict) and item.get("quoteId") == winner_quote_id
-            ),
-            None,
-        )
-        if (
-            selected_identity is None
-            or str(selected_identity.get("erc8004AgentId")) != body.erc8004_agent_id
-        ):
-            raise HTTPException(status_code=409, detail="feedback agent identity mismatch")
-        payload = {
-            "chainId": body.chain_id,
-            "erc8004AgentId": body.erc8004_agent_id,
-            "feedbackHash": body.feedback_hash.lower(),
-            "objectiveValue": body.objective_value,
-            "registryAddress": body.registry_address.lower(),
-            "transactionHash": body.transaction_hash.lower(),
-        }
-        if existing:
-            if len(existing) == 1 and existing[0].payload == payload:
-                return _event_response(existing[0])
-            raise HTTPException(status_code=409, detail="different reputation already recorded")
-        event = await container.repository.append_event(
-            purchase_id=purchase_id,
-            event_type=EventType.REPUTATION_RECORDED,
-            occurred_at=container.clock.now(),
-            actor={"id": "erc8004-reputation-writer", "type": "service"},
-            payload=payload,
-            evidence_refs=(audit.event_hash, body.feedback_hash, body.transaction_hash),
-            expected_event_count=len(events),
-            expected_head_event_hash=events[-1].event_hash,
-        )
-        return _event_response(event)
-
-    @app.get(
-        "/internal/evidence/purchases/{purchase_id}/reputation-intent",
-        response_model=ReputationIntentResponse,
-    )
-    async def prepare_reputation(
-        purchase_id: str,
-        erc8004_agent_id: str,
-        authorization: str | None = Header(default=None),
-    ) -> ReputationIntentResponse:
-        require_internal(authorization)
-        events = await verified_events(purchase_id)
-        audit = next((event for event in events if event.type == EventType.AUDITED), None)
-        if audit is None:
-            raise HTTPException(status_code=409, detail="reputation requires final audit")
-        has_settlement = any(event.type == EventType.PAYMENT_SETTLED for event in events)
-        has_failure = any(event.type == EventType.PAYMENT_FAILED for event in events)
-        objective_value = 100 if has_settlement else 0 if has_failure else None
-        if objective_value is None:
-            raise HTTPException(status_code=409, detail="payment outcome is not final")
-        quoted = next((event for event in events if event.type == EventType.QUOTED), None)
-        decided = next((event for event in events if event.type == EventType.DECIDED), None)
-        winner = decided.payload.get("winner", {}) if decided is not None else {}
-        winner_quote_id = winner.get("quote_id") if isinstance(winner, dict) else None
-        identities = quoted.payload.get("quoteIdentityEvidence", []) if quoted else []
-        selected_identity = next(
-            (
-                item
-                for item in identities
-                if isinstance(item, dict) and item.get("quoteId") == winner_quote_id
-            ),
-            None,
-        )
-        if (
-            selected_identity is None
-            or str(selected_identity.get("erc8004AgentId")) != erc8004_agent_id
-            or selected_identity.get("identityVerified") is not True
-        ):
-            raise HTTPException(status_code=409, detail="feedback agent identity mismatch")
-        audit_hash = str(audit.payload.get("auditBundleHash", ""))
-        digest = audit_hash.split(":")[-1]
-        if len(digest) != 64:
-            raise HTTPException(status_code=409, detail="audit bundle hash is malformed")
-        existing = next(
-            (event for event in events if event.type == EventType.REPUTATION_RECORDED),
-            None,
-        )
-        existing_transaction: str | None = None
-        if existing is not None:
-            if (
-                str(existing.payload.get("erc8004AgentId")) != erc8004_agent_id
-                or int(existing.payload.get("objectiveValue", -1)) != objective_value
-                or str(existing.payload.get("feedbackHash", "")).lower()
-                != ("0x" + digest).lower()
-            ):
-                raise HTTPException(status_code=409, detail="existing reputation differs")
-            raw_transaction = existing.payload.get("transactionHash")
-            if not isinstance(raw_transaction, str):
-                raise HTTPException(
-                    status_code=409, detail="existing reputation transaction missing"
-                )
-            existing_transaction = raw_transaction
-        return ReputationIntentResponse(
-            erc8004_agent_id=erc8004_agent_id,
-            objective_value=objective_value,
-            feedback_hash="0x" + digest,
-            transaction_hash=existing_transaction,
-        )
+    # The Phase 5 tx-only reputation surface is removed, not disabled. The writer
+    # `POST .../purchases/{id}/reputation` appended `REPUTATION_RECORDED` from a
+    # transaction-shaped hash with no receipt, no decoded `NewFeedback` event, no client,
+    # no coordinates and no publish identity - exactly the proof-free success path this
+    # packet must make unreachable. Its `GET .../reputation-intent` companion advertised
+    # a feedback hash derived from the audit bundle, which is no longer the committed
+    # payload: the outbox job carries the commitment and the audit bundle is the feedback
+    # URI. Both are replaced by the durable outbox and its atomic confirmed transition.
 
     async def owner_purchase_events(owner: str) -> list[list[EvidenceEvent]]:
         purchase_ids = await container.repository.list_owner_purchase_ids(owner)
@@ -1867,8 +1780,11 @@ def create_app(container: AppContainer) -> FastAPI:
                         else None
                     ),
                     reputation_transaction_hash=(
+                        # A synthetic publication has no chain hash and must never be
+                        # rendered as one; the typed reference lives in the event payload.
                         str(reputation.payload["transactionHash"])
                         if reputation is not None
+                        and reputation.payload.get("transactionHash") is not None
                         else None
                     ),
                 )

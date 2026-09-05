@@ -8,9 +8,17 @@ from __future__ import annotations
 
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from typing import cast
 
+import httpx
 import pytest
 
+from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
+from buyer_audit_api.adapters.reputation_gateway import (
+    GatewayReputationProvider,
+    HttpReputationQueryClient,
+    parse_feedback_clients,
+)
 from buyer_audit_api.core.audit import (
     RULESET_VERSION,
     AuditAuthority,
@@ -18,10 +26,11 @@ from buyer_audit_api.core.audit import (
     AuditReport,
     AuditSeverity,
 )
-from buyer_audit_api.core.errors import PaymentEvidenceError
+from buyer_audit_api.core.errors import PaymentConflictError, PaymentEvidenceError
 from buyer_audit_api.core.models import (
     EvidenceSource,
     EvmTransactionRef,
+    JsonObject,
     LocalTransactionRef,
 )
 from buyer_audit_api.core.payment import PaymentIntentState
@@ -30,6 +39,7 @@ from buyer_audit_api.core.reputation import (
     AGGREGATION_METHOD,
     FEEDBACK_TAG1,
     FEEDBACK_TAG2,
+    MAX_REPUTATION_LOOKBACK_BLOCKS,
     NEUTRAL_SCORE,
     ConfirmedFeedbackProof,
     DecisionKind,
@@ -45,6 +55,7 @@ from buyer_audit_api.core.reputation import (
     ReputationReason,
     ReputationSnapshot,
     SellerAttribution,
+    assert_prepared_commitment,
     assert_proof_matches_job,
 )
 
@@ -420,50 +431,81 @@ def test_an_outbox_job_must_describe_its_identity_and_decision() -> None:
         )
 
 
-def test_a_submitted_job_must_carry_its_transaction_reference() -> None:
+def test_a_prepared_job_must_carry_its_whole_commitment() -> None:
+    """`PREPARED` freezes hash + client + URI; `SUBMITTED_UNKNOWN` may have no reference.
+
+    The reviewer's C2 finding was that a restarted `PREPARED` job with no reference had
+    nowhere fail-closed to go, so the publisher re-broadcast. The honest sink is an
+    unknown submission without a nameable transaction, so that state must be legal - and
+    a confirmation must carry its entire proof.
+    """
     subject = identity()
-    decision = POLICY.decide(
-        audit=report(),
-        payment_status=PaymentStatus.PAYMENT_SETTLED,
-        payment_state=PaymentIntentState.SETTLED,
-        attribution=attribution(),
+    decision = ReputationDecision(
+        kind=DecisionKind.PUBLISH,
+        value=100,
+        reason_codes=(ReputationReason.SELLER_DELIVERED_AS_QUOTED,),
+        audit_bundle_hash=BUNDLE,
+        ruleset_version=RULESET_VERSION,
+        seller_agent_id=SELLER_AGENT,
+        erc8004_agent_id=AGENT_ID,
     )
-    # PREPARED freezes the payload commitment; the reference is bound once it exists.
-    with pytest.raises(ValueError, match="requires the committed feedback hash"):
-        ReputationPublishJob(
-            job_id="repjob:1",
-            identity=subject,
-            identity_hash=subject.identity_hash,
-            payload_fingerprint=decision.payload_fingerprint(subject),
-            decision=decision,
+
+    def build(**overrides: object) -> ReputationPublishJob:
+        fields: dict[str, object] = {
+            "job_id": "repjob:1",
+            "identity": subject,
+            "identity_hash": subject.identity_hash,
+            "payload_fingerprint": decision.payload_fingerprint(subject),
+            "decision": decision,
+            "created_at": NOW,
+            "updated_at": NOW,
+        }
+        fields.update(overrides)
+        return ReputationPublishJob(**fields)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="feedback hash, client and URI"):
+        build(status=OutboxStatus.PREPARED)
+    with pytest.raises(ValueError, match="feedback hash, client and URI"):
+        build(
             status=OutboxStatus.PREPARED,
-            created_at=NOW,
-            updated_at=NOW,
-        )
-    with pytest.raises(ValueError, match="requires a submitted transaction reference"):
-        ReputationPublishJob(
-            job_id="repjob:1",
-            identity=subject,
-            identity_hash=subject.identity_hash,
-            payload_fingerprint=decision.payload_fingerprint(subject),
-            decision=decision,
-            status=OutboxStatus.SUBMITTED_UNKNOWN,
-            created_at=NOW,
-            updated_at=NOW,
             feedback_hash="0x" + "cd" * 32,
+            client_address=CLIENT,
         )
-    with pytest.raises(ValueError, match="requires a receipt proof"):
-        ReputationPublishJob(
-            job_id="repjob:1",
-            identity=subject,
-            identity_hash=subject.identity_hash,
-            payload_fingerprint=decision.payload_fingerprint(subject),
-            decision=decision,
+    with pytest.raises(ValueError, match="clientAddress must be lowercase"):
+        build(
+            status=OutboxStatus.PREPARED,
+            feedback_hash="0x" + "cd" * 32,
+            client_address=CLIENT.upper(),
+            feedback_uri=BUNDLE,
+        )
+    with pytest.raises(ValueError, match="requires the committed feedback hash"):
+        build(status=OutboxStatus.SUBMITTED_UNKNOWN)
+
+    # The fail-closed reconciliation state: committed, possibly broadcast, unnameable.
+    unresolved = build(
+        status=OutboxStatus.SUBMITTED_UNKNOWN, feedback_hash="0x" + "cd" * 32
+    )
+    assert unresolved.transaction_ref is None
+    assert not unresolved.is_terminal
+
+    with pytest.raises(ValueError, match="full receipt and feedback-event proof"):
+        build(
             status=OutboxStatus.CONFIRMED,
-            created_at=NOW,
-            updated_at=NOW,
             feedback_hash="0x" + "cd" * 32,
             transaction_ref=EvmTransactionRef(hash=EVM_TX),
+        )
+    with pytest.raises(ValueError, match="must keep the proof it accepted"):
+        build(
+            status=OutboxStatus.CONFIRMED,
+            feedback_hash="0x" + "cd" * 32,
+            client_address=CLIENT,
+            feedback_uri=BUNDLE,
+            transaction_ref=EvmTransactionRef(hash=EVM_TX, block_number=42, log_index=3),
+            receipt_proof_ref="sha256:" + "99" * 32,
+            block_number=42,
+            log_index=3,
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            confirmed_proof=proof(),
         )
 
 
@@ -489,6 +531,8 @@ def job(*, status: OutboxStatus = OutboxStatus.PREPARED, value: int = 100):
         created_at=NOW,
         updated_at=NOW,
         feedback_hash="0x" + "cd" * 32 if submitted else None,
+        client_address=CLIENT if submitted else None,
+        feedback_uri=BUNDLE if submitted else None,
         transaction_ref=EvmTransactionRef(hash=EVM_TX) if submitted else None,
     )
 
@@ -497,6 +541,7 @@ def proof(**overrides: object) -> ConfirmedFeedbackProof:
     fields: dict[str, object] = {
         "transaction_ref": EvmTransactionRef(hash=EVM_TX, block_number=42, log_index=3),
         "receipt_proof_ref": "sha256:" + "77" * 32,
+        "registry_address": REGISTRY,
         "client_address": CLIENT,
         "erc8004_agent_id": AGENT_ID,
         "value": 100,
@@ -504,6 +549,7 @@ def proof(**overrides: object) -> ConfirmedFeedbackProof:
         "feedback_hash": "0x" + "cd" * 32,
         "block_number": 42,
         "log_index": 3,
+        "feedback_uri": BUNDLE,
     }
     fields.update(overrides)
     return ConfirmedFeedbackProof(**fields)  # type: ignore[arg-type]
@@ -518,6 +564,24 @@ def test_a_confirmed_proof_requires_a_receipt_reference_and_objective_value() ->
         proof(value_decimals=2)
     with pytest.raises(ValueError, match="coordinates cannot be negative"):
         proof(log_index=-1)
+    with pytest.raises(ValueError, match="registryAddress must be lowercase"):
+        proof(registry_address=REGISTRY.upper())
+
+
+def test_a_proof_cannot_contradict_its_own_transaction_coordinates() -> None:
+    """H1: the decoded event and the reference that carries it are one observation."""
+    with pytest.raises(ValueError, match="contradicts its transaction block"):
+        proof(
+            transaction_ref=EvmTransactionRef(hash=EVM_TX, block_number=7, log_index=3),
+            block_number=42,
+            log_index=3,
+        )
+    with pytest.raises(ValueError, match="contradicts its transaction log index"):
+        proof(
+            transaction_ref=EvmTransactionRef(hash=EVM_TX, block_number=42, log_index=9),
+            block_number=42,
+            log_index=3,
+        )
 
 
 def test_a_confirmed_proof_must_match_the_job_agent_tags_value_and_transaction() -> None:
@@ -537,8 +601,120 @@ def test_a_confirmed_proof_must_match_the_job_agent_tags_value_and_transaction()
             proof=proof(
                 transaction_ref=EvmTransactionRef(
                     hash="0x" + "ef" * 32, block_number=1, log_index=0
+                ),
+                block_number=1,
+                log_index=0,
+            ),
+        )
+
+
+def test_a_confirmed_proof_must_match_the_whole_prepared_commitment() -> None:
+    """H1: registry, audit bundle URI, prepared client and prepared hash all bind.
+
+    Each of these was accepted by the rejected implementation, so each gets its own
+    regression: a proof from another registry, one that commits to another audit
+    bundle, one written by another client, and one carrying a payload this job never
+    prepared.
+    """
+    subject = job()
+
+    with pytest.raises(PaymentEvidenceError, match="another registry"):
+        assert_proof_matches_job(
+            job=subject,
+            proof=proof(registry_address="0x" + "11" * 20),
+        )
+    with pytest.raises(PaymentEvidenceError, match="commit to this audit bundle"):
+        assert_proof_matches_job(
+            job=subject, proof=proof(feedback_uri="sha256:" + "12" * 32)
+        )
+    with pytest.raises(PaymentEvidenceError, match="written by another client"):
+        assert_proof_matches_job(job=subject, proof=proof(client_address=OTHER_CLIENT))
+    with pytest.raises(PaymentEvidenceError, match="not the payload this job prepared"):
+        assert_proof_matches_job(
+            job=subject, proof=proof(feedback_hash="0x" + "22" * 32)
+        )
+
+
+def test_a_confirmation_cannot_reclassify_a_base_submission_as_historical() -> None:
+    """Reviewer probe: same hash, `HISTORICAL_ON_CHAIN` source, was accepted before.
+
+    The evidence source is chosen at submission time, not discovered at confirmation, so
+    a job bound to a Base Sepolia submission can never be closed by a historical proof.
+    """
+    subject = job()
+    assert subject.transaction_ref is not None
+
+    with pytest.raises(PaymentEvidenceError, match="not the submitted transaction"):
+        assert_proof_matches_job(
+            job=subject,
+            proof=proof(
+                transaction_ref=EvmTransactionRef(
+                    hash=EVM_TX,
+                    block_number=42,
+                    log_index=3,
+                    evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN,
                 )
             ),
+        )
+
+
+def test_a_confirmation_cannot_move_known_event_coordinates() -> None:
+    """A recorded publication is never relocated to another block or log index."""
+    confirmed = replace(job(), block_number=42, log_index=3)
+
+    with pytest.raises(PaymentEvidenceError, match="moved to another block"):
+        assert_proof_matches_job(
+            job=confirmed,
+            proof=proof(
+                transaction_ref=EvmTransactionRef(
+                    hash=EVM_TX, block_number=43, log_index=3
+                ),
+                block_number=43,
+            ),
+        )
+    with pytest.raises(PaymentEvidenceError, match="moved to another log index"):
+        assert_proof_matches_job(
+            job=confirmed,
+            proof=proof(
+                transaction_ref=EvmTransactionRef(
+                    hash=EVM_TX, block_number=42, log_index=4
+                ),
+                log_index=4,
+            ),
+        )
+
+
+def test_a_second_prepare_can_never_change_the_commitment() -> None:
+    """`assert_prepared_commitment` is what makes `PREPARED` a real commitment."""
+    subject = job()
+
+    assert_prepared_commitment(
+        job=subject,
+        feedback_hash="0x" + "cd" * 32,
+        client_address=CLIENT,
+        feedback_uri=BUNDLE,
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="decided audit bundle"):
+        assert_prepared_commitment(
+            job=subject,
+            feedback_hash="0x" + "cd" * 32,
+            client_address=CLIENT,
+            feedback_uri="sha256:" + "13" * 32,
+        )
+    with pytest.raises(PaymentConflictError, match="another feedback hash"):
+        assert_prepared_commitment(
+            job=subject,
+            feedback_hash="0x" + "ee" * 32,
+            client_address=CLIENT,
+            feedback_uri=BUNDLE,
+        )
+    with pytest.raises(PaymentConflictError, match="another client"):
+        assert_prepared_commitment(
+            job=subject,
+            feedback_hash="0x" + "cd" * 32,
+            client_address=OTHER_CLIENT,
+            feedback_uri=BUNDLE,
         )
 
 
@@ -764,12 +940,36 @@ def test_a_query_scope_requires_a_trusted_client_allow_list() -> None:
         scope(from_block=200, to_block=100)
 
 
-def test_the_query_fingerprint_ignores_to_block_so_a_new_head_is_a_new_snapshot() -> None:
-    first = scope(to_block=200)
-    second = scope(to_block=300)
+def test_the_query_fingerprint_identifies_the_question_not_the_window() -> None:
+    """H2: the fingerprint is what a fallback compares, so it must ignore the window.
+
+    The window is derived from the chain head, so two answers to the same question
+    differ only by how far the chain moved. Everything that makes it a *different*
+    question - agent, registry, chain, tags, trusted clients - must change the hash.
+    """
+    first = scope(from_block=100, to_block=200)
+    second = scope(from_block=201, to_block=300)
 
     assert first.query_fingerprint == second.query_fingerprint
     assert first.to_payload()["toBlock"] != second.to_payload()["toBlock"]
+
+    for different in (
+        scope(erc8004_agent_id="999"),
+        scope(trusted_clients=(OTHER_CLIENT,)),
+        scope(registry_address="0x" + "11" * 20),
+        scope(chain_id=1),
+        scope(tag2="other-outcome"),
+    ):
+        assert different.query_fingerprint != first.query_fingerprint
+
+
+def test_a_resolved_window_must_end_at_a_real_head() -> None:
+    """H3: `fromBlock=toBlock=0` is not a bounded latest range, it is genesis."""
+    assert scope(from_block=901, to_block=1000).resolved_for_lookback(100)
+    assert scope(from_block=0, to_block=50).resolved_for_lookback(100)
+    assert not scope(from_block=0, to_block=0).resolved_for_lookback(100)
+    assert not scope(from_block=500, to_block=1000).resolved_for_lookback(100)
+    assert not scope(from_block=901, to_block=1000).resolved_for_lookback(0)
 
 
 def test_a_snapshot_cannot_hold_an_untrusted_or_mismatched_event() -> None:
@@ -830,3 +1030,415 @@ def test_a_normalized_feedback_value_outside_the_range_fails_closed() -> None:
             events=(event(value=101),),
             evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
         )
+
+
+def test_a_snapshot_refuses_an_event_outside_the_queried_window() -> None:
+    """Reviewer probe: a block-999 event in a 500..500 scope was scored 100."""
+    with pytest.raises(ValueError, match="outside the queried block range"):
+        ReputationSnapshot(
+            snapshot_id="snap-range",
+            seller_agent_id=SELLER_AGENT,
+            scope=scope(from_block=500, to_block=500),
+            queried_at=NOW,
+            raw_values=(event(block=999, log_index=7),),
+            derived_score=100.0,
+            freshness_status=FreshnessStatus.FRESH,
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        )
+
+
+def test_a_snapshot_refuses_an_event_that_contradicts_its_own_reference() -> None:
+    """Reviewer probe: nested ref coordinates 3/4 with event coordinates 999/7."""
+    mismatched_block = RawFeedbackEvent(
+        value=100,
+        value_decimals=0,
+        client_address=CLIENT,
+        block_number=150,
+        log_index=7,
+        transaction_ref=EvmTransactionRef(hash=EVM_TX, block_number=3, log_index=7),
+    )
+    mismatched_log = RawFeedbackEvent(
+        value=100,
+        value_decimals=0,
+        client_address=CLIENT,
+        block_number=150,
+        log_index=7,
+        transaction_ref=EvmTransactionRef(hash=EVM_TX, block_number=150, log_index=4),
+    )
+
+    for candidate, message in (
+        (mismatched_block, "contradicts its transaction block"),
+        (mismatched_log, "contradicts its transaction log index"),
+    ):
+        with pytest.raises(ValueError, match=message):
+            ReputationSnapshot(
+                snapshot_id="snap-coords",
+                seller_agent_id=SELLER_AGENT,
+                scope=scope(),
+                queried_at=NOW,
+                raw_values=(candidate,),
+                derived_score=100.0,
+                freshness_status=FreshnessStatus.FRESH,
+                evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            )
+
+
+def test_a_snapshot_refuses_a_historical_or_synthetic_event() -> None:
+    """Reviewer probe: a `HISTORICAL_ON_CHAIN` reference was scored as a Base answer."""
+    historical = RawFeedbackEvent(
+        value=100,
+        value_decimals=0,
+        client_address=CLIENT,
+        block_number=150,
+        log_index=1,
+        transaction_ref=EvmTransactionRef(
+            hash=EVM_TX,
+            block_number=150,
+            log_index=1,
+            evidence_source=EvidenceSource.HISTORICAL_ON_CHAIN,
+        ),
+    )
+    synthetic = RawFeedbackEvent(
+        value=100,
+        value_decimals=0,
+        client_address=CLIENT,
+        block_number=150,
+        log_index=1,
+        transaction_ref=LocalTransactionRef(id=LOCAL_TX, run_id=RUN_ID),
+    )
+
+    for candidate in (historical, synthetic):
+        with pytest.raises(ValueError, match="different evidence source"):
+            ReputationSnapshot(
+                snapshot_id="snap-source",
+                seller_agent_id=SELLER_AGENT,
+                scope=scope(),
+                queried_at=NOW,
+                raw_values=(candidate,),
+                derived_score=100.0,
+                freshness_status=FreshnessStatus.FRESH,
+                evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            )
+
+
+def test_a_fallback_never_reuses_another_agents_snapshot() -> None:
+    """Reviewer probe: agent 1's score-100 snapshot answered an agent-2 query."""
+    policy = ReputationAggregationPolicy(freshness_window=timedelta(hours=24))
+    stored = policy.aggregate(
+        snapshot_id="snap-agent-1",
+        seller_agent_id=SELLER_AGENT,
+        scope=scope(erc8004_agent_id="1"),
+        queried_at=NOW - timedelta(minutes=5),
+        events=(event(value=100),),
+        evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        now=NOW - timedelta(minutes=5),
+    )
+
+    for different in (
+        scope(erc8004_agent_id="2"),
+        scope(trusted_clients=(OTHER_CLIENT,)),
+        scope(registry_address="0x" + "11" * 20),
+    ):
+        answer = policy.stale_or_neutral(
+            snapshot=stored,
+            now=NOW,
+            snapshot_id="snap-other",
+            seller_agent_id=SELLER_AGENT,
+            scope=different,
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        )
+        assert answer.derived_score == NEUTRAL_SCORE
+        assert answer.freshness_status is FreshnessStatus.NO_EVIDENCE
+
+    other_seller = policy.stale_or_neutral(
+        snapshot=stored,
+        now=NOW,
+        snapshot_id="snap-other-seller",
+        seller_agent_id="nemotron-agent",
+        scope=scope(erc8004_agent_id="1"),
+        evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+    )
+    assert other_seller.derived_score == NEUTRAL_SCORE
+
+
+# --------------------------------------------------------------------------------------
+# H2 / H3 query adapter: strict binding, deployment allow-list, bounded latest window
+# --------------------------------------------------------------------------------------
+
+
+class FakeQueryClient:
+    """Records what was asked and returns whatever the test wants to answer with."""
+
+    def __init__(self, answer: object) -> None:
+        self.answer = answer
+        self.calls: list[dict[str, object]] = []
+
+    async def query(
+        self,
+        *,
+        erc8004_agent_id: str,
+        trusted_clients: tuple[str, ...],
+        lookback_blocks: int,
+    ) -> JsonObject:
+        self.calls.append(
+            {
+                "erc8004AgentId": erc8004_agent_id,
+                "trustedClients": trusted_clients,
+                "lookbackBlocks": lookback_blocks,
+            }
+        )
+        if isinstance(self.answer, Exception):
+            raise self.answer
+        assert isinstance(self.answer, dict)
+        return self.answer
+
+
+def query_answer(**overrides: object) -> JsonObject:
+    """A well-formed answer to the question the provider actually asks."""
+    answer: JsonObject = {
+        "chainId": CHAIN_ID,
+        "registryAddress": REGISTRY,
+        "erc8004AgentId": AGENT_ID,
+        "trustedClients": [CLIENT],
+        "tag1": FEEDBACK_TAG1,
+        "tag2": FEEDBACK_TAG2,
+        "fromBlock": 9_001,
+        "toBlock": 10_000,
+        "latestBlock": 10_000,
+        "queriedAt": NOW.isoformat(),
+        "events": [
+            {
+                "value": 100,
+                "valueDecimals": 0,
+                "clientAddress": CLIENT,
+                "blockNumber": 9_500,
+                "logIndex": 2,
+                "tag1": FEEDBACK_TAG1,
+                "tag2": FEEDBACK_TAG2,
+                "transactionRef": EvmTransactionRef(
+                    hash=EVM_TX, block_number=9_500, log_index=2
+                ).to_payload(),
+            }
+        ],
+    }
+    answer.update(overrides)
+    return answer
+
+
+def provider(
+    *,
+    answer: object,
+    trusted_clients: tuple[str, ...] = (CLIENT,),
+    lookback_blocks: int = 1_000,
+    repository: InMemoryEvidenceRepository | None = None,
+) -> tuple[GatewayReputationProvider, FakeQueryClient, InMemoryEvidenceRepository]:
+    store = repository or InMemoryEvidenceRepository()
+    client = FakeQueryClient(answer)
+    return (
+        GatewayReputationProvider(
+            query_client=cast(HttpReputationQueryClient, client),
+            snapshots=store,
+            clock=FixedClock(NOW),
+            chain_id=CHAIN_ID,
+            registry_address=REGISTRY,
+            trusted_clients=trusted_clients,
+            lookback_blocks=lookback_blocks,
+        ),
+        client,
+        store,
+    )
+
+
+class FixedClock:
+    def __init__(self, value: datetime) -> None:
+        self.value = value
+
+    def now(self) -> datetime:
+        return self.value
+
+
+@pytest.mark.asyncio
+async def test_the_deployment_allow_list_is_parsed_strictly() -> None:
+    """Requirements 12.10: an explicit deployment declaration, never a compiled wallet."""
+    assert parse_feedback_clients(None) == ()
+    assert parse_feedback_clients("") == ()
+    assert parse_feedback_clients("   ") == ()
+    assert parse_feedback_clients(f" {CLIENT.upper()} ,{OTHER_CLIENT}") == (
+        CLIENT,
+        OTHER_CLIENT,
+    )
+    assert parse_feedback_clients(f"{CLIENT},{CLIENT}") == (CLIENT,)
+
+    for malformed in ("not-an-address", "0x1234", CLIENT + "ff", f"{CLIENT},oops"):
+        with pytest.raises(ValueError, match="0x-prefixed EVM addresses"):
+            parse_feedback_clients(malformed)
+
+
+@pytest.mark.asyncio
+async def test_an_undeclared_allow_list_is_neutral_without_any_call() -> None:
+    """H3: the default deployment state fails closed before any I/O."""
+    subject, client, store = provider(answer=query_answer(), trusted_clients=())
+
+    assert not subject.is_configured
+    snapshot = await subject.snapshot(
+        seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+    )
+
+    assert snapshot is not None
+    assert snapshot.derived_score == NEUTRAL_SCORE
+    assert snapshot.freshness_status is FreshnessStatus.NO_EVIDENCE
+    assert client.calls == []
+    assert await store.get_snapshot(snapshot.snapshot_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_declared_allow_list_asks_for_a_bounded_latest_window() -> None:
+    """H3: the request carries the lookback, and the answer must resolve it."""
+    subject, client, store = provider(answer=query_answer(), lookback_blocks=1_000)
+
+    snapshot = await subject.snapshot(
+        seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+    )
+
+    assert client.calls == [
+        {
+            "erc8004AgentId": AGENT_ID,
+            "trustedClients": (CLIENT,),
+            "lookbackBlocks": 1_000,
+        }
+    ]
+    assert snapshot is not None
+    assert snapshot.derived_score == 100.0
+    assert snapshot.scope.from_block == 9_001
+    assert snapshot.scope.to_block == 10_000
+    assert await store.get_snapshot(snapshot.snapshot_id) is not None
+
+
+@pytest.mark.asyncio
+async def test_an_answer_to_a_different_question_is_never_scored() -> None:
+    """Reviewer probe: agent 999 / client B / block 999 / historical was scored 100."""
+    cases: tuple[JsonObject, ...] = (
+        query_answer(erc8004AgentId="999"),
+        query_answer(trustedClients=[OTHER_CLIENT]),
+        query_answer(registryAddress="0x" + "11" * 20),
+        query_answer(chainId=1),
+        query_answer(tag2="other-outcome"),
+        # Window that does not end at the reported head, or is wider than requested.
+        query_answer(toBlock=9_999),
+        query_answer(fromBlock=1, toBlock=10_000, latestBlock=10_000),
+        # The genesis-only window the rejected implementation always requested.
+        query_answer(fromBlock=0, toBlock=0, latestBlock=0),
+    )
+
+    for answer in cases:
+        subject, _, store = provider(answer=answer)
+        snapshot = await subject.snapshot(
+            seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+        )
+        assert snapshot is not None
+        assert snapshot.derived_score == NEUTRAL_SCORE
+        assert snapshot.freshness_status is FreshnessStatus.NO_EVIDENCE
+        assert await store.get_snapshot(snapshot.snapshot_id) is None
+
+
+@pytest.mark.asyncio
+async def test_a_broken_event_in_a_valid_answer_fails_closed() -> None:
+    """An out-of-window or self-contradicting event is a broken answer, not a weak one."""
+    out_of_window = query_answer(
+        events=[
+            {
+                "value": 100,
+                "valueDecimals": 0,
+                "clientAddress": CLIENT,
+                "blockNumber": 42,
+                "logIndex": 2,
+                "tag1": FEEDBACK_TAG1,
+                "tag2": FEEDBACK_TAG2,
+                "transactionRef": EvmTransactionRef(
+                    hash=EVM_TX, block_number=42, log_index=2
+                ).to_payload(),
+            }
+        ]
+    )
+    contradicting = query_answer(
+        events=[
+            {
+                "value": 100,
+                "valueDecimals": 0,
+                "clientAddress": CLIENT,
+                "blockNumber": 9_500,
+                "logIndex": 2,
+                "tag1": FEEDBACK_TAG1,
+                "tag2": FEEDBACK_TAG2,
+                "transactionRef": EvmTransactionRef(
+                    hash=EVM_TX, block_number=9_501, log_index=4
+                ).to_payload(),
+            }
+        ]
+    )
+
+    for answer in (out_of_window, contradicting):
+        subject, _, _ = provider(answer=answer)
+        snapshot = await subject.snapshot(
+            seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+        )
+        assert snapshot is not None
+        assert snapshot.derived_score == NEUTRAL_SCORE
+
+
+@pytest.mark.asyncio
+async def test_a_failed_query_reuses_only_the_same_questions_snapshot() -> None:
+    """H2: the stored answer must be for exactly this agent and this scope."""
+    subject, _, store = provider(answer=query_answer())
+    first = await subject.snapshot(
+        seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+    )
+    assert first is not None and first.derived_score == 100.0
+
+    failing, _, _ = provider(
+        answer=httpx.ConnectError("gateway down"), repository=store
+    )
+    reused = await failing.snapshot(
+        seller_agent_id=SELLER_AGENT, erc8004_agent_id=AGENT_ID
+    )
+    assert reused is not None
+    assert reused.derived_score == 100.0
+    assert reused.freshness_status is FreshnessStatus.STALE
+
+    other_agent = await failing.snapshot(
+        seller_agent_id=SELLER_AGENT, erc8004_agent_id="2"
+    )
+    assert other_agent is not None
+    assert other_agent.derived_score == NEUTRAL_SCORE
+    assert other_agent.freshness_status is FreshnessStatus.NO_EVIDENCE
+
+    other_seller = await failing.snapshot(
+        seller_agent_id="nemotron-agent", erc8004_agent_id=AGENT_ID
+    )
+    assert other_seller is not None
+    assert other_seller.derived_score == NEUTRAL_SCORE
+
+
+@pytest.mark.asyncio
+async def test_a_provider_refuses_a_malformed_allow_list_or_window() -> None:
+    store = InMemoryEvidenceRepository()
+    client = cast(HttpReputationQueryClient, FakeQueryClient(query_answer()))
+
+    def build(**overrides: object) -> GatewayReputationProvider:
+        fields: dict[str, object] = {
+            "query_client": client,
+            "snapshots": store,
+            "clock": FixedClock(NOW),
+            "chain_id": CHAIN_ID,
+            "registry_address": REGISTRY,
+            "trusted_clients": (CLIENT,),
+        }
+        fields.update(overrides)
+        return GatewayReputationProvider(**fields)  # type: ignore[arg-type]
+
+    with pytest.raises(ValueError, match="lowercase EVM addresses"):
+        build(trusted_clients=(CLIENT.upper(),))
+    with pytest.raises(ValueError, match="lookback window is out of range"):
+        build(lookback_blocks=0)
+    with pytest.raises(ValueError, match="lookback window is out of range"):
+        build(lookback_blocks=MAX_REPUTATION_LOOKBACK_BLOCKS + 1)

@@ -516,24 +516,6 @@ class DeliveryStageResponse(DeliveryStageRequest):
     response_hash: str
 
 
-class ReputationRecordRequest(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    erc8004_agent_id: str = Field(pattern=r"^[0-9]+$")
-    objective_value: int
-    feedback_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
-    transaction_hash: str = Field(pattern=EVM_TRANSACTION_HASH_REGEX)
-    chain_id: int = Field(ge=1)
-    registry_address: str = Field(min_length=1)
-
-
-class ReputationIntentResponse(BaseModel):
-    erc8004_agent_id: str
-    objective_value: int
-    feedback_hash: str
-    transaction_hash: str | None = None
-
-
 class AuditFindingResponse(BaseModel):
     code: str
     severity: str
@@ -664,8 +646,14 @@ class ReputationJobResponse(BaseModel):
     worker_id: str | None
     lease_expires_at: datetime | None
     feedback_hash: str | None
+    client_address: str | None
+    feedback_uri: str | None
     transaction_ref: EvmTransactionRefModel | LocalTransactionRefModel | None
     receipt_proof_ref: str | None
+    block_number: int | None
+    log_index: int | None
+    evidence_source: EvidenceSource | None
+    confirmed_proof: JsonObject | None
     created_at: datetime
     updated_at: datetime
 
@@ -705,13 +693,28 @@ class InternalReputationTransitionRequest(BaseModel):
 
 
 class InternalReputationPreparedRequest(InternalReputationTransitionRequest):
+    """`PREPARED` is the whole pre-broadcast commitment, not just a hash."""
+
     transaction_ref: TransactionRefModel | None = None
     feedback_hash: str = Field(pattern=r"^0x[0-9a-f]{64}$")
+    client_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
+    feedback_uri: str = Field(min_length=1)
 
 
 class InternalReputationSubmittedUnknownRequest(InternalReputationTransitionRequest):
-    transaction_ref: TransactionRefModel
+    """A submission whose outcome is unknown may not even have a nameable reference."""
+
+    transaction_ref: TransactionRefModel | None = None
     reason: str = Field(min_length=1)
+
+
+class InternalReputationConflictRequest(BaseModel):
+    """Design 18.6.1: a conflict is recorded, never silently dropped."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_fingerprint: str = Field(pattern=SHA256_REGEX)
+    reason_code: str = Field(min_length=1, max_length=64)
 
 
 class ConfirmedFeedbackProofModel(BaseModel):
@@ -721,6 +724,7 @@ class ConfirmedFeedbackProofModel(BaseModel):
 
     transaction_ref: TransactionRefModel
     receipt_proof_ref: str = Field(pattern=SHA256_REGEX)
+    registry_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
     client_address: str = Field(pattern=r"^0x[0-9a-f]{40}$")
     erc8004_agent_id: str = Field(pattern=r"^[0-9]+$")
     value: Literal[0, 100]
@@ -730,12 +734,13 @@ class ConfirmedFeedbackProofModel(BaseModel):
     log_index: int = Field(ge=0)
     tag1: str = Field(min_length=1)
     tag2: str = Field(min_length=1)
-    feedback_uri: str = ""
+    feedback_uri: str = Field(min_length=1)
 
     def to_core(self) -> ConfirmedFeedbackProof:
         return ConfirmedFeedbackProof(
             transaction_ref=self.transaction_ref.to_core(),
             receipt_proof_ref=self.receipt_proof_ref,
+            registry_address=self.registry_address,
             client_address=self.client_address,
             erc8004_agent_id=self.erc8004_agent_id,
             value=self.value,
@@ -751,6 +756,13 @@ class ConfirmedFeedbackProofModel(BaseModel):
 
 class InternalReputationConfirmedRequest(InternalReputationTransitionRequest):
     proof: ConfirmedFeedbackProofModel
+
+
+class ReputationOutboxEventResponse(BaseModel):
+    """The atomic unit as one answer: the job moved *and* the evidence was appended."""
+
+    job: ReputationJobResponse
+    event: EventResponse
 
 
 class ReputationSnapshotResponse(BaseModel):

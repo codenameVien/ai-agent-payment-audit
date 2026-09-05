@@ -391,3 +391,45 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
 - Reviewer independently re-runs the fixed order plus native Mongo and both protected checks on
   the `wo/P6-02` tip; `.agent/outbox/WO-P6-02-coder.done.md` carries the anchors and results.
   WO-P6-03 must not start before an `APPROVE` and Orchestrator integration.
+
+## 2026-09-05 18:10 KST - coder - WO-P6-02 review correction round 2
+
+### Intent
+- Close the independent review `REJECT` in `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`
+  at rejected tip `72e9611f70132bd63b268fd806ada327f4253981` without rewriting history: the
+  implementation commit `c201b39`, the evidence commit `72e9611` and the blocker commit
+  `0c10b91` all stay in the branch.
+- Findings closed: C1 (atomic `CONFIRMED + REPUTATION_RECORDED`, tx-only writer removed),
+  C2 (restarted `PREPARED` fails closed instead of re-broadcasting), H1 (full confirmation
+  binding), H2 (strict query/snapshot provenance), H3 (production wiring plus a bounded
+  latest window), H4 (append-only conflict evidence with reachable call sites),
+  M1 (`unique_reputation_job_id`/`unique_reputation_snapshot` in the preflight and the drift
+  list), M2 (native Mongo atomic, rollback and race probes).
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` 47 files, focused pytest `116 passed`, gateway build 0,
+  `node --test` 34/34, `npm run test:mongo:local` `9 passed`, `git diff --check` 0.
+- Broad: full non-mongo pytest `293 passed, 9 deselected`; full gateway suite 85/85.
+- Independent probe reproduction: all seven Python probes and all five Node probes now fail
+  closed (`/tmp/r2_probe.py`, `/tmp/r2_probe_node.mjs`); no product code was changed to make
+  a probe pass after it was written.
+- Protected diff against packet base `b8f3f3f` is empty and zero protected paths are touched.
+
+### Decisions / assumptions
+- The trusted feedback-client allow-list is read from the `PBL_AUDIT_FEEDBACK_CLIENTS`
+  environment variable and parsed strictly in the composition root. No wallet address is
+  compiled in, and an absent declaration is a valid fail-closed state: the provider answers
+  `NO_EVIDENCE/50` without issuing a call.
+- `core/payment.py` and `tests/test_payment_service.py` were edited under an explicit
+  Orchestrator scope amendment. The post-payment tail is now validated as an ordered,
+  conditional sequence rather than an unordered bag, so `REPUTATION_DECIDED` requires a
+  preceding `AUDITED`, a publication conflict requires a preceding decision and may repeat,
+  and a Phase 5 chain that only ever had `REPUTATION_RECORDED` still loads.
+- `POST /internal/evidence/purchases/{id}/reputation` and its `reputation-intent` companion
+  are removed rather than disabled; the only writer is the outbox confirmed transition.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip against
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`;
+  `.agent/outbox/WO-P6-02-coder-r2.done.md` carries the correction and merge anchors.
+  The original `WO-P6-02-coder.done.md` and the review report are unmodified.
