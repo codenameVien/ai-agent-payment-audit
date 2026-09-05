@@ -7,16 +7,19 @@
 - Base SHA: `685472c2178fac1ed1d16fedd4dde4dda7d3ed64`
 - Implementation commit SHA: `449090805948f095f1d35373ffb7852f8f43a1c6`
   (message `feat(phase6): implement canonical truth model`)
-- Correction commit SHA: `16451a7817236e7b708835db7349a4557287de31`
-  (message `fix(phase6): harden terminal truth model per review`; resolves every finding in
-  `.agent/outbox/WO-P6-01-review.md` and contains the source, test and TURN_LOG changes for the
-  correction round)
+- Correction commit SHA (round 1): `16451a7817236e7b708835db7349a4557287de31`
+  (message `fix(phase6): harden terminal truth model per review`; resolved `WO-P6-01-review.md`)
+- **Correction commit SHA (round 2, current implementation anchor):**
+  `2d3b500ba9ef511417826cc2bf9ad45660b23edf`
+  (message `fix(phase6): bind evidence provenance and audit currency`; closes H1, H2, H4 and M2
+  from `WO-P6-01-review-r2.md` and contains the source, test and TURN_LOG changes)
 - Branch tip: the last commit on `wo/P6-01`, an evidence-only follow-up whose entire diff is this
   report file. A report cannot contain its own commit hash and the Work Order forbids `amend` and
-  `reset`, so the correction SHA above is the auditable anchor. Verify the tip with
-  `git rev-parse HEAD`; `git diff main..HEAD` is the complete packet.
-- Review status: `REJECT` on the implementation commit; the findings C1, H1, H2, H3, H4, M1 and
-  M2 are resolved in the correction commit with direct regressions for each.
+  `reset`, so the round-2 correction SHA above is the auditable anchor. Verify the tip with
+  `git rev-parse HEAD`; `git diff 685472c..HEAD` is the complete packet.
+- Review status: `REJECT` round 1 (C1, H1, H2, H3, H4, M1, M2) and `REJECT` round 2 (H1, H2, H4,
+  M2 still open). C1, H3 and M1 were confirmed resolved by the round-2 reviewer. Every remaining
+  item is closed in `2d3b500` with a direct regression reproducing the reviewer's own probe.
 - Delivery scope: `P6-DES-WO-01` only. No reputation outbox/publisher, no scenario catalog or
   fakes, no dashboard, no Playwright, no AWS readiness.
 
@@ -78,16 +81,16 @@
 |---|---|---|---|
 | 1 | `uv run --project services/buyer-audit-api ruff check services/buyer-audit-api/src services/buyer-audit-api/tests` | 0 | `All checks passed!` |
 | 2 | `uv run --project services/buyer-audit-api mypy services/buyer-audit-api/src` | 0 | `no issues found in 44 source files` |
-| 3 | `uv run --project services/buyer-audit-api pytest .../test_phase6_projections.py .../test_phase6_audit.py .../test_phase6_payment_terminal.py .../test_payment_service.py .../test_api.py -q` | 0 | `134 passed` (44 projection, 21 audit, 40 terminal, 19 payment-service, 10 API) |
+| 3 | `uv run --project services/buyer-audit-api pytest .../test_phase6_projections.py .../test_phase6_audit.py .../test_phase6_payment_terminal.py .../test_payment_service.py .../test_api.py -q` | 0 | `145 passed` (47 projection, 24 audit, 45 terminal, 19 payment-service, 10 API) |
 | 4 | `npm run build --workspace @pbl/commerce-gateway` | 0 | `tsc` clean |
-| 5 | `node --test services/commerce-gateway/dist/tests/gateway.test.js services/commerce-gateway/dist/tests/phase6-truth-model.test.js` | 0 | `# tests 41 / # pass 41 / # fail 0` |
-| 6 | `npm run test:mongo:local` | 0 | `4 passed` |
+| 5 | `node --test services/commerce-gateway/dist/tests/gateway.test.js services/commerce-gateway/dist/tests/phase6-truth-model.test.js` | 0 | `# tests 43 / # pass 43 / # fail 0` |
+| 6 | `npm run test:mongo:local` | 0 | `6 passed` |
 | 7 | `git diff --check` | 0 | no whitespace errors |
 
 Additional regression sweeps (not required by the WO, run for safety, no assertions weakened):
 
-- `pytest services/buyer-audit-api/tests -q -m 'not mongo'` → exit 0, `184 passed, 4 deselected`.
-- `npm test --workspace @pbl/commerce-gateway` (full gateway suite) → exit 0, `# pass 56`.
+- `pytest services/buyer-audit-api/tests -q -m 'not mongo'` → exit 0, `195 passed, 6 deselected`.
+- `npm test --workspace @pbl/commerce-gateway` (full gateway suite) → exit 0, `# pass 58`.
 
 Reviewer re-verification commands were left to the Reviewer at the same SHA; the protected-path
 check was run here and is reported below.
@@ -223,7 +226,7 @@ check was run here and is reported below.
 6. **Report filename.** The Work Order's allowed-write list names
    `.agent/outbox/WO-P6-01-coder.done.md`, so this report uses that exact path.
 
-## Review findings and their resolutions
+## Round-1 review findings and their resolutions
 
 | Finding | Resolution | Direct regression |
 |---|---|---|
@@ -241,6 +244,52 @@ They were rewritten to the reviewed contract; no assertion was weakened and no r
 relaxed. The Phase 6 Mongo fixtures were made internally coherent for the same reason: a local
 submission is only ever closed by synthetic proofs, so the native terminal race now uses three
 synthetic writers instead of a chain-shaped failure.
+
+## Round-2 review findings and their resolutions
+
+Round 2 confirmed C1, H3 and M1 as resolved and left H1, H2, H4 and M2 open. All four are closed
+in `2d3b500ba9ef511417826cc2bf9ad45660b23edf`.
+
+| Finding | What was still wrong | Correction | Direct regression |
+|---|---|---|---|
+| **H1** submitted evidence source was not bound to the receipt/proof source | `classifyReceipt` compared only the hash, and `confirm_mismatch` compared only kind and value, so a same-hash `HISTORICAL_ON_CHAIN` proof terminalized an active BASE submission and charged 200,000 units | the submission is now resolved from its own recorded evidence (`submitted_reference()`), which carries the source the `PAYMENT_RECONCILIATION_REQUIRED`/`PAYMENT_SUBMISSION_IDENTIFIED` event committed to; `assert_submission_binding()` requires exact source equality, and the gateway classifier requires `reference.evidenceSource === submission.evidenceSource`. Active EIP-3009 submissions record `BASE_SEPOLIA_VERIFIED`, so historical evidence can never prove them | `phase6-truth-model.test.ts` — `H1: a same-hash HISTORICAL_ON_CHAIN receipt cannot prove an active BASE submission` and `H1: an active BASE submission never terminalizes on a historical proof`; `test_phase6_payment_terminal.py` — `test_historical_proof_cannot_terminalize_an_active_base_submission` (asserts `spent_units == 0`, reservation still held, no terminal event) and `test_historical_check_cannot_answer_an_active_base_submission` |
+| **H2** synthetic reconciliation could switch scenario runs after submission | checks validated only "a scenario is present", and the series validator only proved the checks agreed with each other, so a self-consistent run-B series released a run-A reservation | every check and terminal proof is bound to the original reconciliation event's complete `ScenarioMetadata` and to the `runId` that owns the submitted `localtx:` identity; a foreign run fails with its own named reason before any attempt is appended | `test_phase6_payment_terminal.py` — `test_foreign_run_check_cannot_answer_a_local_submission` (attempt count stays 0), `test_foreign_run_no_transfer_proof_cannot_release_the_reservation` (reservation still held, no terminal event) and `test_foreign_run_mismatch_proof_cannot_charge_the_wallet` (both the value-object guard and the submission guard) |
+| **H4** stale or wrong-ruleset audits could be returned as current | the normal path checked only head coverage, the append-race recovery bypassed even that, and the summary projection checked only that `AUDITED` was last | `require_current_audit()` + `AuditReportReader.current()` are the single gate: both the normal path and the race path require the current `RULESET_VERSION` and exact covered head, and the race path re-verifies the chain first. `_audit_projection` now parses through the same reader, so the summary rejects exactly what the detail path rejects | `test_phase6_audit.py` — `test_an_older_ruleset_audit_is_never_returned_as_current`, `test_append_race_loser_never_returns_a_stale_audit` (asserts the recovery path actually ran) and `test_append_race_loser_returns_the_winner_report_when_it_is_current`; `test_phase6_projections.py` — `test_summary_rejects_an_audit_whose_head_hash_is_not_its_predecessor`, `test_summary_rejects_an_audit_with_a_malformed_payload`, `test_summary_still_reads_an_older_ruleset_audit_as_history` |
+| **M2** the preflight did not precede every new unique index | `unique_payment_mismatch_per_purchase` and `unique_payment_no_transfer_per_purchase` were created before the report, and the report had no coverage for them | the singleton loop is split into `_EXISTING_SINGLETON_INDEXES` (pre-packet, unchanged) and `_PHASE6_SINGLETON_INDEXES` (new); one declaration feeds both the report and creation, and the read-only preflight runs before any new index is created. No legacy row is modified, backfilled or deleted | `test_mongo_repository.py` — native collision coverage for all three new event-collection keys, `ensure_indexes()` refusing over collisions with `index_information()` proving none of the five new indexes existed yet, `test_preflight_precedes_every_new_phase6_unique_index` (call-order recorder) and `test_collision_report_covers_every_new_phase6_unique_index` (coverage-drift guard) |
+
+### Independent probe reproduction at the round-2 anchor
+
+Every probe the reviewer reported as accepted was re-run locally (Node for the gateway, `uv run
+python` for the core, in-memory repositories only, no network):
+
+| Reviewer probe | Round-2 result |
+|---|---|
+| `classifyReceipt()` with a BASE submission and same-hash `HISTORICAL_ON_CHAIN` receipt | rejected: `receipt evidence source is not the submitted evidence source` |
+| `confirm_mismatch()` with the bound hash but a HISTORICAL EVM proof | rejected: `mismatch proof evidence source is not the submitted evidence source`; `spent_units=0`, `reserved_units=100000` |
+| three run-B checks against the run-A `localtx:` submission | rejected: `reconciliation check scenario run does not own the submitted transaction`; `reconciliation_attempt_count=0` |
+| run-B no-transfer proof over a genuine run-A series | rejected: `no-transfer proof scenario run does not own the submitted transaction`; reservation still 100000 |
+| same-head persisted audit with `phase6.rules.old` | rejected: `persisted audit was produced by ruleset 'phase6.rules.old', not 'phase6.rules.v1'` |
+| audit append race followed by a later event before the loser re-read | rejected: `evidence head advanced after the terminal audit`; the recovery path ran (`attempts=1`) |
+| `AUDITED` whose `evidenceHeadEventHash` is unrelated to its predecessor | rejected by both the reader and the summary projection |
+| `ensure_indexes()` call-order recorder | preflight at call 16; `unique_payment_mismatch_per_purchase` at 24 and `unique_payment_no_transfer_per_purchase` at 25 |
+
+### Fixture corrections the Reviewer should expect
+
+- Projection fixtures previously fabricated `evidenceHeadEventHash`; `chain()` now substitutes the
+  real predecessor hash unless a negative test opts out with an explicit value. Five projection
+  tests changed only because the shared reader now validates that position.
+- Phase 6 Mongo preflight fixtures were rewritten so they are legal under the pre-packet indexes:
+  the terminal-outcome collision uses one shared key across two purchases, and the singleton
+  collisions use one purchase with two events of each new type.
+
+### P6-AC-03.5 and future reputation evidence
+
+P6-AC-03.5 is enforced literally: any event appended after `AUDITED` makes the persisted report
+non-current and demands an explicit correction/re-audit policy. The approved post-audit reputation
+flow (design 18.8 appends `REPUTATION_*` after `AUDITED`) therefore extends the single
+`require_current_audit()` predicate in WO-P6-02, not scattered read paths. History remains fully
+readable: the projection still shows the stored verdict plus `audit_covers_head=false`, and a
+legacy-ruleset audit is readable history that is simply never served as the current audit.
 
 ## Background processes and ports
 
