@@ -7,6 +7,7 @@ from buyer_audit_api.domains.ai_inference.models import (
     BenchmarkSnapshot,
     Candidate,
     NormalizedAiRequest,
+    ReputationScoreEvidence,
     SelectionDecision,
     SellerIdentityEvidence,
     SellerQuote,
@@ -17,6 +18,7 @@ from buyer_audit_api.domains.ai_inference.ports import (
     SellerIdentityVerifier,
     SellerQuoteClient,
     SellerQuoteVerifier,
+    SellerReputationProvider,
 )
 from buyer_audit_api.domains.ai_inference.selection import SelectionEngine
 
@@ -52,6 +54,7 @@ class AiInferenceDecisionWorkflow:
         identity_verifier: SellerIdentityVerifier,
         explanation: SelectionExplanationPort,
         selection: SelectionEngine | None = None,
+        reputation: SellerReputationProvider | None = None,
     ) -> None:
         self._repository = repository
         self._clock = clock
@@ -61,6 +64,33 @@ class AiInferenceDecisionWorkflow:
         self._identity_verifier = identity_verifier
         self._explanation = explanation
         self._selection = selection or SelectionEngine()
+        self._reputation = reputation
+
+    async def _reputation_evidence(
+        self,
+        quote: SellerQuote,
+        cache: dict[tuple[str, str], ReputationScoreEvidence | None],
+    ) -> ReputationScoreEvidence | None:
+        """`P6-AC-06.6`: one snapshot per seller agent, reused by every model it quotes.
+
+        A missing provider, an unanswerable query or a raising provider all resolve to no
+        evidence, which selection scores as an explicit neutral 50 rather than a failure.
+        """
+        if self._reputation is None:
+            return None
+        key = (quote.seller_agent_id, quote.erc8004_agent_id)
+        if key not in cache:
+            try:
+                snapshot = await self._reputation.snapshot(
+                    seller_agent_id=quote.seller_agent_id,
+                    erc8004_agent_id=quote.erc8004_agent_id,
+                )
+            except Exception:
+                snapshot = None
+            cache[key] = (
+                None if snapshot is None else ReputationScoreEvidence.from_snapshot(snapshot)
+            )
+        return cache[key]
 
     async def _load_verified_events(self, purchase_id: str) -> list[EvidenceEvent]:
         events = await self._repository.list_events(purchase_id)
@@ -115,10 +145,14 @@ class AiInferenceDecisionWorkflow:
         raw_snapshots = payload.get("benchmarkSnapshots")
         raw_quotes = payload.get("signedQuotes")
         raw_identity = payload.get("quoteIdentityEvidence")
+        # Absent for purchases quoted before provider reputation existed: no evidence, and
+        # selection scores those candidates as an explicit neutral 50.
+        raw_reputation = payload.get("reputationSnapshots", [])
         if (
             not isinstance(raw_snapshots, list)
             or not isinstance(raw_quotes, list)
             or not isinstance(raw_identity, list)
+            or not isinstance(raw_reputation, list)
         ):
             raise ValueError("persisted QUOTED evidence is malformed")
         snapshots = [BenchmarkSnapshot.model_validate(value) for value in raw_snapshots]
@@ -126,6 +160,12 @@ class AiInferenceDecisionWorkflow:
         identity_by_quote = {value.quote_id: value for value in identities}
         if len(identity_by_quote) != len(raw_identity):
             raise ValueError("persisted quote identity evidence is malformed")
+        reputation_evidence = [
+            ReputationScoreEvidence.model_validate(value) for value in raw_reputation
+        ]
+        reputation_by_agent = {value.seller_agent_id: value for value in reputation_evidence}
+        if len(reputation_by_agent) != len(reputation_evidence):
+            raise ValueError("persisted reputation snapshot evidence is malformed")
         quotes = [
             SellerQuote.model_validate(
                 {
@@ -165,7 +205,14 @@ class AiInferenceDecisionWorkflow:
             if len(matches) != 1 or matches[0].snapshot_id in used_snapshot_ids:
                 raise ValueError("quote and benchmark binding mismatch")
             used_snapshot_ids.add(matches[0].snapshot_id)
-            candidates.append(Candidate(quote=quote, benchmark=matches[0]))
+            candidates.append(
+                Candidate(
+                    quote=quote,
+                    benchmark=matches[0],
+                    # `P6-AC-06.6`: the persisted snapshot is reused, never re-queried.
+                    reputation=reputation_by_agent.get(quote.seller_agent_id),
+                )
+            )
         if len(candidates) != len(snapshots):
             raise ValueError("quote and benchmark cardinality mismatch")
         return candidates, len(events), events[-1].event_hash
@@ -208,6 +255,7 @@ class AiInferenceDecisionWorkflow:
 
             candidates: list[Candidate] = []
             identity_evidence: list[SellerIdentityEvidence] = []
+            reputation_cache: dict[tuple[str, str], ReputationScoreEvidence | None] = {}
             for snapshot in snapshots[:3]:
                 quote = await self._quotes.quote(
                     purchase_id=purchase_id,
@@ -229,7 +277,16 @@ class AiInferenceDecisionWorkflow:
                     update={"identity_verified": identity.identity_verified}
                 )
                 identity_evidence.append(identity)
-                candidates.append(Candidate(quote=quote, benchmark=snapshot))
+                candidates.append(
+                    Candidate(
+                        quote=quote,
+                        benchmark=snapshot,
+                        reputation=await self._reputation_evidence(quote, reputation_cache),
+                    )
+                )
+            reputation_evidence = [
+                evidence for evidence in reputation_cache.values() if evidence is not None
+            ]
 
             await self._repository.append_event(
                 purchase_id=purchase_id,
@@ -251,12 +308,16 @@ class AiInferenceDecisionWorkflow:
                         evidence.model_dump(mode="json", by_alias=True)
                         for evidence in identity_evidence
                     ],
+                    "reputationSnapshots": [
+                        evidence.model_dump(mode="json") for evidence in reputation_evidence
+                    ],
                 },
-                evidence_refs=tuple(
-                    sorted(
+                evidence_refs=(
+                    *sorted(
                         [candidate.benchmark.snapshot_id for candidate in candidates]
                         + [candidate.quote.quote_id for candidate in candidates]
-                    )
+                    ),
+                    *sorted(evidence.snapshot_id for evidence in reputation_evidence),
                 ),
                 expected_event_count=len(initial_events),
                 expected_head_event_hash=initial_events[-1].event_hash,

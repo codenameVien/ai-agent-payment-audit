@@ -7,7 +7,7 @@ import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import cast
 
 import httpx
@@ -16,6 +16,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from buyer_audit_api.api.schemas import (
     AuditAlertResponse,
+    AuditFinalizeResponse,
     AuditFindingResponse,
     AuditReportResponse,
     BuyerWalletRequest,
@@ -28,6 +29,7 @@ from buyer_audit_api.api.schemas import (
     EventResponse,
     EvidenceHeadResponse,
     ExternalAnchorRequest,
+    InternalAuditFinalizeRequest,
     InternalConfirmMismatchRequest,
     InternalPaymentAuthorizeRequest,
     InternalPaymentClaimRequest,
@@ -37,18 +39,26 @@ from buyer_audit_api.api.schemas import (
     InternalPaymentTransactionBindingRequest,
     InternalReconcileNoTransferRequest,
     InternalReconciliationCheckRequest,
+    InternalReputationClaimRequest,
+    InternalReputationConfirmedRequest,
+    InternalReputationPreparedRequest,
+    InternalReputationSubmittedUnknownRequest,
     InternalTerminalProofRequest,
     MeResponse,
     PaymentIntentResponse,
     PaymentQuoteViewResponse,
     PaymentViewResponse,
+    PublishIdentityResponse,
     PurchaseDetailResponse,
     PurchaseRequest,
     PurchaseResponse,
     PurchaseRunResponse,
     PurchaseSummaryResponse,
+    ReputationDecisionResponse,
     ReputationIntentResponse,
+    ReputationJobResponse,
     ReputationRecordRequest,
+    ReputationSnapshotResponse,
     ScenarioResponse,
     SellerAgentSummaryResponse,
     SellerExecutionClaimRequest,
@@ -96,7 +106,13 @@ from buyer_audit_api.core.payment import (
     PaymentView,
     WalletPolicy,
 )
+from buyer_audit_api.core.ports import ReputationOutboxPort
 from buyer_audit_api.core.projections import PurchaseProjection, PurchaseProjectionService
+from buyer_audit_api.core.reputation import (
+    ReputationDecision,
+    ReputationPublishJob,
+    ReputationSnapshot,
+)
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 from buyer_audit_api.domains.ai_inference.models import NormalizedAiRequest
 
@@ -248,6 +264,99 @@ def _audit_response(report: AuditReport) -> AuditReportResponse:
         evidence_head_event_hash=report.evidence_head_event_hash,
         audit_bundle_hash=report.audit_bundle_hash,
         ruleset_version=report.ruleset_version,
+    )
+
+
+_OUTBOX_ERRORS = (
+    PaymentEvidenceError,
+    PaymentPolicyError,
+    PaymentConflictError,
+    EvidenceIntegrityError,
+    EvidenceTransitionError,
+    ValueError,
+)
+
+
+def _outbox_error(exc: Exception) -> HTTPException:
+    """Design 18.12.2: stale lease/fingerprint 409, malformed proof 422, missing 404."""
+    if isinstance(exc, PaymentEvidenceError) and "not found" in str(exc):
+        return HTTPException(status_code=404, detail=str(exc))
+    if isinstance(
+        exc, (PaymentConflictError, EvidenceIntegrityError, EvidenceTransitionError)
+    ):
+        return HTTPException(status_code=409, detail=str(exc))
+    if isinstance(exc, (PaymentEvidenceError, PaymentPolicyError, ValueError)):
+        return HTTPException(status_code=422, detail=str(exc))
+    return HTTPException(status_code=500, detail="unexpected reputation outbox error")
+
+
+def _audit_report_response(report: AuditReport) -> AuditReportResponse:
+    return _audit_response(report)
+
+
+def _reputation_decision_response(
+    decision: ReputationDecision,
+) -> ReputationDecisionResponse:
+    return ReputationDecisionResponse(
+        decision=decision.kind.value,
+        value=decision.value,
+        reason_codes=[item.value for item in decision.reason_codes],
+        audit_bundle_hash=decision.audit_bundle_hash,
+        ruleset_version=decision.ruleset_version,
+        seller_agent_id=decision.seller_agent_id,
+        erc8004_agent_id=decision.erc8004_agent_id,
+    )
+
+
+def _reputation_job_response(job: ReputationPublishJob) -> ReputationJobResponse:
+    return ReputationJobResponse(
+        job_id=job.job_id,
+        status=job.status.value,
+        publish_identity=PublishIdentityResponse(
+            chain_id=job.identity.chain_id,
+            registry_address=job.identity.registry_address,
+            purchase_id=job.identity.purchase_id,
+            seller_agent_id=job.identity.seller_agent_id,
+            tag1=job.identity.tag1,
+            tag2=job.identity.tag2,
+        ),
+        publish_identity_hash=job.identity_hash,
+        payload_fingerprint=job.payload_fingerprint,
+        decision=_reputation_decision_response(job.decision),
+        attempt_count=job.attempt_count,
+        worker_id=job.worker_id,
+        lease_expires_at=job.lease_expires_at,
+        feedback_hash=job.feedback_hash,
+        transaction_ref=transaction_ref_response(job.transaction_ref),
+        receipt_proof_ref=job.receipt_proof_ref,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
+
+
+def _reputation_snapshot_response(
+    snapshot: ReputationSnapshot,
+) -> ReputationSnapshotResponse:
+    return ReputationSnapshotResponse(
+        snapshot_id=snapshot.snapshot_id,
+        seller_agent_id=snapshot.seller_agent_id,
+        erc8004_agent_id=snapshot.scope.erc8004_agent_id,
+        chain_id=snapshot.scope.chain_id,
+        registry_address=snapshot.scope.registry_address,
+        trusted_clients=list(snapshot.scope.trusted_clients),
+        tag1=snapshot.scope.tag1,
+        tag2=snapshot.scope.tag2,
+        from_block=snapshot.scope.from_block,
+        to_block=snapshot.scope.to_block,
+        queried_at=snapshot.queried_at,
+        event_count=snapshot.event_count,
+        raw_values=[event.to_payload() for event in snapshot.raw_values],
+        aggregation_method=snapshot.aggregation_method,
+        derived_score=snapshot.derived_score,
+        freshness_status=snapshot.freshness_status.value,
+        freshness_age_seconds=snapshot.freshness_age_seconds,
+        evidence_source=snapshot.evidence_source.value,
+        snapshot_hash=snapshot.snapshot_hash,
     )
 
 
@@ -1100,6 +1209,165 @@ def create_app(container: AppContainer) -> FastAPI:
             ValueError,
         ) as exc:
             raise terminal_error(exc) from exc
+
+    @app.post(
+        "/internal/evidence/purchases/{purchase_id}/audit/finalize",
+        response_model=AuditFinalizeResponse,
+    )
+    async def finalize_terminal_audit(
+        purchase_id: str,
+        body: InternalAuditFinalizeRequest,
+        authorization: str | None = Header(default=None),
+    ) -> AuditFinalizeResponse:
+        """Design 18.7: the only writer of `AUDITED + REPUTATION_DECIDED` and the job."""
+        require_internal(authorization)
+        coordinator = container.terminal_coordinator
+        if coordinator is None:
+            raise HTTPException(
+                status_code=503, detail="terminal audit coordinator is not configured"
+            )
+        events = await verified_events(purchase_id)
+        if not events:
+            raise HTTPException(status_code=404, detail="purchase not found")
+        if body.expected_event_count != len(events):
+            raise HTTPException(status_code=409, detail="evidence head changed before request")
+        if body.expected_head_event_hash != events[-1].event_hash:
+            raise HTTPException(status_code=409, detail="evidence head changed before request")
+        try:
+            result = await coordinator.finalize_if_eligible(purchase_id)
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceIntegrityError,
+            EvidenceTransitionError,
+            ValueError,
+        ) as exc:
+            raise terminal_error(exc) from exc
+        return AuditFinalizeResponse(
+            purchase_id=result.purchase_id,
+            finalized=result.finalized,
+            reason=result.reason,
+            audit=None if result.audit is None else _audit_report_response(result.audit),
+            decision=(
+                None
+                if result.decision is None
+                else _reputation_decision_response(result.decision)
+            ),
+            job=None if result.job is None else _reputation_job_response(result.job),
+        )
+
+    def require_outbox() -> ReputationOutboxPort:
+        outbox = container.reputation_outbox
+        if outbox is None:
+            raise HTTPException(
+                status_code=503, detail="reputation outbox is not configured"
+            )
+        return outbox
+
+    @app.post(
+        "/internal/evidence/reputation-outbox/claim",
+        response_model=ReputationJobResponse,
+    )
+    async def claim_reputation_job(
+        body: InternalReputationClaimRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationJobResponse:
+        require_internal(authorization)
+        outbox = require_outbox()
+        now = container.clock.now()
+        job = await outbox.claim_job(
+            worker_id=body.worker_id,
+            lease_until=now + timedelta(seconds=body.lease_seconds),
+            now=now,
+        )
+        if job is None:
+            raise HTTPException(status_code=404, detail="no claimable reputation job")
+        return _reputation_job_response(job)
+
+    @app.get(
+        "/internal/evidence/reputation-outbox/{job_id}",
+        response_model=ReputationJobResponse,
+    )
+    async def read_reputation_job(
+        job_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationJobResponse:
+        require_internal(authorization)
+        job = await require_outbox().get_job(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="reputation job not found")
+        return _reputation_job_response(job)
+
+    @app.post(
+        "/internal/evidence/reputation-outbox/{job_id}/prepared",
+        response_model=ReputationJobResponse,
+    )
+    async def mark_reputation_prepared(
+        job_id: str,
+        body: InternalReputationPreparedRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationJobResponse:
+        require_internal(authorization)
+        try:
+            job = await require_outbox().mark_prepared(
+                job_id=job_id,
+                worker_id=body.worker_id,
+                payload_fingerprint=body.payload_fingerprint,
+                transaction_ref=(
+                    None if body.transaction_ref is None else body.transaction_ref.to_core()
+                ),
+                feedback_hash=body.feedback_hash,
+                now=container.clock.now(),
+            )
+        except _OUTBOX_ERRORS as exc:
+            raise _outbox_error(exc) from exc
+        return _reputation_job_response(job)
+
+    @app.post(
+        "/internal/evidence/reputation-outbox/{job_id}/submitted-unknown",
+        response_model=ReputationJobResponse,
+    )
+    async def mark_reputation_submitted_unknown(
+        job_id: str,
+        body: InternalReputationSubmittedUnknownRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationJobResponse:
+        require_internal(authorization)
+        try:
+            job = await require_outbox().mark_submitted_unknown(
+                job_id=job_id,
+                worker_id=body.worker_id,
+                payload_fingerprint=body.payload_fingerprint,
+                transaction_ref=body.transaction_ref.to_core(),
+                reason=body.reason,
+                now=container.clock.now(),
+            )
+        except _OUTBOX_ERRORS as exc:
+            raise _outbox_error(exc) from exc
+        return _reputation_job_response(job)
+
+    @app.post(
+        "/internal/evidence/reputation-outbox/{job_id}/confirmed",
+        response_model=ReputationJobResponse,
+    )
+    async def mark_reputation_confirmed(
+        job_id: str,
+        body: InternalReputationConfirmedRequest,
+        authorization: str | None = Header(default=None),
+    ) -> ReputationJobResponse:
+        require_internal(authorization)
+        try:
+            job = await require_outbox().mark_confirmed(
+                job_id=job_id,
+                worker_id=body.worker_id,
+                payload_fingerprint=body.payload_fingerprint,
+                proof=body.proof.to_core(),
+                now=container.clock.now(),
+            )
+        except _OUTBOX_ERRORS as exc:
+            raise _outbox_error(exc) from exc
+        return _reputation_job_response(job)
 
     @app.post(
         "/internal/evidence/purchases/{purchase_id}/delivery",

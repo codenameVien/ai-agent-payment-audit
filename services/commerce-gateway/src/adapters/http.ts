@@ -1,14 +1,20 @@
 import type { Address, Hex } from "viem";
 
-import type {
-  EvidenceApi,
-  PaymentIntent,
-  PaymentView,
-  SellerClient,
-  SellerResponse,
-  StagedDelivery,
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  type ConfirmedFeedbackProof,
+  type EvidenceApi,
+  type PaymentIntent,
+  type PaymentView,
+  type ReputationOutboxApi,
+  type ReputationOutboxStatus,
+  type ReputationPublishJob,
+  type SellerClient,
+  type SellerResponse,
+  type StagedDelivery,
+  type TransactionRef,
 } from "../contracts.js";
-import type { ReputationEvidenceApi } from "../erc8004.js";
+import { ReputationOutboxConflictError } from "../erc8004.js";
 import type {
   EvidenceAnchorApi,
   EvidenceHeadCheckpoint,
@@ -379,7 +385,136 @@ export class EvidenceAnchorHttpClient implements EvidenceAnchorApi {
   }
 }
 
-export class ReputationEvidenceHttpClient implements ReputationEvidenceApi {
+type TransactionRefJson =
+  | {
+      kind: "EVM";
+      hash: Hex;
+      chain_id: number;
+      evidence_source: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+      block_number?: number | null;
+      log_index?: number | null;
+    }
+  | {
+      kind: "LOCAL";
+      id: string;
+      run_id: string;
+      evidence_source: "SYNTHETIC_LOCAL";
+    };
+
+interface ReputationJobJson {
+  job_id: string;
+  status: ReputationOutboxStatus;
+  publish_identity: {
+    chain_id: number;
+    registry_address: Address;
+    purchase_id: string;
+    seller_agent_id: string;
+    tag1: string;
+    tag2: string;
+  };
+  publish_identity_hash: string;
+  payload_fingerprint: string;
+  decision: {
+    decision: "PUBLISH" | "DEFER";
+    value: number | null;
+    reason_codes: string[];
+    audit_bundle_hash: string;
+    ruleset_version: string;
+    seller_agent_id: string;
+    erc8004_agent_id: string;
+  };
+  attempt_count: number;
+  worker_id: string | null;
+  lease_expires_at: string | null;
+  feedback_hash: Hex | null;
+  transaction_ref: TransactionRefJson | null;
+  receipt_proof_ref: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+function encodeTransactionRef(reference: TransactionRef): TransactionRefJson {
+  if (reference.kind === "LOCAL") {
+    return {
+      kind: "LOCAL",
+      id: reference.id,
+      run_id: reference.runId,
+      evidence_source: "SYNTHETIC_LOCAL",
+    };
+  }
+  return {
+    kind: "EVM",
+    hash: reference.hash,
+    chain_id: reference.chainId,
+    evidence_source: reference.evidenceSource,
+    ...(reference.blockNumber === undefined ? {} : { block_number: reference.blockNumber }),
+    ...(reference.logIndex === undefined ? {} : { log_index: reference.logIndex }),
+  };
+}
+
+function decodeTransactionRef(body: TransactionRefJson): TransactionRef {
+  if (body.kind === "LOCAL") {
+    return {
+      kind: "LOCAL",
+      id: body.id,
+      runId: body.run_id,
+      evidenceSource: "SYNTHETIC_LOCAL",
+    };
+  }
+  if (body.chain_id !== BASE_SEPOLIA_CHAIN_ID) {
+    throw new Error(`reputation outbox returned an off-chain-id transaction: ${body.chain_id}`);
+  }
+  return {
+    kind: "EVM",
+    hash: body.hash,
+    chainId: BASE_SEPOLIA_CHAIN_ID,
+    evidenceSource: body.evidence_source,
+    ...(body.block_number == null ? {} : { blockNumber: body.block_number }),
+    ...(body.log_index == null ? {} : { logIndex: body.log_index }),
+  };
+}
+
+function decodeJob(body: ReputationJobJson): ReputationPublishJob {
+  return {
+    jobId: body.job_id,
+    status: body.status,
+    identity: {
+      chainId: body.publish_identity.chain_id,
+      registryAddress: body.publish_identity.registry_address,
+      purchaseId: body.publish_identity.purchase_id,
+      sellerAgentId: body.publish_identity.seller_agent_id,
+      tag1: body.publish_identity.tag1,
+      tag2: body.publish_identity.tag2,
+    },
+    identityHash: body.publish_identity_hash,
+    payloadFingerprint: body.payload_fingerprint,
+    decision: {
+      decision: body.decision.decision,
+      value: body.decision.value,
+      reasonCodes: body.decision.reason_codes,
+      auditBundleHash: body.decision.audit_bundle_hash,
+      rulesetVersion: body.decision.ruleset_version,
+      sellerAgentId: body.decision.seller_agent_id,
+      erc8004AgentId: body.decision.erc8004_agent_id,
+    },
+    attemptCount: body.attempt_count,
+    workerId: body.worker_id,
+    leaseExpiresAt: body.lease_expires_at,
+    feedbackHash: body.feedback_hash,
+    transactionRef: body.transaction_ref === null
+      ? null
+      : decodeTransactionRef(body.transaction_ref),
+    receiptProofRef: body.receipt_proof_ref,
+    createdAt: body.created_at,
+    updatedAt: body.updated_at,
+  };
+}
+
+/**
+ * Durable reputation state over HTTP. Every lease, transition and recorded transaction
+ * belongs to the Evidence API, so exactly-once survives a process restart.
+ */
+export class ReputationOutboxHttpClient implements ReputationOutboxApi {
   readonly #baseUrl: string;
   readonly #authorization: string;
   readonly #fetch: typeof fetch;
@@ -394,59 +529,114 @@ export class ReputationEvidenceHttpClient implements ReputationEvidenceApi {
     this.#fetch = args.fetchImpl ?? fetch;
   }
 
-  async prepare(purchaseId: string, agentId: bigint): Promise<{
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash?: Hex;
-  }> {
+  async claim(args: { workerId: string; leaseSeconds: number }): Promise<ReputationPublishJob | null> {
     const response = await this.#fetch(
-      `${this.#baseUrl}/internal/evidence/purchases/${encodeURIComponent(purchaseId)}/reputation-intent?erc8004_agent_id=${agentId}`,
-      { headers: { authorization: this.#authorization } },
-    );
-    const body = await decodeJson<{
-      erc8004_agent_id: string;
-      objective_value: 0 | 100;
-      feedback_hash: Hex;
-      transaction_hash?: Hex | null;
-    }>(response);
-    return {
-      agentId: BigInt(body.erc8004_agent_id),
-      objectiveValue: body.objective_value,
-      feedbackHash: body.feedback_hash,
-      ...(body.transaction_hash == null
-        ? {}
-        : { transactionHash: body.transaction_hash }),
-    };
-  }
-
-  async record(args: {
-    purchaseId: string;
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash: Hex;
-    chainId: number;
-    registryAddress: Address;
-  }): Promise<void> {
-    const response = await this.#fetch(
-      `${this.#baseUrl}/internal/evidence/purchases/${encodeURIComponent(args.purchaseId)}/reputation`,
+      `${this.#baseUrl}/internal/evidence/reputation-outbox/claim`,
       {
         method: "POST",
         headers: {
           authorization: this.#authorization,
           "content-type": "application/json",
         },
-        body: JSON.stringify({
-          erc8004_agent_id: args.agentId.toString(),
-          objective_value: args.objectiveValue,
-          feedback_hash: args.feedbackHash,
-          transaction_hash: args.transactionHash,
-          chain_id: args.chainId,
-          registry_address: args.registryAddress,
-        }),
+        body: JSON.stringify({ worker_id: args.workerId, lease_seconds: args.leaseSeconds }),
       },
     );
-    await decodeJson<unknown>(response);
+    if (response.status === 404) return null;
+    return decodeJob(await this.#decode(response));
+  }
+
+  async get(jobId: string): Promise<ReputationPublishJob | null> {
+    const response = await this.#fetch(
+      `${this.#baseUrl}/internal/evidence/reputation-outbox/${encodeURIComponent(jobId)}`,
+      { headers: { authorization: this.#authorization } },
+    );
+    if (response.status === 404) return null;
+    return decodeJob(await this.#decode(response));
+  }
+
+  async markPrepared(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    transactionRef?: TransactionRef;
+    feedbackHash: Hex;
+  }): Promise<ReputationPublishJob> {
+    return this.#transition(args.jobId, "prepared", {
+      worker_id: args.workerId,
+      payload_fingerprint: args.payloadFingerprint,
+      feedback_hash: args.feedbackHash,
+      ...(args.transactionRef === undefined
+        ? {}
+        : { transaction_ref: encodeTransactionRef(args.transactionRef) }),
+    });
+  }
+
+  async markSubmittedUnknown(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    transactionRef: TransactionRef;
+    reason: string;
+  }): Promise<ReputationPublishJob> {
+    return this.#transition(args.jobId, "submitted-unknown", {
+      worker_id: args.workerId,
+      payload_fingerprint: args.payloadFingerprint,
+      transaction_ref: encodeTransactionRef(args.transactionRef),
+      reason: args.reason,
+    });
+  }
+
+  async markConfirmed(args: {
+    jobId: string;
+    workerId: string;
+    payloadFingerprint: string;
+    proof: ConfirmedFeedbackProof;
+  }): Promise<ReputationPublishJob> {
+    return this.#transition(args.jobId, "confirmed", {
+      worker_id: args.workerId,
+      payload_fingerprint: args.payloadFingerprint,
+      proof: {
+        transaction_ref: encodeTransactionRef(args.proof.transactionRef),
+        receipt_proof_ref: args.proof.receiptProofRef,
+        client_address: args.proof.clientAddress.toLowerCase(),
+        erc8004_agent_id: args.proof.erc8004AgentId,
+        value: args.proof.value,
+        value_decimals: args.proof.valueDecimals,
+        feedback_hash: args.proof.feedbackHash,
+        block_number: args.proof.blockNumber,
+        log_index: args.proof.logIndex,
+        tag1: args.proof.tag1,
+        tag2: args.proof.tag2,
+        feedback_uri: args.proof.feedbackUri,
+      },
+    });
+  }
+
+  async #transition(
+    jobId: string,
+    action: "prepared" | "submitted-unknown" | "confirmed",
+    body: unknown,
+  ): Promise<ReputationPublishJob> {
+    const response = await this.#fetch(
+      `${this.#baseUrl}/internal/evidence/reputation-outbox/${encodeURIComponent(jobId)}/${action}`,
+      {
+        method: "POST",
+        headers: {
+          authorization: this.#authorization,
+          "content-type": "application/json",
+        },
+        body: JSON.stringify(body),
+      },
+    );
+    return decodeJob(await this.#decode(response));
+  }
+
+  /** A 409 is a durable-state refusal, never a transport failure worth retrying. */
+  async #decode(response: Response): Promise<ReputationJobJson> {
+    if (response.status === 409) {
+      const detail = await response.text();
+      throw new ReputationOutboxConflictError(detail.slice(0, 300));
+    }
+    return decodeJson<ReputationJobJson>(response);
   }
 }

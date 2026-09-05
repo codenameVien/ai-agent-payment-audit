@@ -1,4 +1,18 @@
-import { parseAbi, type Address, type Hex } from "viem";
+import { createHash } from "node:crypto";
+
+import { keccak256, parseAbi, stringToHex, type Address, type Hex } from "viem";
+
+import {
+  BASE_SEPOLIA_CHAIN_ID,
+  FEEDBACK_TAG1,
+  FEEDBACK_TAG2,
+  type ConfirmedFeedbackProof,
+  type FeedbackQueryResult,
+  type RawFeedbackEvent,
+  type ReputationOutboxApi,
+  type ReputationPublishJob,
+  type TransactionRef,
+} from "./contracts.js";
 
 export interface AgentIdentity {
   agentId: bigint;
@@ -12,24 +26,18 @@ export interface ReputationSummary {
   valueDecimals: number;
 }
 
-export interface ReputationEvidenceApi {
-  prepare(purchaseId: string, agentId: bigint): Promise<{
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash?: Hex;
-  }>;
-  record(args: {
-    purchaseId: string;
-    agentId: bigint;
-    objectiveValue: 0 | 100;
-    feedbackHash: Hex;
-    transactionHash: Hex;
-    chainId: number;
-    registryAddress: Address;
-  }): Promise<void>;
+/** Where a `NewFeedback` event actually lives. A bare hash loses the coordinates. */
+export interface FeedbackSubmissionRef {
+  transactionHash: Hex;
+  blockNumber: number;
+  logIndex: number;
 }
 
+/**
+ * Turns a transaction reference into a proof, or into nothing. It returns `null`
+ * whenever the receipt or the decoded `NewFeedback` event does not exist, so a
+ * transaction-shaped string alone can never be read as a publication.
+ */
 export interface ReputationReceiptConfirmer {
   confirm(args: {
     transactionHash: Hex;
@@ -37,7 +45,8 @@ export interface ReputationReceiptConfirmer {
     agentId: bigint;
     objectiveValue: 0 | 100;
     feedbackHash: Hex;
-  }): Promise<boolean>;
+    evidenceSource: "BASE_SEPOLIA_VERIFIED" | "HISTORICAL_ON_CHAIN";
+  }): Promise<ConfirmedFeedbackProof | null>;
 }
 
 export interface Erc8004Contracts {
@@ -66,13 +75,29 @@ export interface Erc8004Contracts {
     tag1: string;
     tag2: string;
     feedbackHash: Hex;
-  }): Promise<Hex | null>;
+  }): Promise<FeedbackSubmissionRef | null>;
+  queryFeedback(args: {
+    agentId: bigint;
+    trustedClients: readonly Address[];
+    tag1: string;
+    tag2: string;
+    fromBlock: bigint;
+    toBlock: bigint;
+  }): Promise<RawFeedbackEvent[]>;
 }
 
 export class Erc8004PolicyError extends Error {
   constructor(message: string) {
     super(message);
     this.name = "Erc8004PolicyError";
+  }
+}
+
+/** A durable-state rejection: the lease moved on, or the fingerprint changed. Never retried. */
+export class ReputationOutboxConflictError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "ReputationOutboxConflictError";
   }
 }
 
@@ -96,8 +121,8 @@ export class Erc8004Service {
   summary(
     agentId: bigint,
     trustedClients: readonly Address[],
-    tag1 = "pbl-audit",
-    tag2 = "payment-outcome",
+    tag1 = FEEDBACK_TAG1,
+    tag2 = FEEDBACK_TAG2,
   ): Promise<ReputationSummary> {
     if (trustedClients.length === 0) {
       throw new Erc8004PolicyError("trusted client list must not be empty");
@@ -124,8 +149,8 @@ export class Erc8004Service {
       agentId: args.agentId,
       value: args.verifiedSuccess ? 100n : 0n,
       valueDecimals: 0,
-      tag1: "pbl-audit",
-      tag2: "payment-outcome",
+      tag1: FEEDBACK_TAG1,
+      tag2: FEEDBACK_TAG2,
       endpoint: args.endpoint ?? "",
       feedbackUri: args.feedbackUri ?? "",
       feedbackHash: args.feedbackHash,
@@ -136,102 +161,288 @@ export class Erc8004Service {
     agentId: bigint;
     objectiveValue: 0 | 100;
     feedbackHash: Hex;
-  }): Promise<Hex | null> {
+  }): Promise<FeedbackSubmissionRef | null> {
     return this.#contracts.findFeedback({
       agentId: args.agentId,
       clientAddress: this.#clientAddress,
       value: BigInt(args.objectiveValue),
       valueDecimals: 0,
-      tag1: "pbl-audit",
-      tag2: "payment-outcome",
+      tag1: FEEDBACK_TAG1,
+      tag2: FEEDBACK_TAG2,
       feedbackHash: args.feedbackHash,
     });
   }
+
+  /** Read-only aggregation input. It never writes, so it is safe in any write mode. */
+  async queryObjectiveFeedback(args: {
+    chainId: number;
+    registryAddress: Address;
+    erc8004AgentId: string;
+    trustedClients: readonly Address[];
+    fromBlock: number;
+    toBlock: number;
+  }): Promise<FeedbackQueryResult> {
+    if (args.trustedClients.length === 0) {
+      throw new Erc8004PolicyError("trusted client list must not be empty");
+    }
+    if (
+      !Number.isSafeInteger(args.fromBlock) ||
+      !Number.isSafeInteger(args.toBlock) ||
+      args.fromBlock < 0 ||
+      args.toBlock < args.fromBlock
+    ) {
+      throw new Erc8004PolicyError("feedback query block range is invalid");
+    }
+    const agentId = BigInt(args.erc8004AgentId);
+    const events = await this.#contracts.queryFeedback({
+      agentId,
+      trustedClients: args.trustedClients,
+      tag1: FEEDBACK_TAG1,
+      tag2: FEEDBACK_TAG2,
+      fromBlock: BigInt(args.fromBlock),
+      toBlock: BigInt(args.toBlock),
+    });
+    return {
+      scope: {
+        chainId: args.chainId,
+        registryAddress: args.registryAddress,
+        erc8004AgentId: agentId.toString(),
+        trustedClients: args.trustedClients,
+        tag1: FEEDBACK_TAG1,
+        tag2: FEEDBACK_TAG2,
+        fromBlock: args.fromBlock,
+        toBlock: args.toBlock,
+      },
+      queriedAt: new Date().toISOString(),
+      events,
+    };
+  }
 }
 
+const DEFAULT_LEASE_SECONDS = 60;
+
+/**
+ * There is deliberately no pre-broadcast transaction reference. Inventing a
+ * `SYNTHETIC_LOCAL` identifier for a live submission would fabricate provenance, so
+ * `PREPARED` records only the immutable feedback-hash commitment and the reference is
+ * bound exactly once, when the submission actually exists.
+ */
+
+function objectiveValueOf(value: number | null): 0 | 100 {
+  if (value === 100) return 100;
+  if (value === 0) return 0;
+  throw new Erc8004PolicyError("objective feedback value must be exactly 100 or 0");
+}
+
+/**
+ * Drives one durable outbox job to a terminal state. It holds no publication state of
+ * its own: the lease, the attempt count and the recorded transaction all live in the
+ * Evidence API, so a crash between broadcast and confirmation is recoverable and a
+ * second process can never produce a second write.
+ */
 export class Erc8004ReputationPublisher {
   readonly #service: Erc8004Service;
-  readonly #evidence: ReputationEvidenceApi;
+  readonly #outbox: ReputationOutboxApi;
   readonly #receipts: ReputationReceiptConfirmer;
   readonly #chainId: number;
   readonly #registryAddress: Address;
-  readonly #publishing = new Map<string, Promise<Hex>>();
+  readonly #workerId: string;
+  readonly #leaseSeconds: number;
+  readonly #writeMode: "disabled" | "live";
 
   constructor(args: {
     service: Erc8004Service;
-    evidence: ReputationEvidenceApi;
+    outbox: ReputationOutboxApi;
     receipts: ReputationReceiptConfirmer;
     chainId: number;
     registryAddress: Address;
+    workerId: string;
+    leaseSeconds?: number;
+    writeMode?: "disabled" | "live";
   }) {
     this.#service = args.service;
-    this.#evidence = args.evidence;
+    this.#outbox = args.outbox;
     this.#receipts = args.receipts;
     this.#chainId = args.chainId;
     this.#registryAddress = args.registryAddress;
+    this.#workerId = args.workerId;
+    this.#leaseSeconds = args.leaseSeconds ?? DEFAULT_LEASE_SECONDS;
+    this.#writeMode = args.writeMode ?? "disabled";
   }
 
-  async publish(args: {
-    purchaseId: string;
-    agentId: bigint;
-    endpoint?: string;
-    feedbackUri?: string;
-  }): Promise<Hex> {
-    const key = `${args.purchaseId}:${args.agentId}`;
-    const existing = this.#publishing.get(key);
-    if (existing !== undefined) return existing;
-    const promise = this.#publishOnce(args);
-    this.#publishing.set(key, promise);
+  async publishClaimed(): Promise<ReputationPublishJob | null> {
+    const job = await this.#outbox.claim({
+      workerId: this.#workerId,
+      leaseSeconds: this.#leaseSeconds,
+    });
+    if (job === null) return null;
+    return this.drive(job);
+  }
+
+  async publishJob(jobId: string): Promise<ReputationPublishJob | null> {
+    const job = await this.#outbox.get(jobId);
+    if (job === null) return null;
+    return this.drive(job);
+  }
+
+  async drive(job: ReputationPublishJob): Promise<ReputationPublishJob> {
+    if (job.status === "CONFIRMED" || job.status === "DEFERRED" || job.status === "CONFLICT") {
+      return job;
+    }
+    if (job.decision.decision === "DEFER") return job;
+    if (
+      job.identity.chainId !== this.#chainId ||
+      job.identity.registryAddress.toLowerCase() !== this.#registryAddress.toLowerCase()
+    ) {
+      throw new Erc8004PolicyError("reputation job targets a different registry");
+    }
+    if (job.identity.tag1 !== FEEDBACK_TAG1 || job.identity.tag2 !== FEEDBACK_TAG2) {
+      throw new Erc8004PolicyError("reputation job carries unknown feedback tags");
+    }
+    const agentId = BigInt(job.decision.erc8004AgentId);
+    const objectiveValue = objectiveValueOf(job.decision.value);
+    const feedbackHash = job.feedbackHash ?? keccak256(stringToHex(job.payloadFingerprint));
+
+    // Find before submit, from every non-terminal state: an already published effect is
+    // recovered instead of duplicated.
+    const found = await this.#service.findObjectiveFeedback({
+      agentId,
+      objectiveValue,
+      feedbackHash,
+    });
+    if (found !== null) {
+      const proof = await this.#receipts.confirm({
+        transactionHash: found.transactionHash,
+        registryAddress: this.#registryAddress,
+        agentId,
+        objectiveValue,
+        feedbackHash,
+        evidenceSource: "HISTORICAL_ON_CHAIN",
+      });
+      if (proof === null) {
+        throw new Erc8004PolicyError("recovered reputation feedback has no confirmed receipt");
+      }
+      return this.#confirm(job, proof, { agentId, objectiveValue, feedbackHash });
+    }
+
+    if (this.#writeMode !== "live") {
+      throw new Erc8004PolicyError("reputation writer is disabled");
+    }
+
+    const recorded = job.transactionRef;
+    if (recorded !== null && recorded !== undefined) {
+      // A submission identity is already bound. Resolving it can never mean building a
+      // second transaction, so `giveFeedback` is unreachable from here.
+      if (recorded.kind === "EVM") {
+        const proof = await this.#receipts.confirm({
+          transactionHash: recorded.hash,
+          registryAddress: this.#registryAddress,
+          agentId,
+          objectiveValue,
+          feedbackHash,
+          evidenceSource: recorded.evidenceSource,
+        });
+        if (proof !== null) {
+          return this.#confirm(job, proof, { agentId, objectiveValue, feedbackHash });
+        }
+      }
+      return this.#submittedUnknown(
+        job,
+        recorded,
+        "recorded reputation transaction is not confirmable yet",
+      );
+    }
+
+    // PENDING, LEASED, or PREPARED with no bound submission: the intent was recorded but
+    // the broadcast never happened, and the find-before-submit step above found nothing.
+    // Persist the commitment first so a crash after the broadcast stays discoverable.
+    const prepared = await this.#guard(() =>
+      this.#outbox.markPrepared({
+        jobId: job.jobId,
+        workerId: this.#workerId,
+        payloadFingerprint: job.payloadFingerprint,
+        feedbackHash,
+      }),
+    );
+    const transactionHash = await this.#service.submitObjectiveFeedback({
+      agentId,
+      verifiedSuccess: objectiveValue === 100,
+      feedbackUri: job.decision.auditBundleHash,
+      feedbackHash,
+    });
+    const proof = await this.#receipts.confirm({
+      transactionHash,
+      registryAddress: this.#registryAddress,
+      agentId,
+      objectiveValue,
+      feedbackHash,
+      evidenceSource: "BASE_SEPOLIA_VERIFIED",
+    });
+    if (proof === null) {
+      return this.#submittedUnknown(
+        prepared,
+        {
+          kind: "EVM",
+          hash: transactionHash,
+          chainId: BASE_SEPOLIA_CHAIN_ID,
+          evidenceSource: "BASE_SEPOLIA_VERIFIED",
+        },
+        "reputation transaction was broadcast without a confirmed NewFeedback event",
+      );
+    }
+    return this.#confirm(prepared, proof, { agentId, objectiveValue, feedbackHash });
+  }
+
+  #confirm(
+    job: ReputationPublishJob,
+    proof: ConfirmedFeedbackProof,
+    expected: { agentId: bigint; objectiveValue: 0 | 100; feedbackHash: Hex },
+  ): Promise<ReputationPublishJob> {
+    if (
+      BigInt(proof.erc8004AgentId) !== expected.agentId ||
+      proof.value !== expected.objectiveValue ||
+      proof.feedbackHash.toLowerCase() !== expected.feedbackHash.toLowerCase() ||
+      proof.tag1 !== FEEDBACK_TAG1 ||
+      proof.tag2 !== FEEDBACK_TAG2
+    ) {
+      throw new Erc8004PolicyError("confirmed feedback proof does not match the outbox job");
+    }
+    return this.#guard(() =>
+      this.#outbox.markConfirmed({
+        jobId: job.jobId,
+        workerId: this.#workerId,
+        payloadFingerprint: job.payloadFingerprint,
+        proof,
+      }),
+    );
+  }
+
+  #submittedUnknown(
+    job: ReputationPublishJob,
+    transactionRef: TransactionRef,
+    reason: string,
+  ): Promise<ReputationPublishJob> {
+    return this.#guard(() =>
+      this.#outbox.markSubmittedUnknown({
+        jobId: job.jobId,
+        workerId: this.#workerId,
+        payloadFingerprint: job.payloadFingerprint,
+        transactionRef,
+        reason,
+      }),
+    );
+  }
+
+  /** A durable-state conflict is terminal for this attempt: never retried with a new write. */
+  async #guard<T>(operation: () => Promise<T>): Promise<T> {
     try {
-      return await promise;
+      return await operation();
     } catch (error) {
-      this.#publishing.delete(key);
+      if (error instanceof ReputationOutboxConflictError) {
+        throw new Erc8004PolicyError(`reputation outbox conflict: ${error.message}`);
+      }
       throw error;
     }
-  }
-
-  async #publishOnce(args: {
-    purchaseId: string;
-    agentId: bigint;
-    endpoint?: string;
-    feedbackUri?: string;
-  }): Promise<Hex> {
-    const intent = await this.#evidence.prepare(args.purchaseId, args.agentId);
-    if (intent.agentId !== args.agentId) {
-      throw new Erc8004PolicyError("reputation intent agent mismatch");
-    }
-    if (intent.transactionHash !== undefined) return intent.transactionHash;
-    const recovered = await this.#service.findObjectiveFeedback({
-      agentId: args.agentId,
-      objectiveValue: intent.objectiveValue,
-      feedbackHash: intent.feedbackHash,
-    });
-    const transactionHash = recovered ?? await this.#service.submitObjectiveFeedback({
-      agentId: args.agentId,
-      verifiedSuccess: intent.objectiveValue === 100,
-      endpoint: args.endpoint,
-      feedbackUri: args.feedbackUri,
-      feedbackHash: intent.feedbackHash,
-    });
-    if (!(await this.#receipts.confirm({
-      transactionHash,
-      registryAddress: this.#registryAddress,
-      agentId: args.agentId,
-      objectiveValue: intent.objectiveValue,
-      feedbackHash: intent.feedbackHash,
-    }))) {
-      throw new Erc8004PolicyError("reputation transaction was not confirmed");
-    }
-    await this.#evidence.record({
-      purchaseId: args.purchaseId,
-      agentId: args.agentId,
-      objectiveValue: intent.objectiveValue,
-      feedbackHash: intent.feedbackHash,
-      transactionHash,
-      chainId: this.#chainId,
-      registryAddress: this.#registryAddress,
-    });
-    return transactionHash;
   }
 }
 

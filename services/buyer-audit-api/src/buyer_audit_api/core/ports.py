@@ -10,6 +10,7 @@ from buyer_audit_api.core.models import (
     EvidenceHead,
     JsonObject,
     SensitivePayload,
+    TransactionRef,
     VerifiedIdentity,
     WalletBinding,
 )
@@ -24,6 +25,14 @@ if TYPE_CHECKING:  # avoid a runtime cycle with the payment and projection cores
         ReconciliationCheck,
     )
     from buyer_audit_api.core.projections import PurchaseProjection
+    from buyer_audit_api.core.reputation import (
+        ConfirmedFeedbackProof,
+        OutboxStatus,
+        PublishIdentity,
+        ReputationDecision,
+        ReputationPublishJob,
+        ReputationSnapshot,
+    )
 
 
 class EvidenceReadPort(Protocol):
@@ -64,6 +73,109 @@ class TerminalPaymentPort(Protocol):
     async def list_confirmed_outflows(
         self, purchase_id: str
     ) -> list[ConfirmedOutflow]: ...
+
+
+class ReputationOutboxPort(Protocol):
+    """Durable publish-job state. `P6-AC-05.3`: one identity, at most one effect.
+
+    Every transition is a compare-and-set against the persisted status, lease owner and
+    immutable payload fingerprint, so a restart or a second worker cannot double-publish.
+    """
+
+    async def get_job(self, job_id: str) -> ReputationPublishJob | None: ...
+
+    async def get_by_identity(
+        self, identity_hash: str
+    ) -> ReputationPublishJob | None: ...
+
+    async def claim_job(
+        self, *, worker_id: str, lease_until: datetime, now: datetime
+    ) -> ReputationPublishJob | None: ...
+
+    async def mark_prepared(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef | None,
+        feedback_hash: str,
+        now: datetime,
+    ) -> ReputationPublishJob: ...
+
+    async def mark_submitted_unknown(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef,
+        reason: str,
+        now: datetime,
+    ) -> ReputationPublishJob: ...
+
+    async def mark_confirmed(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        proof: ConfirmedFeedbackProof,
+        now: datetime,
+    ) -> ReputationPublishJob: ...
+
+    async def record_conflict(
+        self,
+        *,
+        identity_hash: str,
+        requested_fingerprint: str,
+        reason_code: str,
+        now: datetime,
+    ) -> ReputationPublishJob: ...
+
+    async def list_recoverable_jobs(
+        self, *, now: datetime
+    ) -> list[ReputationPublishJob]: ...
+
+
+class ReputationSnapshotPort(Protocol):
+    """Immutable ERC-8004 query provenance (`P6-AC-06.1`); snapshots are never rewritten."""
+
+    async def put_snapshot(self, snapshot: ReputationSnapshot) -> ReputationSnapshot: ...
+
+    async def get_snapshot(self, snapshot_id: str) -> ReputationSnapshot | None: ...
+
+    async def latest_snapshot(
+        self, seller_agent_id: str
+    ) -> ReputationSnapshot | None: ...
+
+
+class TerminalOrchestrationPort(Protocol):
+    """One atomic unit: verified read, `AUDITED`, `REPUTATION_DECIDED` and the outbox job."""
+
+    async def list_events(self, purchase_id: str) -> list[EvidenceEvent]: ...
+
+    async def get_event_head(self, purchase_id: str) -> EvidenceHead | None: ...
+
+    async def get_payment_intent(self, purchase_id: str) -> PaymentIntent | None: ...
+
+    async def finalize_atomic(
+        self,
+        *,
+        purchase_id: str,
+        audit_payload: JsonObject | None,
+        audit_evidence_refs: tuple[str, ...],
+        decision_payload: JsonObject,
+        decision_evidence_refs: tuple[str, ...],
+        occurred_at: datetime,
+        expected_event_count: int,
+        expected_head_event_hash: str,
+        identity: PublishIdentity,
+        identity_hash: str,
+        payload_fingerprint: str,
+        decision: ReputationDecision,
+        status: OutboxStatus,
+    ) -> tuple[EvidenceEvent | None, EvidenceEvent, ReputationPublishJob]: ...
 
 
 class Clock(Protocol):

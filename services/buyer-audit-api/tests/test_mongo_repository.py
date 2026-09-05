@@ -7,7 +7,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pymongo import AsyncMongoClient
@@ -17,12 +17,15 @@ from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.mongo import (
     _PHASE6_SINGLETON_INDEXES,
     MongoEvidenceRepository,
+    _outbox_document,
 )
+from buyer_audit_api.core.audit import RULESET_VERSION
 from buyer_audit_api.core.errors import EvidenceIntegrityError, PaymentConflictError
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.models import (
     EventType,
     EvidenceSource,
+    EvmTransactionRef,
     LocalTransactionRef,
     ScenarioMetadata,
 )
@@ -35,6 +38,18 @@ from buyer_audit_api.core.payment import (
     ReconciliationCheck,
     ReconciliationVerifierOutcome,
     WalletPolicy,
+)
+from buyer_audit_api.core.reputation import (
+    ConfirmedFeedbackProof,
+    DecisionKind,
+    OutboxStatus,
+    PublishIdentity,
+    RawFeedbackEvent,
+    ReputationAggregationPolicy,
+    ReputationDecision,
+    ReputationPublishJob,
+    ReputationQueryScope,
+    ReputationReason,
 )
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
@@ -1217,6 +1232,11 @@ PHASE6_NEW_UNIQUE_INDEXES = (
     "unique_confirmed_outflow_terminal",
     "unique_confirmed_outflow_transaction",
     "unique_confirmed_outflow_transaction_local",
+    "unique_reputation_decision_per_purchase",
+    "unique_reputation_publish_identity",
+    "unique_reputation_evm_transaction",
+    "unique_reputation_local_transaction",
+    "unique_reputation_snapshot_query",
 )
 
 
@@ -1271,6 +1291,8 @@ async def test_preflight_precedes_every_new_phase6_unique_index() -> None:
         ("_payment_intents", "paymentIntents"),
         ("_seller_executions", "sellerExecutions"),
         ("_confirmed_outflows", "confirmedOutflows"),
+        ("_reputation_outbox", "reputationOutbox"),
+        ("_reputation_snapshots", "reputationSnapshots"),
     ):
         setattr(repository, attribute, RecordingCollection(label))
 
@@ -1309,3 +1331,261 @@ def test_collision_report_covers_every_new_phase6_unique_index() -> None:
 
     assert set(PHASE6_NEW_UNIQUE_INDEXES) <= created
     assert set(PHASE6_NEW_UNIQUE_INDEXES) <= covered
+
+
+REPUTATION_REGISTRY = "0x8004b663056a597dffe9eccc1965a193b7388713"
+REPUTATION_CLIENT = "0x0000000000000000000000000000000000000009"
+REPUTATION_FEEDBACK_TX = "0x" + "cd" * 32
+
+
+def reputation_identity(purchase_id: str) -> PublishIdentity:
+    return PublishIdentity(
+        chain_id=84532,
+        registry_address=REPUTATION_REGISTRY,
+        purchase_id=purchase_id,
+        seller_agent_id="gemini-agent",
+    )
+
+
+def reputation_decision(*, value: int = 100) -> ReputationDecision:
+    return ReputationDecision(
+        kind=DecisionKind.PUBLISH,
+        value=value,
+        reason_codes=(ReputationReason.SELLER_DELIVERED_AS_QUOTED,),
+        audit_bundle_hash="sha256:" + "44" * 32,
+        ruleset_version=RULESET_VERSION,
+        seller_agent_id="gemini-agent",
+        erc8004_agent_id="1",
+    )
+
+
+def reputation_proof(**overrides: object) -> ConfirmedFeedbackProof:
+    fields: dict[str, object] = {
+        "transaction_ref": EvmTransactionRef(
+            hash=REPUTATION_FEEDBACK_TX, block_number=99, log_index=2
+        ),
+        "receipt_proof_ref": "sha256:" + "88" * 32,
+        "client_address": REPUTATION_CLIENT,
+        "erc8004_agent_id": "1",
+        "value": 100,
+        "value_decimals": 0,
+        "feedback_hash": "0x" + "ee" * 32,
+        "block_number": 99,
+        "log_index": 2,
+    }
+    fields.update(overrides)
+    return ConfirmedFeedbackProof(**fields)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_reputation_outbox_is_exactly_once_under_races(
+    mongo_uri, clock
+) -> None:
+    """P6-AC-05.3/P6-AC-05.7 against a real replica set, not an in-process lock."""
+    database = f"pbl_phase6_reputation_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    purchase_id = "purchase-reputation-native"
+    other_purchase = "purchase-reputation-native-2"
+    try:
+        await repository.ensure_indexes()
+        now = clock.now()
+        identity = reputation_identity(purchase_id)
+        decision = reputation_decision()
+        fingerprint = decision.payload_fingerprint(identity)
+        job = ReputationPublishJob(
+            job_id="repjob:native-1",
+            identity=identity,
+            identity_hash=identity.identity_hash,
+            payload_fingerprint=fingerprint,
+            decision=decision,
+            status=OutboxStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        await cleanup[database]["reputationOutbox"].insert_one(_outbox_document(job))
+
+        # Ten concurrent workers, one lease.
+        lease_until = now + timedelta(seconds=30)
+        claims = await asyncio.gather(
+            *(
+                repository.claim_job(
+                    worker_id=f"worker-{index}", lease_until=lease_until, now=now
+                )
+                for index in range(10)
+            )
+        )
+        winners = [item for item in claims if item is not None]
+        assert len(winners) == 1
+        winner = winners[0]
+        assert winner.status is OutboxStatus.LEASED
+        assert winner.attempt_count == 1
+
+        # A worker without the lease cannot move the job.
+        with pytest.raises(PaymentConflictError, match="lease is not held"):
+            await repository.mark_prepared(
+                job_id=job.job_id,
+                worker_id="worker-impostor",
+                payload_fingerprint=fingerprint,
+                transaction_ref=None,
+                feedback_hash="0x" + "ee" * 32,
+                now=now,
+            )
+
+        prepared = await repository.mark_prepared(
+            job_id=job.job_id,
+            worker_id=winner.worker_id or "",
+            payload_fingerprint=fingerprint,
+            transaction_ref=None,
+            feedback_hash="0x" + "ee" * 32,
+            now=now,
+        )
+        assert prepared.status is OutboxStatus.PREPARED
+        assert prepared.transaction_ref is None
+        assert prepared.feedback_hash == "0x" + "ee" * 32
+
+        # Concurrent confirmations of the same proof settle on exactly one record.
+        confirmations = await asyncio.gather(
+            *(
+                repository.mark_confirmed(
+                    job_id=job.job_id,
+                    worker_id=winner.worker_id or "",
+                    payload_fingerprint=fingerprint,
+                    proof=reputation_proof(),
+                    now=now,
+                )
+                for _ in range(4)
+            ),
+            return_exceptions=True,
+        )
+        settled = [
+            item for item in confirmations if not isinstance(item, BaseException)
+        ]
+        assert settled, "at least one confirmation must commit"
+        assert all(item.status is OutboxStatus.CONFIRMED for item in settled)
+        stored = await repository.get_job(job.job_id)
+        assert stored is not None
+        assert stored.status is OutboxStatus.CONFIRMED
+        assert stored.receipt_proof_ref == "sha256:" + "88" * 32
+        assert stored.block_number == 99
+        assert stored.log_index == 2
+        assert await repository.claim_job(
+            worker_id="worker-late", lease_until=lease_until, now=now
+        ) is None
+
+        # One feedback transaction cannot back a second purchase's job.
+        other_identity = reputation_identity(other_purchase)
+        other_decision = reputation_decision()
+        other_fingerprint = other_decision.payload_fingerprint(other_identity)
+        other_job = ReputationPublishJob(
+            job_id="repjob:native-2",
+            identity=other_identity,
+            identity_hash=other_identity.identity_hash,
+            payload_fingerprint=other_fingerprint,
+            decision=other_decision,
+            status=OutboxStatus.PENDING,
+            created_at=now,
+            updated_at=now,
+        )
+        await cleanup[database]["reputationOutbox"].insert_one(
+            _outbox_document(other_job)
+        )
+        second = await repository.claim_job(
+            worker_id="worker-second", lease_until=lease_until, now=now
+        )
+        assert second is not None
+        assert second.job_id == other_job.job_id
+        with pytest.raises(
+            PaymentConflictError, match="transaction reference is already recorded"
+        ):
+            await repository.mark_prepared(
+                job_id=other_job.job_id,
+                worker_id="worker-second",
+                payload_fingerprint=other_fingerprint,
+                transaction_ref=EvmTransactionRef(hash=REPUTATION_FEEDBACK_TX),
+                feedback_hash="0x" + "ee" * 32,
+                now=now,
+            )
+
+        # The same publish identity can never be inserted twice.
+        with pytest.raises(DuplicateKeyError):
+            await cleanup[database]["reputationOutbox"].insert_one(
+                {**_outbox_document(job), "jobId": "repjob:native-duplicate"}
+            )
+
+        indexes = await cleanup[database]["reputationOutbox"].index_information()
+        assert indexes["unique_reputation_publish_identity"]["unique"] is True
+        assert indexes["unique_reputation_evm_transaction"]["unique"] is True
+        assert indexes["unique_reputation_local_transaction"]["unique"] is True
+        assert "reputation_publish_lease" in indexes
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()
+
+
+@pytest.mark.asyncio
+async def test_real_mongo_reputation_snapshots_are_immutable(mongo_uri, clock) -> None:
+    database = f"pbl_phase6_snapshot_test_{uuid.uuid4().hex}"
+    repository = MongoEvidenceRepository(uri=mongo_uri, database=database)
+    cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
+    try:
+        await repository.ensure_indexes()
+        scope = ReputationQueryScope(
+            chain_id=84532,
+            registry_address=REPUTATION_REGISTRY,
+            erc8004_agent_id="1",
+            trusted_clients=(REPUTATION_CLIENT,),
+            from_block=1,
+            to_block=100,
+        )
+        policy = ReputationAggregationPolicy()
+        snapshot = policy.aggregate(
+            snapshot_id="snap-native-1",
+            seller_agent_id="gemini-agent",
+            scope=scope,
+            queried_at=clock.now(),
+            events=(
+                RawFeedbackEvent(
+                    value=100,
+                    value_decimals=0,
+                    client_address=REPUTATION_CLIENT,
+                    block_number=50,
+                    log_index=1,
+                    transaction_ref=EvmTransactionRef(
+                        hash=REPUTATION_FEEDBACK_TX, block_number=50, log_index=1
+                    ),
+                ),
+            ),
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+            now=clock.now(),
+        )
+
+        stored = await repository.put_snapshot(snapshot)
+        assert stored.snapshot_hash == snapshot.snapshot_hash
+        reloaded = await repository.get_snapshot("snap-native-1")
+        assert reloaded is not None
+        assert reloaded.snapshot_hash == snapshot.snapshot_hash
+        assert reloaded.derived_score == 100.0
+        assert reloaded.raw_values[0].block_number == 50
+        assert (await repository.latest_snapshot("gemini-agent")) is not None
+
+        # Re-storing the same answer is a no-op; a different answer for the same query
+        # at the same block is a conflict rather than a silent overwrite.
+        assert (
+            await repository.put_snapshot(snapshot)
+        ).snapshot_hash == snapshot.snapshot_hash
+        different = policy.aggregate(
+            snapshot_id="snap-native-2",
+            seller_agent_id="gemini-agent",
+            scope=scope,
+            queried_at=clock.now(),
+            events=(),
+            evidence_source=EvidenceSource.BASE_SEPOLIA_VERIFIED,
+        )
+        with pytest.raises(PaymentConflictError, match="already answers this query"):
+            await repository.put_snapshot(different)
+    finally:
+        await repository.close()
+        await cleanup.drop_database(database)
+        await cleanup.close()

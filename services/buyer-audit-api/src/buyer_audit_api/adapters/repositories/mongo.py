@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import replace
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal, cast
 
 from pymongo import ASCENDING, DESCENDING, AsyncMongoClient, ReturnDocument
@@ -15,6 +15,7 @@ from buyer_audit_api.core.errors import (
     EvidenceIntegrityError,
     EvidenceTransitionError,
     PaymentConflictError,
+    PaymentEvidenceError,
     PaymentPolicyError,
 )
 from buyer_audit_api.core.events import create_event, verify_event_chain
@@ -26,6 +27,7 @@ from buyer_audit_api.core.models import (
     EvidenceSource,
     JsonObject,
     SensitivePayload,
+    TransactionRef,
     WalletBinding,
     transaction_ref_from_payload,
 )
@@ -38,6 +40,21 @@ from buyer_audit_api.core.payment import (
     ReservationAction,
     WalletPolicy,
 )
+from buyer_audit_api.core.reputation import (
+    ConfirmedFeedbackProof,
+    DecisionKind,
+    FreshnessStatus,
+    OutboxStatus,
+    PublishIdentity,
+    RawFeedbackEvent,
+    ReputationDecision,
+    ReputationPublishJob,
+    ReputationQueryScope,
+    ReputationReason,
+    ReputationSnapshot,
+    assert_proof_matches_job,
+    submission_identity,
+)
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 # M2: the per-purchase singleton unique indexes this packet introduces. One declaration
@@ -48,6 +65,7 @@ _PHASE6_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
         EventType.PAYMENT_RECONCILED_NO_TRANSFER,
         "unique_payment_no_transfer_per_purchase",
     ),
+    (EventType.REPUTATION_DECIDED, "unique_reputation_decision_per_purchase"),
 )
 
 # Singleton indexes that already existed before this packet; unchanged behaviour.
@@ -301,6 +319,13 @@ def _confirmed_outflow_document(outflow: ConfirmedOutflow) -> dict[str, Any]:
     }
 
 
+def _stored_datetime(value: object) -> datetime:
+    """BSON round-trips datetimes; anything else in a stored field is malformed."""
+    if isinstance(value, datetime):
+        return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+    raise EvidenceIntegrityError("stored timestamp is malformed")
+
+
 def _confirmed_outflow_from_document(document: dict[str, Any]) -> ConfirmedOutflow:
     return ConfirmedOutflow(
         terminal_outcome_key=str(document["terminalOutcomeKey"]),
@@ -312,6 +337,134 @@ def _confirmed_outflow_from_document(document: dict[str, Any]) -> ConfirmedOutfl
         recipient=str(document["recipient"]),
         transaction_ref=transaction_ref_from_payload(document["transactionRef"]),
         proof_ref=str(document["proofRef"]),
+    )
+
+
+_CLAIMABLE_STATUSES: tuple[OutboxStatus, ...] = (
+    OutboxStatus.PENDING,
+    OutboxStatus.LEASED,
+    OutboxStatus.PREPARED,
+    OutboxStatus.SUBMITTED_UNKNOWN,
+)
+
+
+def _outbox_document(job: ReputationPublishJob) -> dict[str, Any]:
+    return {
+        "attemptCount": job.attempt_count,
+        "blockNumber": job.block_number,
+        "chainId": job.identity.chain_id,
+        "createdAt": job.created_at,
+        "decision": job.decision.to_payload(),
+        "evidenceSource": (
+            None if job.evidence_source is None else job.evidence_source.value
+        ),
+        "feedbackHash": job.feedback_hash,
+        "jobId": job.job_id,
+        "leaseExpiresAt": job.lease_expires_at,
+        "logIndex": job.log_index,
+        "payloadFingerprint": job.payload_fingerprint,
+        "publishIdentity": job.identity.to_payload(),
+        "publishIdentityHash": job.identity_hash,
+        "purchaseId": job.identity.purchase_id,
+        "receiptProofRef": job.receipt_proof_ref,
+        "registryAddress": job.identity.registry_address,
+        "sellerAgentId": job.identity.seller_agent_id,
+        "status": job.status.value,
+        "transactionRef": (
+            None if job.transaction_ref is None else job.transaction_ref.to_payload()
+        ),
+        "updatedAt": job.updated_at,
+        "workerId": job.worker_id,
+    }
+
+
+def _outbox_from_document(document: dict[str, Any]) -> ReputationPublishJob:
+    identity = PublishIdentity.from_payload(document["publishIdentity"])
+    decision_payload = dict(document["decision"])
+    raw_value = decision_payload.get("value")
+    decision = ReputationDecision(
+        kind=DecisionKind(str(decision_payload["decision"])),
+        value=None if raw_value is None else int(raw_value),
+        reason_codes=tuple(
+            ReputationReason(str(item)) for item in decision_payload["reasonCodes"]
+        ),
+        audit_bundle_hash=str(decision_payload["auditBundleHash"]),
+        ruleset_version=str(decision_payload["rulesetVersion"]),
+        seller_agent_id=str(decision_payload["sellerAgentId"]),
+        erc8004_agent_id=str(decision_payload["erc8004AgentId"]),
+    )
+    raw_reference = document.get("transactionRef")
+    raw_source = document.get("evidenceSource")
+    return ReputationPublishJob(
+        job_id=str(document["jobId"]),
+        identity=identity,
+        identity_hash=str(document["publishIdentityHash"]),
+        payload_fingerprint=str(document["payloadFingerprint"]),
+        decision=decision,
+        status=OutboxStatus(str(document["status"])),
+        created_at=_stored_datetime(document["createdAt"]),
+        updated_at=_stored_datetime(document["updatedAt"]),
+        attempt_count=int(document.get("attemptCount", 0)),
+        worker_id=cast(str | None, document.get("workerId")),
+        lease_expires_at=cast(datetime | None, document.get("leaseExpiresAt")),
+        feedback_hash=cast(str | None, document.get("feedbackHash")),
+        transaction_ref=(
+            None if raw_reference is None else transaction_ref_from_payload(raw_reference)
+        ),
+        receipt_proof_ref=cast(str | None, document.get("receiptProofRef")),
+        block_number=cast(int | None, document.get("blockNumber")),
+        log_index=cast(int | None, document.get("logIndex")),
+        evidence_source=(
+            None if raw_source is None else EvidenceSource(str(raw_source))
+        ),
+    )
+
+
+def _snapshot_document(snapshot: ReputationSnapshot) -> dict[str, Any]:
+    payload = snapshot.to_payload()
+    return {
+        **payload,
+        "queriedAt": snapshot.queried_at,
+        "snapshotHash": snapshot.snapshot_hash,
+    }
+
+
+def _snapshot_from_document(document: dict[str, Any]) -> ReputationSnapshot:
+    scope_payload = dict(document["scope"])
+    scope = ReputationQueryScope(
+        chain_id=int(scope_payload["chainId"]),
+        registry_address=str(scope_payload["registryAddress"]),
+        erc8004_agent_id=str(scope_payload["erc8004AgentId"]),
+        trusted_clients=tuple(str(item) for item in scope_payload["trustedClients"]),
+        from_block=int(scope_payload["fromBlock"]),
+        to_block=int(scope_payload["toBlock"]),
+        tag1=str(scope_payload["tag1"]),
+        tag2=str(scope_payload["tag2"]),
+    )
+    freshness = dict(document["freshness"])
+    return ReputationSnapshot(
+        snapshot_id=str(document["snapshotId"]),
+        seller_agent_id=str(document["sellerAgentId"]),
+        scope=scope,
+        queried_at=_stored_datetime(document["queriedAt"]),
+        raw_values=tuple(
+            RawFeedbackEvent(
+                value=int(item["value"]),
+                value_decimals=int(item["valueDecimals"]),
+                client_address=str(item["clientAddress"]),
+                block_number=int(item["blockNumber"]),
+                log_index=int(item["logIndex"]),
+                transaction_ref=transaction_ref_from_payload(item["transactionRef"]),
+                tag1=str(item["tag1"]),
+                tag2=str(item["tag2"]),
+            )
+            for item in document["rawValues"]
+        ),
+        derived_score=float(document["derivedScore"]),
+        freshness_status=FreshnessStatus(str(freshness["status"])),
+        evidence_source=EvidenceSource(str(document["evidenceSource"])),
+        aggregation_method=str(document["aggregationMethod"]),
+        freshness_age_seconds=cast(int | None, freshness.get("ageSeconds")),
     )
 
 
@@ -384,6 +537,8 @@ class MongoEvidenceRepository:
         self._payment_intents = self._database["paymentIntents"]
         self._seller_executions = self._database["sellerExecutions"]
         self._confirmed_outflows = self._database["confirmedOutflows"]
+        self._reputation_outbox = self._database["reputationOutbox"]
+        self._reputation_snapshots = self._database["reputationSnapshots"]
 
     async def phase6_index_collision_report(self) -> list[dict[str, Any]]:
         """Read-only duplicate report covering every unique index this packet introduces.
@@ -443,6 +598,36 @@ class MongoEvidenceRepository:
                     "transactionRef.id": {"$type": "string"},
                 },
                 ["transactionRef.runId", "transactionRef.id"],
+            ),
+            (
+                "unique_reputation_publish_identity",
+                self._reputation_outbox,
+                {"publishIdentityHash": {"$type": "string"}},
+                ["publishIdentityHash"],
+            ),
+            (
+                "unique_reputation_evm_transaction",
+                self._reputation_outbox,
+                {
+                    "transactionRef.kind": "EVM",
+                    "transactionRef.hash": {"$type": "string"},
+                },
+                ["transactionRef.hash"],
+            ),
+            (
+                "unique_reputation_local_transaction",
+                self._reputation_outbox,
+                {
+                    "transactionRef.kind": "LOCAL",
+                    "transactionRef.id": {"$type": "string"},
+                },
+                ["transactionRef.runId", "transactionRef.id"],
+            ),
+            (
+                "unique_reputation_snapshot_query",
+                self._reputation_snapshots,
+                {"queryFingerprint": {"$type": "string"}},
+                ["queryFingerprint", "scope.toBlock"],
             ),
         ]
         specs.extend(
@@ -606,6 +791,52 @@ class MongoEvidenceRepository:
         await self._confirmed_outflows.create_index(
             [("purchaseId", ASCENDING)],
             name="confirmed_outflow_purchase",
+        )
+        await self._reputation_outbox.create_index(
+            [("publishIdentityHash", ASCENDING)],
+            unique=True,
+            name="unique_reputation_publish_identity",
+        )
+        await self._reputation_outbox.create_index(
+            [("jobId", ASCENDING)],
+            unique=True,
+            name="unique_reputation_job_id",
+        )
+        await self._reputation_outbox.create_index(
+            [("transactionRef.hash", ASCENDING)],
+            unique=True,
+            name="unique_reputation_evm_transaction",
+            partialFilterExpression={
+                "transactionRef.kind": "EVM",
+                "transactionRef.hash": {"$type": "string"},
+            },
+        )
+        await self._reputation_outbox.create_index(
+            [("transactionRef.runId", ASCENDING), ("transactionRef.id", ASCENDING)],
+            unique=True,
+            name="unique_reputation_local_transaction",
+            partialFilterExpression={
+                "transactionRef.kind": "LOCAL",
+                "transactionRef.id": {"$type": "string"},
+            },
+        )
+        await self._reputation_outbox.create_index(
+            [("status", ASCENDING), ("leaseExpiresAt", ASCENDING)],
+            name="reputation_publish_lease",
+        )
+        await self._reputation_snapshots.create_index(
+            [("snapshotId", ASCENDING)],
+            unique=True,
+            name="unique_reputation_snapshot",
+        )
+        await self._reputation_snapshots.create_index(
+            [("queryFingerprint", ASCENDING), ("scope.toBlock", ASCENDING)],
+            unique=True,
+            name="unique_reputation_snapshot_query",
+        )
+        await self._reputation_snapshots.create_index(
+            [("sellerAgentId", ASCENDING), ("queriedAt", DESCENDING)],
+            name="reputation_snapshot_agent",
         )
         await self._heads.create_index(
             [("purchaseId", ASCENDING), ("eventCount", ASCENDING)], unique=True
@@ -1366,3 +1597,439 @@ class MongoEvidenceRepository:
     async def get_seller_execution(self, purchase_id: str) -> SellerExecution | None:
         document = await self._seller_executions.find_one({"purchaseId": purchase_id})
         return _seller_execution_from_document(document) if document else None
+
+    # ---- Reputation outbox -------------------------------------------------------
+
+    async def get_job(self, job_id: str) -> ReputationPublishJob | None:
+        document = await self._reputation_outbox.find_one({"jobId": job_id})
+        return None if document is None else _outbox_from_document(document)
+
+    async def get_by_identity(self, identity_hash: str) -> ReputationPublishJob | None:
+        document = await self._reputation_outbox.find_one(
+            {"publishIdentityHash": identity_hash}
+        )
+        return None if document is None else _outbox_from_document(document)
+
+    async def claim_job(
+        self, *, worker_id: str, lease_until: datetime, now: datetime
+    ) -> ReputationPublishJob | None:
+        """Atomic lease acquisition: the CAS is the claim, not an in-process lock."""
+        document = await self._reputation_outbox.find_one_and_update(
+            {
+                "status": {"$in": [item.value for item in _CLAIMABLE_STATUSES]},
+                "$or": [
+                    {"leaseExpiresAt": None},
+                    {"leaseExpiresAt": {"$lte": now}},
+                ],
+            },
+            [
+                {
+                    "$set": {
+                        "status": {
+                            "$cond": [
+                                {"$eq": ["$status", OutboxStatus.PENDING.value]},
+                                OutboxStatus.LEASED.value,
+                                "$status",
+                            ]
+                        },
+                        "workerId": worker_id,
+                        "leaseExpiresAt": lease_until,
+                        "attemptCount": {"$add": ["$attemptCount", 1]},
+                        "updatedAt": now,
+                    }
+                }
+            ],
+            sort=[("createdAt", ASCENDING), ("jobId", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        return None if document is None else _outbox_from_document(document)
+
+    async def _transition_job(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        allowed: frozenset[OutboxStatus],
+        now: datetime,
+        updates: dict[str, Any],
+        transaction_ref: TransactionRef | None,
+    ) -> ReputationPublishJob:
+        """One compare-and-set over status, lease owner and immutable fingerprint."""
+        existing = await self._reputation_outbox.find_one({"jobId": job_id})
+        if existing is None:
+            raise PaymentEvidenceError("reputation job not found")
+        job = _outbox_from_document(existing)
+        if job.payload_fingerprint != payload_fingerprint:
+            raise PaymentConflictError("reputation job has a different payload fingerprint")
+        if job.status not in allowed:
+            raise PaymentConflictError(f"reputation job cannot move from {job.status.value}")
+        if job.worker_id != worker_id or not job.lease_held_at(now):
+            raise PaymentConflictError("reputation job lease is not held by this worker")
+        if transaction_ref is not None and job.transaction_ref is not None:
+            if submission_identity(job.transaction_ref) != submission_identity(
+                transaction_ref
+            ):
+                raise PaymentConflictError(
+                    "reputation job is already bound to another submitted transaction"
+                )
+        try:
+            document = await self._reputation_outbox.find_one_and_update(
+                {
+                    "jobId": job_id,
+                    "status": job.status.value,
+                    "workerId": worker_id,
+                    "payloadFingerprint": payload_fingerprint,
+                },
+                {"$set": {**updates, "updatedAt": now}},
+                return_document=ReturnDocument.AFTER,
+            )
+        except DuplicateKeyError as exc:
+            raise PaymentConflictError(
+                "reputation transaction reference is already recorded"
+            ) from exc
+        if document is None:
+            raise PaymentConflictError("reputation job changed before the transition")
+        return _outbox_from_document(document)
+
+    async def mark_prepared(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef | None,
+        feedback_hash: str,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        existing = await self._reputation_outbox.find_one({"jobId": job_id})
+        if existing is not None:
+            job = _outbox_from_document(existing)
+            if (
+                job.status is OutboxStatus.PREPARED
+                and job.feedback_hash != feedback_hash
+            ):
+                raise PaymentConflictError(
+                    "reputation job is already prepared with another feedback hash"
+                )
+        updates: dict[str, Any] = {
+            "status": OutboxStatus.PREPARED.value,
+            "feedbackHash": feedback_hash,
+        }
+        if transaction_ref is not None:
+            updates["transactionRef"] = transaction_ref.to_payload()
+        return await self._transition_job(
+            job_id=job_id,
+            worker_id=worker_id,
+            payload_fingerprint=payload_fingerprint,
+            allowed=frozenset({OutboxStatus.LEASED, OutboxStatus.PREPARED}),
+            now=now,
+            updates=updates,
+            transaction_ref=transaction_ref,
+        )
+
+    async def mark_submitted_unknown(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef,
+        reason: str,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        return await self._transition_job(
+            job_id=job_id,
+            worker_id=worker_id,
+            payload_fingerprint=payload_fingerprint,
+            allowed=frozenset(
+                {OutboxStatus.PREPARED, OutboxStatus.SUBMITTED_UNKNOWN}
+            ),
+            now=now,
+            updates={
+                "status": OutboxStatus.SUBMITTED_UNKNOWN.value,
+                "transactionRef": transaction_ref.to_payload(),
+                "unknownReason": reason,
+            },
+            transaction_ref=transaction_ref,
+        )
+
+    async def mark_confirmed(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        proof: ConfirmedFeedbackProof,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        existing = await self._reputation_outbox.find_one({"jobId": job_id})
+        if existing is None:
+            raise PaymentEvidenceError("reputation job not found")
+        job = _outbox_from_document(existing)
+        if job.payload_fingerprint != payload_fingerprint:
+            raise PaymentConflictError("reputation job has a different payload fingerprint")
+        if job.status is OutboxStatus.CONFIRMED:
+            if job.receipt_proof_ref == proof.receipt_proof_ref:
+                return job
+            raise PaymentConflictError("reputation job has a different confirmation")
+        if job.is_terminal:
+            raise PaymentConflictError(f"reputation job is already {job.status.value}")
+        assert_proof_matches_job(job=job, proof=proof)
+        return await self._transition_job(
+            job_id=job_id,
+            worker_id=worker_id,
+            payload_fingerprint=payload_fingerprint,
+            allowed=frozenset(
+                {
+                    OutboxStatus.LEASED,
+                    OutboxStatus.PREPARED,
+                    OutboxStatus.SUBMITTED_UNKNOWN,
+                }
+            ),
+            now=now,
+            updates={
+                "status": OutboxStatus.CONFIRMED.value,
+                "transactionRef": proof.transaction_ref.to_payload(),
+                "receiptProofRef": proof.receipt_proof_ref,
+                "feedbackHash": proof.feedback_hash,
+                "blockNumber": proof.block_number,
+                "logIndex": proof.log_index,
+                "evidenceSource": proof.transaction_ref.evidence_source.value,
+                "leaseExpiresAt": None,
+            },
+            transaction_ref=proof.transaction_ref,
+        )
+
+    async def record_conflict(
+        self,
+        *,
+        identity_hash: str,
+        requested_fingerprint: str,
+        reason_code: str,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        existing = await self._reputation_outbox.find_one(
+            {"publishIdentityHash": identity_hash}
+        )
+        if existing is None:
+            raise PaymentEvidenceError("reputation job not found")
+        if str(existing.get("status")) == OutboxStatus.CONFIRMED.value:
+            raise PaymentConflictError(
+                "a confirmed publication cannot be turned into a conflict"
+            )
+        document = await self._reputation_outbox.find_one_and_update(
+            {
+                "publishIdentityHash": identity_hash,
+                "status": {"$ne": OutboxStatus.CONFIRMED.value},
+            },
+            {
+                "$set": {
+                    "status": OutboxStatus.CONFLICT.value,
+                    "conflictReasonCode": reason_code,
+                    "requestedFingerprint": requested_fingerprint,
+                    "leaseExpiresAt": None,
+                    "updatedAt": now,
+                }
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if document is None:
+            raise PaymentConflictError("reputation job changed before the conflict record")
+        return _outbox_from_document(document)
+
+    async def list_recoverable_jobs(
+        self, *, now: datetime
+    ) -> list[ReputationPublishJob]:
+        cursor = self._reputation_outbox.find(
+            {
+                "status": {"$in": [item.value for item in _CLAIMABLE_STATUSES]},
+                "$or": [
+                    {"leaseExpiresAt": None},
+                    {"leaseExpiresAt": {"$lte": now}},
+                ],
+            }
+        ).sort([("createdAt", ASCENDING), ("jobId", ASCENDING)])
+        return [_outbox_from_document(document) async for document in cursor]
+
+    # ---- Reputation snapshots ----------------------------------------------------
+
+    async def put_snapshot(self, snapshot: ReputationSnapshot) -> ReputationSnapshot:
+        existing = await self._reputation_snapshots.find_one(
+            {"snapshotId": snapshot.snapshot_id}
+        )
+        if existing is not None:
+            stored = _snapshot_from_document(existing)
+            if stored.snapshot_hash != snapshot.snapshot_hash:
+                raise PaymentConflictError("a reputation snapshot is immutable once stored")
+            return stored
+        try:
+            await self._reputation_snapshots.insert_one(_snapshot_document(snapshot))
+        except DuplicateKeyError as exc:
+            duplicate = await self._reputation_snapshots.find_one(
+                {
+                    "queryFingerprint": snapshot.scope.query_fingerprint,
+                    "scope.toBlock": snapshot.scope.to_block,
+                }
+            )
+            if duplicate is None:
+                raise
+            stored = _snapshot_from_document(duplicate)
+            if stored.snapshot_hash != snapshot.snapshot_hash:
+                raise PaymentConflictError(
+                    "another snapshot already answers this query at this block"
+                ) from exc
+            return stored
+        return snapshot
+
+    async def get_snapshot(self, snapshot_id: str) -> ReputationSnapshot | None:
+        document = await self._reputation_snapshots.find_one({"snapshotId": snapshot_id})
+        return None if document is None else _snapshot_from_document(document)
+
+    async def latest_snapshot(
+        self, seller_agent_id: str
+    ) -> ReputationSnapshot | None:
+        cursor = (
+            self._reputation_snapshots.find({"sellerAgentId": seller_agent_id})
+            .sort([("queriedAt", DESCENDING), ("snapshotId", DESCENDING)])
+            .limit(1)
+        )
+        async for document in cursor:
+            return _snapshot_from_document(document)
+        return None
+
+    # ---- Atomic terminal finalize ------------------------------------------------
+
+    async def finalize_atomic(
+        self,
+        *,
+        purchase_id: str,
+        audit_payload: JsonObject | None,
+        audit_evidence_refs: tuple[str, ...],
+        decision_payload: JsonObject,
+        decision_evidence_refs: tuple[str, ...],
+        occurred_at: datetime,
+        expected_event_count: int,
+        expected_head_event_hash: str,
+        identity: PublishIdentity,
+        identity_hash: str,
+        payload_fingerprint: str,
+        decision: ReputationDecision,
+        status: OutboxStatus,
+    ) -> tuple[EvidenceEvent | None, EvidenceEvent, ReputationPublishJob]:
+        """One Mongo transaction: audit, decision and the unique outbox job.
+
+        A restart or a second worker either sees the whole unit or none of it, so a
+        purchase can never end up with a decision but no job, or two jobs for one identity.
+        """
+        actor: JsonObject = {"id": "terminal-audit-coordinator", "type": "service"}
+        job_id = f"repjob:{identity_hash.split(':')[-1][:32]}"
+        job = ReputationPublishJob(
+            job_id=job_id,
+            identity=identity,
+            identity_hash=identity_hash,
+            payload_fingerprint=payload_fingerprint,
+            decision=decision,
+            status=status,
+            created_at=occurred_at,
+            updated_at=occurred_at,
+        )
+        async with self._client.start_session() as session:
+            for attempt in range(64):
+
+                async def finalize_once(
+                    active_session: AsyncClientSession,
+                ) -> tuple[EvidenceEvent | None, EvidenceEvent]:
+                    documents, events = await self._load_verified_chain(
+                        purchase_id=purchase_id,
+                        session=active_session,
+                        expected_event_count=expected_event_count,
+                        expected_head_event_hash=expected_head_event_hash,
+                    )
+                    if any(
+                        event.type == EventType.REPUTATION_DECIDED for event in events
+                    ):
+                        raise PaymentConflictError(
+                            "purchase already has a reputation decision"
+                        )
+                    has_audit = any(event.type == EventType.AUDITED for event in events)
+                    if audit_payload is not None and has_audit:
+                        raise PaymentConflictError("purchase already has a terminal audit")
+                    if audit_payload is None and not has_audit:
+                        raise PaymentEvidenceError(
+                            "a decision-only finalize requires a persisted terminal audit"
+                        )
+                    appended: EvidenceEvent | None = None
+                    if audit_payload is not None:
+                        appended = self._next_event(
+                            purchase_id=purchase_id,
+                            event_documents=documents,
+                            event_type=EventType.AUDITED,
+                            occurred_at=occurred_at,
+                            actor=actor,
+                            payload=audit_payload,
+                            evidence_refs=audit_evidence_refs,
+                        )
+                        await self._events.insert_one(
+                            _event_document(appended), session=active_session
+                        )
+                        await self._insert_event_head(
+                            purchase_id=purchase_id,
+                            event=appended,
+                            anchored_at=occurred_at,
+                            session=active_session,
+                        )
+                        documents = [*documents, _event_document(appended)]
+                    decided = self._next_event(
+                        purchase_id=purchase_id,
+                        event_documents=documents,
+                        event_type=EventType.REPUTATION_DECIDED,
+                        occurred_at=occurred_at,
+                        actor=actor,
+                        payload=decision_payload,
+                        evidence_refs=decision_evidence_refs,
+                    )
+                    await self._events.insert_one(
+                        _event_document(decided), session=active_session
+                    )
+                    await self._insert_event_head(
+                        purchase_id=purchase_id,
+                        event=decided,
+                        anchored_at=occurred_at,
+                        session=active_session,
+                    )
+                    await self._reputation_outbox.insert_one(
+                        _outbox_document(job), session=active_session
+                    )
+                    return appended, decided
+
+                try:
+                    audit_event, decision_event = await session.with_transaction(
+                        finalize_once
+                    )
+                except DuplicateKeyError as exc:
+                    index_name = str((exc.details or {}).get("errmsg", ""))
+                    if "unique_reputation_publish_identity" in index_name:
+                        existing = await self.get_by_identity(identity_hash)
+                        if (
+                            existing is not None
+                            and existing.payload_fingerprint != payload_fingerprint
+                        ):
+                            raise PaymentConflictError(
+                                "publish identity already has a different fingerprint"
+                            ) from exc
+                        raise PaymentConflictError(
+                            "publish identity already has a job"
+                        ) from exc
+                    if "unique_reputation_decision_per_purchase" in index_name:
+                        raise PaymentConflictError(
+                            "purchase already has a reputation decision"
+                        ) from exc
+                    if "unique_audit_per_purchase" in index_name:
+                        raise PaymentConflictError(
+                            "purchase already has a terminal audit"
+                        ) from exc
+                    await asyncio.sleep(min(0.001 * (2**attempt), 0.025))
+                    continue
+                return audit_event, decision_event, job
+        raise DuplicateEventError("terminal finalize contention exceeded bounded retries")

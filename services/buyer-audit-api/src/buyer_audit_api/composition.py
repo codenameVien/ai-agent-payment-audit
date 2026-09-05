@@ -17,9 +17,18 @@ from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import ConfigurationError
-from buyer_audit_api.core.ports import Clock, EvidenceRepository, PayloadCipher
+from buyer_audit_api.core.models import BASE_SEPOLIA_CHAIN_ID
+from buyer_audit_api.core.ports import (
+    Clock,
+    EvidenceRepository,
+    PayloadCipher,
+    ReputationOutboxPort,
+    ReputationSnapshotPort,
+)
 from buyer_audit_api.core.purchase_service import PurchaseService
+from buyer_audit_api.core.reputation import BASE_SEPOLIA_REPUTATION_REGISTRY
 from buyer_audit_api.core.session import SessionCodec
+from buyer_audit_api.core.terminal import TerminalAuditCoordinator
 from buyer_audit_api.core.time import SystemClock
 from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
 from buyer_audit_api.domains.ai_inference.benchmark import ManualBenchmarkProvider
@@ -58,6 +67,9 @@ class AppContainer:
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     commerce_gateway: HttpCommerceGatewayClient | None = None
+    terminal_coordinator: TerminalAuditCoordinator | None = None
+    reputation_outbox: ReputationOutboxPort | None = None
+    reputation_snapshots: ReputationSnapshotPort | None = None
 
 
 def build_container(settings: Settings) -> AppContainer:
@@ -164,4 +176,15 @@ def build_container(settings: Settings) -> AppContainer:
             base_url=settings.commerce_gateway_url,
             service_token=settings.gateway_service_token,
         ),
+        # The Mongo repository implements the reputation outbox, the snapshot store and
+        # the atomic terminal orchestration, so one durable store owns all three.
+        terminal_coordinator=TerminalAuditCoordinator(
+            orchestration=repository,
+            outbox=repository,
+            clock=clock,
+            chain_id=BASE_SEPOLIA_CHAIN_ID,
+            registry_address=BASE_SEPOLIA_REPUTATION_REGISTRY,
+        ),
+        reputation_outbox=repository,
+        reputation_snapshots=repository,
     )

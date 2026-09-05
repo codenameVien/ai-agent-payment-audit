@@ -319,3 +319,75 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   product-code no-diff checks are required immediately before the coherent planning commit.
 - Orchestrator must bring the resulting planning commit into `wo/P6-02`; Coder may then resume
   the same packet without inventing a new product decision.
+
+## 2026-09-05 09:30 KST — coder — WO-P6-02 reputation loop implemented
+
+### Intent
+- Implement `P6-DES-WO-02` on the amended Work Order: persisted terminal audit → 100/0/DEFER
+  decision, Mongo transaction/CAS + durable outbox, PREPARED/SUBMITTED_UNKNOWN recovery,
+  confirmed-only `REPUTATION_RECORDED` evidence, immutable query provenance, and provider-level
+  reputation as a bounded selection signal.
+
+### Files changed
+- `core/models.py` — exactly the two amended `EventType` members (`REPUTATION_DECIDED`,
+  `REPUTATION_PUBLICATION_CONFLICT`). No other member, value or order touched.
+- `core/reputation.py` (new) — publish identity + identity hash, immutable payload fingerprint,
+  typed `Publish|Defer` policy for `P6-AC-05.2`, outbox state machine, confirmed-feedback proof
+  with agent/tag/value/transaction binding, snapshot + query scope + neutral-mean aggregation.
+- `core/terminal.py` (new) — `TerminalAuditCoordinator.finalize_if_eligible` and the recovery
+  sweep; reuses the pure `AuditEvaluator`/`AuditReportReader` read-only so `core/audit.py` is
+  untouched, and reuses an already-persisted current audit instead of appending a second one.
+- `core/ports.py` — `ReputationOutboxPort`, `ReputationSnapshotPort`, `TerminalOrchestrationPort`.
+- `adapters/repositories/memory.py`, `adapters/repositories/mongo.py` — outbox, snapshots and
+  `finalize_atomic`; Mongo adds `unique_reputation_publish_identity`,
+  `unique_reputation_decision_per_purchase`, the EVM/LOCAL partial unique transaction indexes,
+  `reputation_publish_lease`, `unique_reputation_snapshot_query`, all created only after the
+  read-only M2 collision preflight, which now covers them.
+- `adapters/reputation_gateway.py` (new) — read-only `POST /reputation-query` client and the
+  `SellerReputationProvider` that stores an immutable snapshot; a failed query degrades to a
+  fresh-enough `STALE` snapshot or `NO_EVIDENCE/50`, never to a favourable score.
+- `api/schemas.py`, `api/app.py` — finalize plus the five outbox endpoints with required lease
+  owner and fingerprint, `404/409/422/503` mapping and same-proof `200`.
+- `composition.py` — production wiring of the coordinator, outbox and snapshot store.
+- `domains/ai_inference/{models,ports,workflow,selection}.py` — `SellerReputationProvider`,
+  `ReputationScoreEvidence`, provider-level snapshot cached per seller agent, persisted in
+  `QUOTED.reputationSnapshots` and read back on resume; the `reputation` component now comes from
+  the snapshot (or neutral 50) and never from `benchmark.reputation_score`.
+- Payment Executor `contracts.ts`, `erc8004.ts`, `adapters/http.ts`, `adapters/viem-erc8004.ts`,
+  `main.ts` — the in-process dedupe `Map` is deleted; the publisher drives the durable outbox with
+  find-before-submit, prepare-before-broadcast, bounded recovery, receipt+event confirmation,
+  query provenance, and a writer that defaults to `disabled` and rejects `fake`.
+- Tests: `tests/test_phase6_reputation.py`, `tests/test_phase6_terminal.py`,
+  `tests/phase6-reputation-loop.test.ts` (new) plus `test_api.py`, `test_mongo_repository.py`,
+  `test_ai_inference_workflow.py`, `test_ai_inference_domain.py`, `erc8004.test.ts`,
+  `runtime.test.ts`.
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` strict 0 (47 files), focused pytest 95 passed, gateway build 0,
+  `node --test` erc8004+phase6-reputation-loop+runtime 26/26, `npm run test:mongo:local` 8 passed,
+  `git diff --check` 0.
+- Preservation: full non-mongo pytest 265 passed, full gateway suite 77/77, protected paths
+  unchanged, 27 changed paths all inside the amended allowed-write list, `core/models.py` diff is
+  exactly the two permitted enum members, 27019 free and no mongod/temp left.
+
+### Decisions / assumptions
+- **PREPARED records the payload commitment, not a fabricated reference.** An EVM hash does not
+  exist before broadcast, and inventing a `SYNTHETIC_LOCAL` identifier for a live submission would
+  fake provenance (exactly the confusion WO-P6-01 hardened against). `PREPARED` therefore freezes
+  the feedback hash; the transaction reference is bound exactly once, by whichever step first
+  knows it, and is immutable afterwards. A different reference for a bound job is a conflict.
+- **Failure reasons are derived from the event-backed projection**, not the mutable payment intent
+  document, so a lagging or absent intent cannot change an objective reason code. A terminal state
+  that contradicts the projection is treated as conflicting proof and defers.
+- The coordinator does not take over `AuditService.audit()`; that WO-P6-01-approved read path
+  stays as-is and the coordinator reuses its persisted audit, so `core/audit.py` needed no edit.
+  `P6-AC-03.5` still governs: a stale or wrong-ruleset audit blocks the decision.
+- `settings.py` is not in the allowed-write list, so the Base Sepolia reputation registry is a
+  protocol constant in `core/reputation.py` matching the Payment Executor's compiled-in default.
+- No live ERC-8004, RPC, facilitator, provider, AWS or Atlas call was made; every test uses
+  in-process fakes or the native loopback replica set.
+
+### Handoff
+- Reviewer independently re-runs the fixed order plus native Mongo and both protected checks on
+  the `wo/P6-02` tip; `.agent/outbox/WO-P6-02-coder.done.md` carries the anchors and results.
+  WO-P6-03 must not start before an `APPROVE` and Orchestrator integration.
