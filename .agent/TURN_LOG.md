@@ -426,6 +426,7 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   existing untracked `.githooks` remain untouched by Planner.
 - Orchestrator applies the resulting planning commit to `wo/P6-02`; Coder then implements and
   re-runs the amended focused suite before Reviewer correction review.
+
 ## 2026-09-05 18:10 KST - coder - WO-P6-02 review correction round 2
 
 ### Intent
@@ -467,3 +468,33 @@ Append-only log of meaningful agent turns. Keep entries concise and factual.
   `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`;
   `.agent/outbox/WO-P6-02-coder-r2.done.md` carries the correction and merge anchors.
   The original `WO-P6-02-coder.done.md` and the review report are unmodified.
+
+## 2026-09-05 17:24 KST — reviewer — WO-P6-02 correction round 2
+
+### Boundary and verification
+- Independently reviewed coder `wo/P6-02` exact tip
+  `f7deffa582d5762ad19783b1872955082a578b7a` against amended packet base
+  `411e475f728344bad728c81c72bb7437a30da15e`; merge-base matched the packet base.
+- Read the amended WO/planner artifact, preserved original rejection, coder r2 evidence,
+  canonical Phase 6 requirements/design/tasks, and exact source/test diff. Coder report was not
+  treated as proof.
+- Fixed order passed: Ruff 0; strict mypy 0/47 files; focused Python 142 passed; gateway build 0;
+  focused Node 34/34; native Mongo 9 passed; diff-check 0.
+- Broad/targeted passed: non-Mongo 293 passed (9 deselected); full gateway 85/85; legacy/read-side
+  7/7; prior-finding focus 17/17; payment-ordering focus 7/7.
+- Exact packet-base protected diff was 0. Main merge-base showed only older approved Phase 6
+  requirements/design/tasks. Coder worktree remained clean; local Mongo listener/temp data were
+  absent after teardown. No live RPC/provider/facilitator/AWS/Atlas/public-chain calls occurred.
+
+### Independent findings and verdict
+- Prior C1, C2, H1, H2, H3, M1, M2 were fixed. H4 remained open.
+- High: payment tail validation sees event types only, so a decision for publish identity A accepts
+  conflict or recorded evidence for identity B; independent in-memory probes returned the settled
+  view/claim instead of `PaymentEvidenceError`.
+- High: every outbox lease/CAS 409 is converted by the publisher into `recordConflict` with the
+  job's unchanged fingerprint; repositories accept equal existing/requested fingerprints and
+  terminalize the valid job as `CONFLICT`.
+- Medium: isolated native Mongo concurrent identical-conflict probe completed 8 calls but appended
+  7 duplicate logical conflict events instead of converging to one.
+- Canonical report: `.agent/outbox/WO-P6-02-review-r2.md`. Verdict: `REJECT`; keep coder branch
+  unintegrated and preserve all history for a bounded correction.
