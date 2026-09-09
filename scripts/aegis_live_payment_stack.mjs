@@ -10,6 +10,7 @@
  */
 
 import { spawn } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,6 +38,15 @@ function required(env, name) {
   const value = env[name]?.trim();
   if (!value) throw new Error(`${name} is required in .env.local`);
   return value;
+}
+
+/**
+ * These authenticate only loopback processes for this one runner lifetime. They are
+ * unrelated to the user wallet and deliberately stay out of .env.local and stdout.
+ */
+function ensureEphemeralServiceToken(env, name) {
+  if (env[name]?.trim()) return;
+  env[name] = randomBytes(32).toString("base64url");
 }
 
 function port(env, name, fallback) {
@@ -96,9 +106,9 @@ if (env.AEGIS_REAL_PAYMENT_APPROVED !== "yes") {
 required(env, "PBLC_USER_ADDRESS");
 required(env, "PBLC_USER_PRIVATE_KEY");
 required(env, "MONGODB_URI");
-required(env, "INTERNAL_SERVICE_TOKEN");
-required(env, "ADMIN_SERVICE_TOKEN");
-required(env, "GATEWAY_SERVICE_TOKEN");
+ensureEphemeralServiceToken(env, "INTERNAL_SERVICE_TOKEN");
+ensureEphemeralServiceToken(env, "ADMIN_SERVICE_TOKEN");
+ensureEphemeralServiceToken(env, "GATEWAY_SERVICE_TOKEN");
 const facilitatorUrl = httpsUrl(required(env, "AEGIS_FACILITATOR_URL"), "AEGIS_FACILITATOR_URL");
 
 const apiPort = port(env, "AEGIS_API_PORT", "8100");
