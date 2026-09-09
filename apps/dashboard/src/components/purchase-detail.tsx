@@ -2,7 +2,9 @@
 
 import { useEffect, useState } from "react";
 
+import { AegisPurchaseDecision } from "@/features/ai-inference/aegis-decision";
 import { AiInferencePurchaseEvidence } from "@/features/ai-inference/purchase-evidence";
+import { isAegisRequest } from "@/lib/aegis";
 import { api, short } from "@/lib/api";
 import type { PurchaseDetail as Detail } from "@/lib/types";
 import {
@@ -27,6 +29,9 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
 
   const paymentNeedsReview =
     detail.summary.status === "PAYMENT_RECONCILIATION_REQUIRED";
+  // The stored request schema decides which policy this purchase was judged under.
+  // Historical purchases keep their signed-quote evidence exactly as it was recorded.
+  const aegis = isAegisRequest(detail.summary.request_summary);
 
   return (
     <main>
@@ -40,6 +45,8 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
             amountUnits={detail.summary.amount_units}
             transactionHash={detail.summary.transaction_hash}
             status={detail.summary.status}
+            policy={aegis ? "aegis" : "legacy"}
+            paymentStatus={detail.summary.payment_status}
           />
           {detail.summary.transaction_hash && (
             <a
@@ -58,6 +65,12 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
           <pre className="evidenceJson">
             {JSON.stringify(detail.summary.request_summary, null, 2)}
           </pre>
+          {aegis && (
+            <p className="panelNote">
+              aegis-aa-v1 정규화는 프롬프트 원문을 저장하지 않고 해시·길이·분류 근거만
+              남깁니다. 원문은 암호화된 민감 페이로드에만 존재합니다.
+            </p>
+          )}
         </article>
         <article className="panel">
           <p className="eyebrow">감사 결과</p>
@@ -87,9 +100,11 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
           )}
         </article>
       </section>
-      {detail.summary.domain === "ai_inference" ? (
+      {detail.summary.domain !== "ai_inference" ? null : aegis ? (
+        <AegisPurchaseDecision events={detail.events} />
+      ) : (
         <AiInferencePurchaseEvidence events={detail.events} />
-      ) : null}
+      )}
       <section className="panel">
         <div className="sectionHead">
           <div>

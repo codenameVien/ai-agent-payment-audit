@@ -127,6 +127,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
   letter-spacing: -0.045em;
   line-height: 1.05;
   margin: 7px 0 12px;
+  overflow-wrap: break-word;
 }
 .auditIntro p, .pageHead p {
   max-width: 720px;
@@ -173,7 +174,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
 
 .auditMetrics {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   margin: 0 0 20px;
   border: 1px solid var(--line);
   border-radius: 17px;
@@ -198,8 +199,12 @@ main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
 .riskText { color: var(--red); }
 
 .auditLayout { display: grid; grid-template-columns: minmax(0, 1fr) 330px; gap: 20px; }
-.auditPrimary, .auditSidebar { display: flex; flex-direction: column; gap: 20px; }
+/* Grid and flex items default to a min-content floor, which a 700px-wide table would
+   push all the way up to the document. Every container that can hold one is allowed to
+   shrink instead, so horizontal scrolling stays inside .tableWrap. */
+.auditPrimary, .auditSidebar { display: flex; flex-direction: column; gap: 20px; min-width: 0; }
 .panel {
+  min-width: 0;
   background: linear-gradient(145deg, var(--card), #15141b);
   border: 1px solid var(--line);
   border-radius: 17px;
@@ -217,7 +222,7 @@ main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
 .sectionHead > a { font-size: 12px; text-decoration: none; white-space: nowrap; }
 .panel small { color: var(--muted); }
 
-.tableWrap { overflow: auto; }
+.tableWrap { max-width: 100%; min-width: 0; overflow-x: auto; }
 table { border-collapse: collapse; width: 100%; min-width: 700px; }
 th, td {
   text-align: left;
@@ -260,7 +265,7 @@ td small { display: block; margin-top: 6px; color: var(--muted); }
 .walletList, .agentCard dl { margin: 0; }
 .walletList {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 0 28px;
 }
 .walletList div, .agentCard dl div {
@@ -269,12 +274,15 @@ td small { display: block; margin-top: 6px; color: var(--muted); }
   gap: 12px;
   padding: 14px 0;
   border-bottom: 1px solid var(--line);
+  min-width: 0;
 }
 dt { color: var(--muted); font-size: 12px; }
 dd {
   margin: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
   font-size: 12px;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .panelNote {
   color: var(--muted);
@@ -305,7 +313,7 @@ dd {
 .compactAlerts { display: flex; flex-direction: column; }
 .compactAlerts > div {
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 11px;
   align-items: start;
   padding: 13px 0;
@@ -323,7 +331,7 @@ dd {
   padding: 13px 0;
   border-bottom: 1px solid var(--line);
 }
-.evidenceChecks li span { display: flex; flex-direction: column; gap: 4px; }
+.evidenceChecks li span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .evidenceChecks li strong { font-size: 13px; }
 .readOnlyPanel {
   display: flex;
@@ -392,6 +400,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
   gap: 20px;
   margin: 20px 0;
 }
+.twoCol > *, .experimentLayout > *, .cardGrid > * { min-width: 0; }
 .detailMeta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
 .hash {
   font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -416,7 +425,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .timeline { list-style: none; padding: 0; margin: 0; }
 .timeline li {
   display: grid;
-  grid-template-columns: 22px 1fr;
+  grid-template-columns: 22px minmax(0, 1fr);
   gap: 14px;
   position: relative;
   padding-bottom: 22px;
@@ -439,7 +448,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 }
 .timelineHead { display: flex; justify-content: space-between; gap: 10px; }
 .timeline time { color: var(--muted); font-size: 12px; }
-.cardGrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 18px; }
+.cardGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
 .agentCard { display: flex; flex-direction: column; gap: 12px; }
 .agentIcon {
   width: 44px;
@@ -455,7 +464,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .alertList { display: flex; flex-direction: column; gap: 12px; }
 .alert {
   display: grid;
-  grid-template-columns: auto 1fr auto;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   align-items: start;
   gap: 16px;
 }
@@ -492,7 +501,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .experimentForm label > span { font-weight: 760; font-size: 13px; }
 .experimentTerms {
   display: grid;
-  grid-template-columns: repeat(2, 1fr);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 1px;
   overflow: hidden;
   border: 1px solid var(--line);
@@ -505,7 +514,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .experimentTerms strong { font-size: 14px; }
 .paymentConsent {
   display: grid !important;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 12px !important;
   align-items: start;
   padding: 15px;
@@ -523,7 +532,7 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .experimentSteps li {
   counter-increment: experiment-step;
   display: grid;
-  grid-template-columns: 29px 1fr;
+  grid-template-columns: 29px minmax(0, 1fr);
   gap: 11px;
   align-items: start;
   padding: 14px 0;
@@ -556,13 +565,13 @@ footer {
 }
 
 @media (max-width: 1040px) {
-  .auditMetrics { grid-template-columns: repeat(2, 1fr); }
+  .auditMetrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .auditMetrics article:nth-child(2) { border-right: 0; }
   .auditMetrics article:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
-  .auditLayout { grid-template-columns: 1fr; }
-  .auditSidebar { display: grid; grid-template-columns: repeat(2, 1fr); }
+  .auditLayout { grid-template-columns: minmax(0, 1fr); }
+  .auditSidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .readOnlyPanel { grid-column: 1 / -1; }
-  .cardGrid { grid-template-columns: repeat(2, 1fr); }
+  .cardGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media (max-width: 800px) {
   .topbar {
@@ -572,20 +581,28 @@ footer {
     padding: 16px 20px;
     gap: 14px;
   }
+  /* The brand keeps its own width on wide screens; on a narrow one it must shrink so
+     the navigation row stays reachable instead of being pushed off-screen. */
+  .brand { min-width: 0; }
   .operatorBar { padding: 16px 20px; align-items: flex-start; }
-  .topbar nav { order: 3; width: 100%; overflow: auto; gap: 18px; }
+  /* `flex: 1` on the base rule keeps a 0 flex-basis, so `width: 100%` alone left the
+     navigation sharing the first row with the brand and the live status. An explicit
+     full basis moves it onto its own row, where it can scroll locally. */
+  .topbar nav { order: 3; flex: 0 0 100%; min-width: 0; overflow: auto; gap: 18px; }
   .live { margin-left: auto; }
   .auditIntro { align-items: start; flex-direction: column; }
   .scopePill { width: 100%; }
-  .walletList { grid-template-columns: 1fr; }
-  .twoCol { grid-template-columns: 1fr; }
-  .experimentLayout { grid-template-columns: 1fr; }
-  .cardGrid { grid-template-columns: 1fr; }
-  .alert { grid-template-columns: 1fr; }
+  .walletList { grid-template-columns: minmax(0, 1fr); }
+  .twoCol { grid-template-columns: minmax(0, 1fr); }
+  .experimentLayout { grid-template-columns: minmax(0, 1fr); }
+  .cardGrid { grid-template-columns: minmax(0, 1fr); }
+  .alert { grid-template-columns: minmax(0, 1fr); }
   main { padding: 28px 16px 54px; }
 }
 @media (max-width: 620px) {
-  .auditMetrics { grid-template-columns: 1fr; }
+  .auditMetrics { grid-template-columns: minmax(0, 1fr); }
+  /* Below this width the widest table scrolls inside its own panel. */
+  table { min-width: 560px; }
   .auditMetrics article {
     min-height: 125px;
     border-right: 0;

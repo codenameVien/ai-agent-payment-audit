@@ -26,6 +26,10 @@ export interface PurchaseSummary {
   transaction_hash: string | null;
   audit_severity: "NORMAL" | "CAUTION" | "RISK" | null;
   finding_count: number;
+  lifecycle_status: string;
+  payment_status: string;
+  audit_status: string;
+  audit_covers_head: boolean;
 }
 
 export interface EvidenceEvent {
