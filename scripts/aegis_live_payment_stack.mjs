@@ -11,11 +11,12 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { mkdir, readFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const RUNTIME_STATE_PATH = resolve(REPO_ROOT, ".aegis-live-runtime.env");
 const PROVIDERS = ["openai", "anthropic", "google"];
 const LIVE_REPLICA_SET = "aegislive";
 
@@ -48,6 +49,19 @@ function required(env, name) {
 function ensureEphemeralServiceToken(env, name) {
   if (env[name]?.trim()) return;
   env[name] = randomBytes(32).toString("base64url");
+}
+
+async function writeRuntimeState(env) {
+  // This short-lived, owner-only file lets the explicitly local reconciliation command
+  // address the current loopback Evidence API after a Facilitator returned a settlement
+  // reference but the record write failed. It contains no wallet key and is removed on
+  // normal runner shutdown.
+  const content = [
+    `AEGIS_API_URL=http://127.0.0.1:${env.AEGIS_API_PORT || "8100"}`,
+    `INTERNAL_SERVICE_TOKEN=${env.INTERNAL_SERVICE_TOKEN}`,
+  ].join("\n") + "\n";
+  await writeFile(RUNTIME_STATE_PATH, content, { mode: 0o600 });
+  await chmod(RUNTIME_STATE_PATH, 0o600);
 }
 
 function port(env, name, fallback) {
@@ -210,6 +224,7 @@ function stop(signal = "SIGTERM") {
   for (const child of children.reverse()) {
     if (child.exitCode === null && child.signalCode === null) child.kill(signal);
   }
+  void rm(RUNTIME_STATE_PATH, { force: true });
   releaseStop?.();
 }
 
@@ -218,6 +233,7 @@ try {
   // set persists the new live-payment evidence across restarts and supports the API's
   // required atomic event transactions.
   const liveMongo = await startProjectLocalReplicaSet(mongoPort);
+  await writeRuntimeState({ ...env, AEGIS_API_PORT: String(apiPort) });
   // The API owns MongoDB; these three children have only its internal evidence interface.
   start("evidence-api", "uv", [
     "run", "--project", "services/buyer-audit-api", "uvicorn", "buyer_audit_api.main:app",

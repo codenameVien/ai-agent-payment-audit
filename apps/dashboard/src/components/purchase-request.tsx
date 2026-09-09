@@ -165,10 +165,14 @@ export function PurchaseRequest() {
     ? "구매 요청 기록 중…"
     : phase === "running"
       ? "비교·선택·결제·감사 진행 중…"
-      : checking
-        ? "저장된 요청 확인 중…"
-        : resumable
-          ? "같은 요청이면 기존 구매 이어서 실행"
+    : checking
+      ? "저장된 요청 확인 중…"
+      : resumable
+          ? resumable.settled
+            ? "정산된 구매의 결과·감사 이어서 받기"
+            : "같은 요청이면 기존 구매 이어서 실행"
+          : pending?.status === "completed"
+            ? "정산·감사 완료 — 거래 상세 확인"
           : "구매 에이전트 실행";
 
   return (
@@ -259,8 +263,10 @@ export function PurchaseRequest() {
 
           {resumable && (
             <div className="notice">
-              진행 중인 PBLC V2 조건 구매 {short(resumable.purchaseId, 10)}가 있습니다. 저장된 요청과
-              같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다.
+              {resumable.settled
+                ? "PBLC 정산은 이미 기록됐습니다. 같은 요청으로 결과와 감사를 이어서 받을 수 있으며, 이 동작은 새 서명·Facilitator 호출·토큰 전송을 하지 않습니다."
+                : "진행 중인 PBLC V2 조건 구매가 있습니다. 저장된 요청과 같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다."}{" "}
+              {short(resumable.purchaseId, 10)}
               <small>
                 저장된 요청: 프롬프트 해시 {short(resumable.promptHash, 10)} · priority{" "}
                 {resumable.originalPriority ?? "미지정(자동 분류)"} · 예산{" "}

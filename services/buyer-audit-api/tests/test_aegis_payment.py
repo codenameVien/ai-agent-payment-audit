@@ -297,6 +297,41 @@ def test_a_settlement_answer_that_claims_the_wrong_thing_is_refused(
         assert refused.status_code == 409, refused.text
 
 
+def test_a_live_facilitator_evm_reference_is_recorded_without_chain_verification(
+    runtime_container: AppContainer,
+) -> None:
+    """Only the server-fixed live runtime may retain a Facilitator tx reference."""
+    live = replace(runtime_container, aegis_execution_mode="live")
+    asyncio.run(_bind_wallet(live))
+    with TestClient(create_app(live)) as client:
+        purchase_id = _decided(client)
+        assert client.post(
+            "/internal/evidence/aegis/payments/reserve",
+            json={"purchase_id": purchase_id},
+            headers=INTERNAL_HEADERS,
+        ).status_code == 200
+        assert client.post(
+            "/internal/evidence/payment-intents/authorize",
+            json={
+                "purchase_id": purchase_id,
+                "authorization_hash": "0x" + "ab" * 32,
+                "signature": "0x" + "cd" * 65,
+            },
+            headers=INTERNAL_HEADERS,
+        ).status_code == 200
+        settled = client.post(
+            "/internal/evidence/aegis/payments/settle",
+            json=_settle_body(purchase_id, facilitator_transaction="0x" + "ef" * 32),
+            headers=INTERNAL_HEADERS,
+        )
+        assert settled.status_code == 200, settled.text
+        events = client.get(f"/purchases/{purchase_id}/events").json()
+        record = next(item for item in events if item["type"] == EventType.PAYMENT_SETTLED)
+        assert record["payload"]["executionMode"] == "live"
+        assert record["payload"]["settlementReference"] == "0x" + "ef" * 32
+        assert record["payload"]["verificationBasis"] == "facilitator_response"
+
+
 def test_a_settled_purchase_is_never_paid_or_failed_again(
     runtime_container: AppContainer,
 ) -> None:

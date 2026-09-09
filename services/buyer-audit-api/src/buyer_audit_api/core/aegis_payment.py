@@ -10,9 +10,9 @@ What this module deliberately does not do:
 * it never verifies a chain receipt, a `Transfer` log or an `AuthorizationUsed` log. The
   new runtime records `verificationBasis=facilitator_response`, which is exactly what a
   Facilitator answer proves and no more;
-* it never writes an EVM transaction hash, so nothing here can be rendered as an
-  explorer link. The settlement reference is the Facilitator's own opaque identifier and
-  it is stored beside `executionMode`;
+* Mock records never write an EVM transaction hash. A `live` Facilitator may return the
+  Base Sepolia transaction hash it submitted; that value is recorded as the
+  Facilitator-provided settlement reference, not as application-side chain verification;
 * it never re-opens a purchase for a fresh payment. One `purchaseId` holds at most one
   payment intent, one ERC-3009 authorization nonce and one terminal outcome.
 """
@@ -397,11 +397,13 @@ class AegisPaymentService:
         reference = facilitator_transaction.strip()
         if not reference:
             raise PaymentEvidenceError("facilitator settlement reference is required")
-        if reference.startswith("0x"):
-            # A Facilitator answer this runtime never verified on chain must not be
-            # storable in a shape the dashboard could render as an explorer link.
+        if reference.startswith("0x") and self._execution_mode == MOCK_EXECUTION_MODE:
+            # Mock Facilitators must not create a record that resembles a live Base
+            # Sepolia payment. In live mode the external Facilitator's transaction hash
+            # is its settlement reference; the application still does not query a
+            # receipt, Transfer, or AuthorizationUsed event to validate it.
             raise PaymentEvidenceError(
-                "facilitator settlement reference must not claim an EVM transaction hash"
+                "mock facilitator settlement reference must not claim an EVM transaction hash"
             )
         payer = facilitator_payer.strip().lower()
         terms, intent, events = await self._transition_context(purchase_id)

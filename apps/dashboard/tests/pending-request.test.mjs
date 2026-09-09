@@ -173,7 +173,7 @@ test("a finished purchase is not re-run from a stale pending key", { skip }, asy
     store({ [NEW_KEY]: "aegis-purchase" }),
     recordingLoad(detail({ paymentStatus: "PAYMENT_SETTLED" })).load,
   );
-  assert.equal(settled.status, "completed");
+  assert.equal(settled.status, "resume");
   const audited = await aegis.resolvePendingRequest(
     store({ [NEW_KEY]: "aegis-purchase" }),
     recordingLoad(detail({ audit: { report_id: "rep-1", severity: "NORMAL", findings: [] } }))
@@ -273,5 +273,5 @@ test("the submit gate refuses every unverified or busy state", { skip }, () => {
   // A stored id of another policy or a finished purchase is not resumable, but a new
   // request may still be created.
   assert.equal(aegis.canSubmitRequest(resolution("foreign"), state), true);
-  assert.equal(aegis.canSubmitRequest(resolution("completed"), state), true);
+  assert.equal(aegis.canSubmitRequest(resolution("completed"), state), false);
 });

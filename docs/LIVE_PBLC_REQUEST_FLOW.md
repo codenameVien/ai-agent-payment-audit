@@ -63,6 +63,20 @@
 
 7. 응답 뒤 `/dashboard`에서 해당 `purchaseId`의 선택 모델·고정 금액·Facilitator 응답·감사 결과를 확인한다. 실패·확인 불가 상태에서 같은 요청을 새 `purchaseId`로 재시도하지 않는다.
 
+## 정산 응답 뒤 기록 실패 복구
+
+Facilitator가 이미 Base Sepolia 전송을 완료했는데 감사 기록 쓰기만 실패한 경우에는 **같은 요청을 새로 실행하지 않는다**. live runner가 실행 중인 상태에서 검증된 기존 `purchaseId`, Facilitator가 반환한 transaction hash, payer, amount units로 아래 복구 명령을 한 번만 사용한다. 이 명령은 서명·전송·Provider 호출·Facilitator 호출을 하지 않고, 기존 `AUTHORIZED` 증거를 `SETTLED`로 기록한다.
+
+```bash
+npm run aegis:live-reconcile -- \
+  --purchase-id <기존 purchaseId> \
+  --transaction <Facilitator transaction hash> \
+  --payer <기존 payer> \
+  --amount <기존 amountUnits>
+```
+
+그 뒤 `/request`에서 같은 저장 요청을 다시 실행하면 결제 실행 모듈은 이미 `SETTLED`인 것을 확인하고 Mock Provider 결과·감사만 이어서 기록한다. 새 ERC-3009 서명과 토큰 전송은 발생하지 않는다.
+
 ## 외부 게이트
 
 기본 Facilitator는 `https://x402.org/facilitator`다. `/supported`가 Base Sepolia의 x402 v2 `exact`를 표시해도 이 사용자 정의 PBLC를 실제로 받는다는 보장은 아니다. 첫 실제 요청의 `verify`가 거부되면 전송 없이 실패 기록을 남기고 중단한다. CDP Hosted Facilitator를 선택하는 경우에는 공식 CDP 인증 방식으로 서버 전용 자격증명을 구성해야 한다.

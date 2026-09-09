@@ -146,7 +146,10 @@ export async function resolvePendingRequest(
   if (!facts.isAegis) {
     return { status: "foreign", purchaseId: pendingId, pending: facts, historical };
   }
-  if (facts.settled || facts.audited) {
+  // A recovered live settlement can exist before the Mock Provider result and audit have
+  // been written. Keep that exact purchase resumable: the executor sees SETTLED and only
+  // requests delivery, never signs or calls the Facilitator again.
+  if (facts.audited) {
     return { status: "completed", purchaseId: pendingId, pending: facts, historical };
   }
   return { status: "resume", purchaseId: pendingId, pending: facts, historical };
@@ -174,7 +177,7 @@ export function canSubmitRequest(
 ): boolean {
   if (state.busy || !state.acknowledged) return false;
   if (pending === null) return false;
-  return pending.status !== "blocked";
+  return pending.status !== "blocked" && pending.status !== "completed";
 }
 
 /**
