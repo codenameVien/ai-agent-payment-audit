@@ -37,6 +37,11 @@ Coder 기록: `../.agent/outbox/aegis-demo-terra-result.md`. 오케스트레이�
 - 이 명령은 공개 `AEGIS_LIVE_PAYER_ADDRESS`만 읽으며, 서명·Facilitator `/verify`·`/settle`·트랜잭션 전송을 전혀 수행하지 않는다. 개인키는 실제 결제가 별도 승인될 때까지 요구하지 않는다.
 - 실제 PBLC custom-token `verify/settle` 수락과 자산 이동은 별도 승인 전까지 미검증·미실행이다.
 
+## 로컬 판매자 수신 지갑 매핑 — 2026-09-10
+
+- 발표용 Mock catalog의 수신 지갑은 OpenAI→seller1 `0xF00E8e0ecEF3B405250242F932849edB409497a0`, Anthropic→seller2 `0xC77492d3AD5c97B09C6529284e71c417Be8926d8`, Google→seller3 `0x5363903850f7AD4bF5FdbceFe9769A9e5b7080E4`로 바꿨다.
+- 이 변경은 다음 새 Mock 실행의 결제 조건에만 적용하며, 과거 거래·감사 기록·온체인 잔액을 수정하지 않는다.
+
 ## PBLC V2 재사용·AA 실조회 준비 — 2026-09-10
 
 - 신규 결제 조건: PBLC V2 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, ERC-3009, 6 decimals. 기존 PBLC 실거래·감사 기록은 수정하지 않았다.

@@ -8,7 +8,7 @@
       "aa_model_id": "fixture-aa-openai-alpha",
       "aa_slug": "fixture-aa-openai-alpha",
       "display_name": "OpenAI GPT-4.1 (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a001",
+      "recipient": "0xF00E8e0ecEF3B405250242F932849edB409497a0",
       "capabilities": ["korean", "reasoning"],
       "mapping_provenance": "fixture"
     },
@@ -19,7 +19,7 @@
       "aa_model_id": "fixture-aa-anthropic-beta",
       "aa_slug": "fixture-aa-anthropic-beta",
       "display_name": "Anthropic Claude Sonnet 5 (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a002",
+      "recipient": "0xC77492d3AD5c97B09C6529284e71c417Be8926d8",
       "capabilities": ["korean", "reasoning", "vision"],
       "mapping_provenance": "fixture"
     },
@@ -30,7 +30,7 @@
       "aa_model_id": "fixture-aa-google-gamma",
       "aa_slug": "fixture-aa-google-gamma",
       "display_name": "Google Gemini 2.5 Flash (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a003",
+      "recipient": "0x5363903850f7AD4bF5FdbceFe9769A9e5b7080E4",
       "capabilities": ["korean"],
       "mapping_provenance": "fixture"
     }

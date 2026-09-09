@@ -334,3 +334,7 @@
 
 - 사용자 요청에 따라 실제 전송 전 준비 경로를 추가했다. `npm run pblc:payment:preflight`은 공개 `AEGIS_LIVE_PAYER_ADDRESS`를 사용해 ETH/PBLC 잔액·PBLC V2 메타데이터·Facilitator `/supported`만 읽는다. 개인키는 이 단계에서 저장하거나 읽지 않는다.
 - 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.
+
+## 2026-09-10 — 로컬 Mock 판매자 수신 지갑 매핑
+
+- 사용자가 정한 새 수신 지갑을 local runtime catalog에 적용했다: OpenAI→seller1, Anthropic→seller2, Google→seller3. 기존 기록은 변경하지 않고, 이후 Mock 실행의 결제 조건만 이 주소를 가리킨다.

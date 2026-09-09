@@ -110,6 +110,8 @@ npm run build --workspace @pbl/dashboard
 
 신규 실행은 이미 배포된 PBLC V2 ERC-3009 계약(`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 현재 Facilitator는 Mock이므로 실제 자산 이동·테스트넷 결제는 하지 않습니다. AA 실조회는 서버 키와 정확한 ID/slug mapping 검증이 필요한 외부 게이트입니다. Provider 실제 키는 연결하지 않습니다. **AWS 배포는 진행하지 않습니다.** 공개 접근 제어와 원문 보존 정책은 향후 배포 전에 별도로 결정합니다.
 
+현재 로컬 실행 catalog의 수신 지갑은 OpenAI→seller1 `0xF00E…97a0`, Anthropic→seller2 `0xC774…26d8`, Google→seller3 `0x5363…80E4`로 설정했다. 이 매핑은 Mock 실행의 결제 조건에도 기록되지만, Mock Facilitator는 자산을 전송하지 않는다.
+
 ### 지갑 결제 사전점검 (읽기 전용)
 
 실제 전송 준비 상태만 확인하려면 개인 MetaMask 계정 대신 **전용 Base Sepolia 테스트 지갑**을 사용합니다. `.env.local`에 공개 주소만 설정합니다. 이 단계에서는 개인키를 입력하지 않습니다.

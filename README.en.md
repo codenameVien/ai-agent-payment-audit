@@ -110,6 +110,8 @@ Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evid
 
 The new execution path reuses deployed PBLC V2 ERC-3009 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` on Base Sepolia (6 decimals) as its payment terms. The Facilitator remains Mock, so it does not move real assets. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping; run `bash scripts/set_aa_api_key.sh` locally rather than sharing a key in chat. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
 
+The current local-run catalog maps recipients as OpenAI → seller1 `0xF00E…97a0`, Anthropic → seller2 `0xC774…26d8`, and Google → seller3 `0x5363…80E4`. The mapping is recorded in Mock payment terms, but the Mock Facilitator never transfers assets.
+
 ### Wallet payment preflight (read-only)
 
 To check readiness for a future real transfer, use a **dedicated Base Sepolia test wallet**, not a personal MetaMask account. Put its public address in `.env.local`; this step does not ask for a private key.
