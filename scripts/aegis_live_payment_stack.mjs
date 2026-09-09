@@ -11,12 +11,13 @@
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const PROVIDERS = ["openai", "anthropic", "google"];
+const LIVE_REPLICA_SET = "aegislive";
 
 function parseEnv(text) {
   const result = {};
@@ -95,6 +96,69 @@ async function waitFor(url, name) {
   throw new Error(`${name} did not become healthy: ${url}`);
 }
 
+function mongoshEval(port, expression) {
+  return new Promise((resolveEval, rejectEval) => {
+    const child = spawn("mongosh", [
+      "--host", "127.0.0.1", "--port", String(port), "--quiet", "--eval", expression,
+    ], { cwd: REPO_ROOT, stdio: ["ignore", "pipe", "pipe"] });
+    const stdout = [];
+    const stderr = [];
+    child.stdout.on("data", (chunk) => stdout.push(Buffer.from(chunk)));
+    child.stderr.on("data", (chunk) => stderr.push(Buffer.from(chunk)));
+    child.on("error", rejectEval);
+    child.on("exit", (code) => {
+      if (code === 0) resolveEval(Buffer.concat(stdout).toString("utf8").trim());
+      else rejectEval(new Error(`mongosh failed: ${Buffer.concat(stderr).toString("utf8").trim()}`));
+    });
+  });
+}
+
+async function startProjectLocalReplicaSet(port) {
+  const dbPath = resolve(REPO_ROOT, ".aegis-live-mongo");
+  await mkdir(dbPath, { recursive: true, mode: 0o700 });
+  start("live-evidence-mongo", "mongod", [
+    "--dbpath", dbPath,
+    "--port", String(port),
+    "--bind_ip", "127.0.0.1",
+    "--replSet", LIVE_REPLICA_SET,
+    "--nounixsocket",
+    "--logpath", resolve(dbPath, "mongod.log"),
+  ], env);
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      await mongoshEval(port, "db.runCommand({ping:1}).ok");
+      break;
+    } catch {
+      await new Promise((done) => setTimeout(done, 200));
+      if (attempt === 99) throw new Error("project-local MongoDB did not start");
+    }
+  }
+  // A second run sees an already-initialized set and leaves its stored evidence intact.
+  await mongoshEval(
+    port,
+    `try { rs.initiate({_id:'${LIVE_REPLICA_SET}',members:[{_id:0,host:'127.0.0.1:${port}'}]}) } catch (_) { }`,
+  );
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    try {
+      const text = await mongoshEval(
+        port,
+        "JSON.stringify({primary:db.hello().isWritablePrimary,setName:db.hello().setName})",
+      );
+      const hello = JSON.parse(text);
+      if (hello.primary === true && hello.setName === LIVE_REPLICA_SET) {
+        return {
+          dbPath,
+          uri: `mongodb://127.0.0.1:${port}/?replicaSet=${LIVE_REPLICA_SET}&directConnection=true`,
+        };
+      }
+    } catch {
+      // Replica set election remains in progress.
+    }
+    await new Promise((done) => setTimeout(done, 200));
+  }
+  throw new Error("project-local MongoDB did not become a writable replica-set primary");
+}
+
 const local = parseEnv(await readFile(resolve(REPO_ROOT, ".env.local"), "utf8"));
 const env = { ...process.env, ...local };
 if (env.AEGIS_EXECUTION_MODE !== "live") {
@@ -123,6 +187,7 @@ if (!liveAaCatalog) {
 }
 
 const apiPort = port(env, "AEGIS_API_PORT", "8100");
+const mongoPort = port(env, "AEGIS_LIVE_MONGO_PORT", "27028");
 const executorPort = port(env, "AEGIS_EXECUTOR_PORT", "8094");
 const gatewayPorts = {
   openai: port(env, "AEGIS_OPENAI_GATEWAY_PORT", "8091"),
@@ -149,12 +214,18 @@ function stop(signal = "SIGTERM") {
 }
 
 try {
+  // Do not mutate the user's existing standalone MongoDB. This project-local replica
+  // set persists the new live-payment evidence across restarts and supports the API's
+  // required atomic event transactions.
+  const liveMongo = await startProjectLocalReplicaSet(mongoPort);
   // The API owns MongoDB; these three children have only its internal evidence interface.
   start("evidence-api", "uv", [
     "run", "--project", "services/buyer-audit-api", "uvicorn", "buyer_audit_api.main:app",
     "--app-dir", "services/buyer-audit-api/src", "--host", "127.0.0.1", "--port", String(apiPort),
   ], {
     ...env,
+    MONGODB_URI: liveMongo.uri,
+    MONGODB_DATABASE: env.AEGIS_LIVE_MONGODB_DATABASE || "aegis_live_payment",
     COMMERCE_GATEWAY_URL: executorUrl,
     AEGIS_NETWORK: "eip155:84532",
   });
@@ -235,6 +306,7 @@ try {
     facilitator: facilitatorUrl.toString(),
     payer: buyerWalletAddress,
     token: env.PBLC_TOKEN_ADDRESS,
+    evidenceMongo: "project-local replica set",
     providerOutput: "mock",
     aaMode,
     note: "A PBLC transfer can occur only after a user submits one consented request.",

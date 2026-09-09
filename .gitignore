@@ -18,3 +18,4 @@ coverage/
 infra/contracts/out/
 infra/contracts/cache/
 .agent-coder-guard
+.aegis-live-mongo/
