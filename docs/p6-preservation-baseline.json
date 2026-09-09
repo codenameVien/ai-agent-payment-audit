@@ -1,0 +1,106 @@
+{
+  "cwd": "/Users/vien/MyProjects/PBL-coder",
+  "head": "d084388ca657a405be5b5a8299b88ca00e8c5ff0",
+  "files": [
+    {
+      "path": "packages/schemas/common/phase6-scenario-envelope.schema.json",
+      "sha256": "dd23f52b4119a145209eb7580386bbb1f17cedd31bd2e00ae7eb15faf84c55d7"
+    },
+    {
+      "path": "packages/schemas/domains/ai_inference/phase6-scenario.schema.json",
+      "sha256": "410cda78211d1bfde5950defd7376064b648138fd3ff9cfe62c648121b96486f"
+    },
+    {
+      "path": "scripts/validate_schemas.mjs",
+      "sha256": "9d2d2cce1b00806c8074171fafe4f16fc720518a9bd72170bb9dce3d60ee9b9b"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/composition.py",
+      "sha256": "5eb938eb5842248da513b4d7150e0d1078fe01ce0b2a6a6922d1b66441eed9fe"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/core/runtime_guard.py",
+      "sha256": "be1afa791fb2d83c9a7feadb3f0eca3d0ea4d86439269bf5eccffcb90f3d6ea5"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/main.py",
+      "sha256": "8f07d4c9cd19d656c6ab5437a28676afe49f6d4dfd241875d872234f26a9003c"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/__init__.py",
+      "sha256": "67820c3c7d5c0d3a634e8f0e2a467e80b40315b9b9d99b096b48adbdcfcc8184"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/catalog.py",
+      "sha256": "d017aebfd53d7d64a06f24547ccae78602a3c40664bd1af92408587b63cf0e68"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/composition.py",
+      "sha256": "85ac43198518ae8da177ebae5975e9410bd97e052b921904f4ec0a2fb5ec5f82"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/control.py",
+      "sha256": "7eb1ba55c247b18592b8b19e9d8025bb1f2065d5986c6e6ac7d36830b83b327a"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/injections.py",
+      "sha256": "c15a51690a6f4e648ec318c2d098fb87a0a6f6fda1e482ff80102676fe921970"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/main.py",
+      "sha256": "a434c904f883d6d3e745a30279ed3f093f5711dfb6da31131e0ca75f7a7500a4"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/models.py",
+      "sha256": "25b3af322419259de71a0b452a5912e49b872c400accde2f9f2cd69841968c07"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/mongo_guard.py",
+      "sha256": "a773ba1e789a1ca468ea0ade10acfd80705a6f9dbc21b175482aa63befb73791"
+    },
+    {
+      "path": "services/buyer-audit-api/src/buyer_audit_api/scenarios/repository.py",
+      "sha256": "51d32ffdf10db63d772a3cbb33b45f4854ac50e8dfd135a22708d3d6058c4b9b"
+    },
+    {
+      "path": "services/buyer-audit-api/tests/test_phase6_scenario_http.py",
+      "sha256": "d1a792881f39a139d683c5c4be173daefc6a086a14976262166e158ba9394315"
+    },
+    {
+      "path": "services/commerce-gateway/src/main.ts",
+      "sha256": "5154878b0389cb4245aba75495367305d668f90bd017a67b8decb490a49fcc11"
+    },
+    {
+      "path": "services/commerce-gateway/src/runtime-guard.ts",
+      "sha256": "286f57d067985dd5a4866461043a7d58611f4e0f97a670b50de5907215f8cf2d"
+    },
+    {
+      "path": "services/commerce-gateway/tests/support/local-ledger.ts",
+      "sha256": "6110461c83257ff3d1638730cfd2dfc0a1a866921584fedb2e3080261299302e"
+    },
+    {
+      "path": "services/seller-service/src/main.ts",
+      "sha256": "51734a469904c4c2cc9f70df14b9bdb872554ae38c3114e4720693a2f4614dff"
+    },
+    {
+      "path": "services/seller-service/src/runtime-guard.ts",
+      "sha256": "52ca4e70aae7c61024fbb9ed941a1ffb3d83d724e8e5469027bfaf28ebd5cb62"
+    },
+    {
+      "path": "services/seller-service/tests/phase6-scenario-server.test.ts",
+      "sha256": "17ca6e80d437312ff7413658ebae2cadc80b91523f35931e37c4ac1a3877e418"
+    },
+    {
+      "path": "services/seller-service/tests/runtime.test.ts",
+      "sha256": "1967bd1f6f8e98d683edb70ed9999a60bf7110f5a3046d8f17c2a0aa2aa13d17"
+    },
+    {
+      "path": "services/seller-service/tests/support/scenario-server.ts",
+      "sha256": "aa867da924b830045e6d712cf79ec630d1e59c7bc267cfcf4285302a5e8ca629"
+    },
+    {
+      "path": "tools/phase6-e2e/catalog/phase6.v1.json",
+      "sha256": "0bf73ba4691a7e0f712a79620b442874d3adb8e4403e4bac8b9a3f492eb0c2f3"
+    }
+  ]
+}
