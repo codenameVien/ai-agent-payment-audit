@@ -16,15 +16,17 @@
     "test:mongo": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests -m mongo",
     "test:mongo:local": "bash scripts/test_mongo_local.sh",
     "api": "uv run --project services/buyer-audit-api uvicorn buyer_audit_api.main:app --app-dir services/buyer-audit-api/src --env-file .env.local --reload",
+    "aegis:stack": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_local_stack.mjs",
+    "aegis:smoke": "npm run build --workspace @pbl/commerce-gateway && node --test scripts/aegis_local_smoke.test.mjs",
     "dashboard": "npm run dev --workspace @pbl/dashboard",
     "test:schemas": "node scripts/validate_schemas.mjs",
     "test:contracts": "forge test --root infra/contracts",
     "chain:v2:plan": "forge build --root infra/contracts && node scripts/pblc_v2_setup.mjs plan",
     "chain:v2:deploy": "forge build --root infra/contracts && node scripts/pblc_v2_setup.mjs deploy",
-    "smoke:erc3009:stack": "node scripts/run_erc3009_smoke_stack.mjs",
-    "erc8004:status": "node scripts/erc8004_setup.mjs status",
-    "erc8004:register": "node scripts/erc8004_setup.mjs register",
-    "smoke:x402": "uv run --project services/buyer-audit-api python scripts/run_x402_smoke.py"
+    "legacy:smoke:erc3009:stack": "node scripts/run_erc3009_smoke_stack.mjs",
+    "legacy:erc8004:status": "node scripts/erc8004_setup.mjs status",
+    "legacy:erc8004:register": "node scripts/erc8004_setup.mjs register",
+    "legacy:smoke:x402": "uv run --project services/buyer-audit-api python scripts/run_x402_smoke.py"
   },
   "engines": {
     "node": ">=20"

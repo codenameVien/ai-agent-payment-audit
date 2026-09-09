@@ -45,6 +45,10 @@ REPO_FIXTURE_DIR = (
     Path(__file__).resolve().parents[6] / "packages" / "schemas" / "fixtures" / "aa"
 )
 FIXTURE_CATALOG_PATH = REPO_FIXTURE_DIR / "model-catalog.fixture.json"
+#: The catalog the runnable local demo uses. Provider model identifiers are the exact
+#: published ids; the AA ids, prices and benchmark numbers behind them stay explicit
+#: synthetic fixture data and are recorded as `mappingProvenance=fixture`.
+RUNTIME_CATALOG_PATH = REPO_FIXTURE_DIR / "model-catalog.runtime.json"
 FIXTURE_PAGE_PATHS = (
     REPO_FIXTURE_DIR / "free-models-page-1.json",
     REPO_FIXTURE_DIR / "free-models-page-2.json",

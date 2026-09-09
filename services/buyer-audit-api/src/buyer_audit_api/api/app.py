@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import cast
+from typing import Any, cast
 
 import httpx
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response, status
@@ -16,6 +16,8 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from buyer_audit_api.api.schemas import (
     AegisDecisionEvidenceResponse,
+    AegisPaymentReservationResponse,
+    AegisPaymentTermsResponse,
     AuditAlertResponse,
     AuditFinalizeResponse,
     AuditFindingResponse,
@@ -30,6 +32,9 @@ from buyer_audit_api.api.schemas import (
     EventResponse,
     EvidenceHeadResponse,
     ExternalAnchorRequest,
+    InternalAegisDeliveryRequest,
+    InternalAegisFailureRequest,
+    InternalAegisSettlementRequest,
     InternalAuditFinalizeRequest,
     InternalConfirmMismatchRequest,
     InternalPaymentAuthorizeRequest,
@@ -76,6 +81,7 @@ from buyer_audit_api.api.schemas import (
 )
 from buyer_audit_api.composition import AppContainer
 from buyer_audit_api.core.aa_audit import is_aa_policy_request
+from buyer_audit_api.core.aegis_payment import AegisPaymentService, AegisPaymentTerms
 from buyer_audit_api.core.audit import (
     AuditReport,
     AuditReportReader,
@@ -123,6 +129,41 @@ from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecuti
 from buyer_audit_api.domains.ai_inference.models import NormalizedAiRequest
 
 SESSION_COOKIE = "pbl_session"
+
+#: Endpoints of the superseded Phase 6 runtime: signed-quote seller execution, the
+#: ERC-8004 reputation outbox, the Evidence Anchor and the independent receipt /
+#: Transfer / AuthorizationUsed reconciliation surface. The `aa-three-factor-v1`
+#: composition answers 404 for all of them, so nothing new can call them, while the
+#: stored evidence they produced stays readable through the ordinary read paths.
+_LEGACY_PAYMENT_INTENT_PATHS = frozenset(
+    {
+        "/internal/evidence/payment-intents/claim",
+        "/internal/evidence/payment-intents/settle",
+        "/internal/evidence/payment-intents/fail",
+        "/internal/evidence/payment-intents/reconciliation-transaction",
+        "/internal/evidence/payment-intents/reconciliation-checks",
+        "/internal/evidence/payment-intents/confirm-mismatch",
+        "/internal/evidence/payment-intents/reconcile-no-transfer",
+    }
+)
+_LEGACY_PURCHASE_SUFFIXES = frozenset(
+    {"payment-view", "external-anchors", "delivery", "delivery-stage", "finalize"}
+)
+
+
+def is_legacy_surface(path: str) -> bool:
+    """True for a Phase 6 endpoint the new composition does not serve."""
+    if path.startswith("/internal/evidence/seller-executions"):
+        return True
+    if path.startswith("/internal/evidence/reputation-outbox"):
+        return True
+    if path in _LEGACY_PAYMENT_INTENT_PATHS:
+        return True
+    if "/seller-quotes/" in path:
+        return True
+    return path.startswith("/internal/evidence/purchases/") and (
+        path.rsplit("/", 1)[-1] in _LEGACY_PURCHASE_SUFFIXES
+    )
 
 
 _REDACTED_KEYS = {
@@ -489,6 +530,24 @@ def create_app(container: AppContainer) -> FastAPI:
         repository=cast(PaymentRepository, container.repository),
         clock=container.clock,
     )
+    aegis_payments = AegisPaymentService(
+        repository=cast(PaymentRepository, container.repository),
+        clock=container.clock,
+        execution_mode=container.aegis_execution_mode,
+    )
+    # aa-three-factor-v1 runs as a single-user local demo: the owner identity is server
+    # configuration, never a browser-selected value, and SIWE is absent from this
+    # composition rather than hidden behind the UI. An empty value keeps the historical
+    # SIWE login surface for reading PBLC history.
+    local_owner = (container.local_owner_address or "").strip().lower()
+    allowed_origins = frozenset(
+        origin.strip().lower().rstrip("/")
+        for origin in container.local_allowed_origins
+        if origin.strip()
+    )
+    allowed_hosts = frozenset(
+        host.strip().lower() for host in container.local_allowed_hosts if host.strip()
+    )
     audit_service = AuditService(
         repository=cast(AuditRepository, container.repository),
         clock=container.clock,
@@ -501,6 +560,36 @@ def create_app(container: AppContainer) -> FastAPI:
         await container.repository.close()
 
     app = FastAPI(title="Buyer Agent & Audit Evidence API", version="0.1.0", lifespan=lifespan)
+
+    if local_owner:
+        # No CORS middleware is installed, so no wildcard and no reflected origin exists.
+        # This guard additionally refuses a foreign Host (DNS rebinding) and any browser
+        # request that declares a cross-site fetch, so a page on another origin cannot
+        # drive the local owner's purchases even with credentials attached.
+        @app.middleware("http")
+        async def local_boundary(
+            request: Request, call_next: Any
+        ) -> Response:
+            host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+            if host and host not in allowed_hosts:
+                return JSONResponse(status_code=403, content={"detail": "host not allowed"})
+            origin = request.headers.get("origin")
+            if origin is not None and origin.strip().lower().rstrip("/") not in allowed_origins:
+                return JSONResponse(status_code=403, content={"detail": "origin not allowed"})
+            fetch_site = (request.headers.get("sec-fetch-site") or "").strip().lower()
+            if fetch_site and fetch_site not in {"same-origin", "none"}:
+                return JSONResponse(
+                    status_code=403, content={"detail": "cross-site request refused"}
+                )
+            if is_legacy_surface(request.url.path):
+                return JSONResponse(
+                    status_code=404,
+                    content={
+                        "detail": "endpoint is not part of the aa-three-factor-v1 runtime"
+                    },
+                )
+            response: Response = await call_next(request)
+            return response
 
     @app.exception_handler(EvidenceIntegrityError)
     async def evidence_integrity_handler(
@@ -532,6 +621,9 @@ def create_app(container: AppContainer) -> FastAPI:
         return events
 
     def require_owner(token: str | None) -> str:
+        if local_owner:
+            # The demo has exactly one owner. A cookie cannot select a different one.
+            return local_owner
         if token is None:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED)
         try:
@@ -1806,40 +1898,44 @@ def create_app(container: AppContainer) -> FastAPI:
                 )
         return sorted(agents.values(), key=lambda item: item.seller_agent_id)
 
-    @app.post("/auth/siwe/challenge", response_model=ChallengeResponse)
-    async def challenge(body: ChallengeRequest) -> ChallengeResponse:
-        try:
-            issued = await container.auth_service.create_challenge(body.owner_address)
-        except AuthenticationError as exc:
-            raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return ChallengeResponse(
-            owner_address=issued.owner_address,
-            nonce=issued.nonce,
-            message=issued.message,
-            expires_at=issued.expires_at,
-        )
+    if not local_owner:
+        # Historical login surface. The `aa-three-factor-v1` composition never registers
+        # it, so a new deployment has no SIWE endpoint to call rather than a hidden one.
 
-    @app.post("/auth/siwe/verify", status_code=status.HTTP_204_NO_CONTENT)
-    async def verify(body: VerifyRequest, response: Response) -> None:
-        try:
-            token = await container.auth_service.verify_and_create_session(
-                message=body.message,
-                signature=body.signature,
+        @app.post("/auth/siwe/challenge", response_model=ChallengeResponse)
+        async def challenge(body: ChallengeRequest) -> ChallengeResponse:
+            try:
+                issued = await container.auth_service.create_challenge(body.owner_address)
+            except AuthenticationError as exc:
+                raise HTTPException(status_code=422, detail=str(exc)) from exc
+            return ChallengeResponse(
+                owner_address=issued.owner_address,
+                nonce=issued.nonce,
+                message=issued.message,
+                expires_at=issued.expires_at,
             )
-        except AuthenticationError as exc:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=str(exc),
-            ) from exc
-        response.set_cookie(
-            key=SESSION_COOKIE,
-            value=token,
-            httponly=True,
-            secure=container.cookie_secure,
-            samesite="lax",
-            max_age=8 * 60 * 60,
-            path="/",
-        )
+
+        @app.post("/auth/siwe/verify", status_code=status.HTTP_204_NO_CONTENT)
+        async def verify(body: VerifyRequest, response: Response) -> None:
+            try:
+                token = await container.auth_service.verify_and_create_session(
+                    message=body.message,
+                    signature=body.signature,
+                )
+            except AuthenticationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail=str(exc),
+                ) from exc
+            response.set_cookie(
+                key=SESSION_COOKIE,
+                value=token,
+                httponly=True,
+                secure=container.cookie_secure,
+                samesite="lax",
+                max_age=8 * 60 * 60,
+                path="/",
+            )
 
     @app.get("/auth/me", response_model=MeResponse)
     async def me(pbl_session: str | None = Cookie(default=None)) -> MeResponse:
@@ -1998,6 +2094,163 @@ def create_app(container: AppContainer) -> FastAPI:
             snapshot_event_hash=str(bundle["snapshotEventHash"]),
             snapshot_hash=str(bundle["snapshotHash"]),
         )
+
+    def aegis_terms_response(terms: AegisPaymentTerms) -> AegisPaymentTermsResponse:
+        return AegisPaymentTermsResponse(
+            purchase_id=terms.purchase_id,
+            amount_units=terms.amount_units,
+            budget_units=terms.budget_units,
+            decision_event_hash=terms.decision_event_hash,
+            snapshot_hash=terms.snapshot_hash,
+            terms_binding_hash=terms.terms_binding_hash,
+            provider_id=terms.provider_id,
+            provider_model_id=terms.provider_model_id,
+            model_version=terms.model_version,
+            recipient=terms.recipient,
+            token=terms.token,
+        )
+
+    @app.get(
+        "/internal/evidence/aegis/purchases/{purchase_id}/payment-terms",
+        response_model=AegisPaymentTermsResponse,
+    )
+    async def aegis_payment_terms(
+        purchase_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> AegisPaymentTermsResponse:
+        """Server-derived terms. The Provider Gateway recomputes its 402 from these."""
+        require_internal(authorization)
+        try:
+            return aegis_terms_response(await aegis_payments.terms(purchase_id))
+        except PaymentEvidenceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PaymentPolicyError, PaymentConflictError) as exc:
+            raise payment_error(exc) from exc
+
+    @app.post(
+        "/internal/evidence/aegis/payments/reserve",
+        response_model=AegisPaymentReservationResponse,
+    )
+    async def reserve_aegis_payment(
+        body: InternalPaymentClaimRequest,
+        authorization: str | None = Header(default=None),
+    ) -> AegisPaymentReservationResponse:
+        """One durable attempt per purchaseId, amount and recipient recomputed here."""
+        require_internal(authorization)
+        try:
+            terms, intent = await aegis_payments.reserve(body.purchase_id)
+        except PaymentEvidenceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PaymentPolicyError, PaymentConflictError, EvidenceTransitionError) as exc:
+            raise payment_error(exc) from exc
+        return AegisPaymentReservationResponse(
+            terms=aegis_terms_response(terms),
+            intent=_payment_intent_response(intent),
+        )
+
+    @app.post(
+        "/internal/evidence/aegis/payments/settle",
+        response_model=PaymentIntentResponse,
+    )
+    async def settle_aegis_payment(
+        body: InternalAegisSettlementRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        """The Facilitator answer is the payment status basis, not a chain verification."""
+        require_internal(authorization)
+        try:
+            intent = await aegis_payments.settle(
+                purchase_id=body.purchase_id,
+                facilitator_transaction=body.facilitator_transaction,
+                facilitator_network=body.facilitator_network,
+                facilitator_payer=body.facilitator_payer,
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceTransitionError,
+        ) as exc:
+            raise payment_error(exc) from exc
+        return _payment_intent_response(intent)
+
+    @app.post(
+        "/internal/evidence/aegis/payments/fail",
+        response_model=PaymentIntentResponse,
+    )
+    async def fail_aegis_payment(
+        body: InternalAegisFailureRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        require_internal(authorization)
+        try:
+            intent = await aegis_payments.fail(
+                purchase_id=body.purchase_id,
+                reason=body.reason,
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceTransitionError,
+        ) as exc:
+            raise payment_error(exc) from exc
+        return _payment_intent_response(intent)
+
+    @app.post(
+        "/internal/evidence/aegis/purchases/{purchase_id}/delivery",
+        response_model=EventResponse,
+    )
+    async def record_aegis_delivery(
+        purchase_id: str,
+        body: InternalAegisDeliveryRequest,
+        authorization: str | None = Header(default=None),
+    ) -> EventResponse:
+        """Delivery is only recordable against the settled, decided model identity."""
+        require_internal(authorization)
+        try:
+            terms, _, events = await aegis_payments.delivery_context(purchase_id)
+        except PaymentEvidenceError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except (PaymentPolicyError, PaymentConflictError) as exc:
+            raise payment_error(exc) from exc
+        if (
+            body.provider_id != terms.provider_id
+            or body.provider_model_id != terms.provider_model_id
+            or body.model_version != terms.model_version
+        ):
+            raise HTTPException(
+                status_code=409, detail="delivery does not match the selected model"
+            )
+        payload: JsonObject = {
+            "executionMode": aegis_payments.execution_mode,
+            "modelId": body.provider_model_id,
+            "modelVersion": body.model_version,
+            "observedExecutionMs": body.observed_execution_ms,
+            "providerId": body.provider_id,
+            "responseHash": body.response_hash,
+            "responseId": body.response_id,
+            "termsBindingHash": terms.terms_binding_hash,
+        }
+        existing = [event for event in events if event.type == EventType.DELIVERED]
+        if existing:
+            if len(existing) == 1 and existing[0].payload == payload:
+                return _event_response(existing[0])
+            raise HTTPException(status_code=409, detail="different delivery already recorded")
+        try:
+            event = await container.repository.append_event(
+                purchase_id=purchase_id,
+                event_type=EventType.DELIVERED,
+                occurred_at=container.clock.now(),
+                actor={"id": f"{body.provider_id}-provider-gateway", "type": "service"},
+                payload=payload,
+                evidence_refs=(terms.terms_binding_hash, body.response_hash),
+                expected_event_count=len(events),
+                expected_head_event_hash=events[-1].event_hash,
+            )
+        except EvidenceTransitionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return _event_response(event)
 
     @app.post("/purchases/{purchase_id}/run", response_model=PurchaseRunResponse)
     async def run_purchase(

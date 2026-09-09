@@ -25,6 +25,7 @@ from enum import StrEnum
 from fractions import Fraction
 from typing import Literal
 
+from buyer_audit_api.core.hashing import sha256_json
 from buyer_audit_api.core.models import JsonObject
 
 AaScoringPolicyVersion = Literal["aa-three-factor-v1"]
@@ -533,3 +534,36 @@ def rejection_reasons(
     if allowed and provider_id.strip().lower() not in allowed:
         reasons.append(FilterReason.PROVIDER_NOT_ALLOWED.value)
     return tuple(reasons)
+
+
+def terms_binding_hash(
+    *,
+    purchase_id: str,
+    snapshot_hash: str,
+    provider_id: str,
+    provider_model_id: str,
+    model_version: str,
+    amount_units: int,
+    recipient: str,
+    token: JsonObject,
+) -> str:
+    """The single hash a 402 challenge and the signing module both bind themselves to.
+
+    It lives here because three independent readers must derive the identical value from
+    stored evidence: the buyer decision, the Provider Gateway that issues the challenge
+    and the payment execution module that signs it. A second definition of this envelope
+    would let one of them accept terms the others never agreed to.
+    """
+    return sha256_json(
+        {
+            "amountUnits": amount_units,
+            "modelVersion": model_version,
+            "providerId": provider_id,
+            "providerModelId": provider_model_id,
+            "purchaseId": purchase_id,
+            "recipient": recipient,
+            "scoringPolicyVersion": AA_SCORING_POLICY_VERSION,
+            "snapshotHash": snapshot_hash,
+            "token": token,
+        }
+    )

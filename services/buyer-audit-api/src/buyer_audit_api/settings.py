@@ -37,3 +37,12 @@ class Settings(BaseSettings):
     # recorded as such in evidence; it is never presented as a live token address.
     aegis_token_address: str = "0x0000000000000000000000000000000000000000"
     aegis_token_status: str = "prepared"
+    # Single-user local demo identity. This is server configuration, not a login: the
+    # browser can never choose it. Clearing it restores the historical SIWE composition
+    # for reading PBLC history, and that legacy mode is manual only.
+    aegis_local_owner_address: str = "0x00000000000000000000000000000000000a6e15"
+    aegis_local_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
+    aegis_local_allowed_hosts: str = "localhost,127.0.0.1"
+    # Mock providers and a Mock Facilitator are the only execution this runtime performs.
+    # The mode is recorded from here, so no client can present mock evidence as live.
+    aegis_execution_mode: str = "mock"

@@ -571,7 +571,7 @@ class InMemoryEvidenceRepository:
                     raise PaymentConflictError("confirmed outflow is already recorded")
             if event_type == EventType.PAYMENT_SETTLED:
                 transaction_hash = payload.get("transactionHash")
-                if any(
+                if isinstance(transaction_hash, str) and any(
                     prior.payload.get("transactionHash") == transaction_hash
                     for events in self._events.values()
                     for prior in events

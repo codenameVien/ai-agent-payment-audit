@@ -48,6 +48,7 @@ from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
 from buyer_audit_api.domains.ai_inference.aa_catalog import (
     FIXTURE_CATALOG_PATH,
     FIXTURE_PAGE_PATHS,
+    RUNTIME_CATALOG_PATH,
     AaFieldPaths,
     load_model_catalog,
 )
@@ -94,6 +95,12 @@ class AppContainer:
     cookie_secure: bool
     internal_service_token: str = "test-internal-token"
     admin_service_token: str = "test-admin-token"
+    #: Fixed single-user demo owner. Empty means the historical SIWE composition.
+    local_owner_address: str | None = None
+    local_allowed_origins: tuple[str, ...] = ()
+    local_allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1")
+    #: Server-fixed settlement execution mode. A request can never label its own record.
+    aegis_execution_mode: str = "mock"
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     aegis_workflow: AegisDecisionWorkflow | None = None
@@ -135,43 +142,14 @@ def build_aa_capture_source(
     )
 
 
-def build_container(settings: Settings) -> AppContainer:
-    clock = SystemClock()
-    repository = MongoEvidenceRepository(
-        uri=settings.mongodb_uri,
-        database=settings.mongodb_database,
-    )
-    cipher = LocalEnvelopeCipher(
-        master_key=decode_key(
-            settings.payload_master_key_base64,
-            name="PAYLOAD_MASTER_KEY_BASE64",
-        )
-    )
-    session_codec = SessionCodec(
-        decode_key(settings.session_secret_base64, name="SESSION_SECRET_BASE64")
-    )
-    auth_service = AuthService(
-        repository=repository,
-        verifier=PythonSiweVerifier(),
-        session_codec=session_codec,
-        clock=clock,
-        domain=settings.siwe_domain,
-        uri=settings.siwe_uri,
-        chain_id=settings.siwe_chain_id,
-    )
-    purchase_service = PurchaseService(
-        repository=repository,
-        cipher=cipher,
-        domains=DomainRegistry(
-            [
-                AiInferenceDomainModule(
-                    default_max_output_tokens=settings.aegis_max_output_tokens,
-                    system_prompt=settings.aegis_system_prompt,
-                )
-            ]
-        ),
-        clock=clock,
-    )
+def build_legacy_workflow(
+    settings: Settings, repository: MongoEvidenceRepository, clock: Clock
+) -> AiInferenceDecisionWorkflow:
+    """The superseded signed-quote negotiation workflow, kept for the legacy composition.
+
+    `aa-three-factor-v1` never builds it, so no seller quote client, ERC-8004 identity
+    verifier or reputation query client exists in the new runtime to be called.
+    """
     try:
         seller_routes = json.loads(settings.seller_routes_json)
     except json.JSONDecodeError as exc:
@@ -224,7 +202,7 @@ def build_container(settings: Settings) -> AppContainer:
         registry_address=BASE_SEPOLIA_REPUTATION_REGISTRY,
         trusted_clients=parse_feedback_clients(os.environ.get(FEEDBACK_CLIENTS_ENV)),
     )
-    workflow = AiInferenceDecisionWorkflow(
+    return AiInferenceDecisionWorkflow(
         repository=repository,
         clock=clock,
         benchmarks=benchmarks,
@@ -245,10 +223,55 @@ def build_container(settings: Settings) -> AppContainer:
         explanation=DeterministicExplanationAdapter(),
         reputation=reputation_provider,
     )
+
+
+def build_container(settings: Settings) -> AppContainer:
+    clock = SystemClock()
+    # aa-three-factor-v1 default: a single local owner, mock providers and a mock
+    # Facilitator. Every live chain reader and the superseded negotiation workflow are
+    # left unconstructed, so this composition cannot reach an RPC, ERC-8004 or an
+    # Evidence Anchor even by accident.
+    local_owner = settings.aegis_local_owner_address.strip().lower()
+    repository = MongoEvidenceRepository(
+        uri=settings.mongodb_uri,
+        database=settings.mongodb_database,
+    )
+    cipher = LocalEnvelopeCipher(
+        master_key=decode_key(
+            settings.payload_master_key_base64,
+            name="PAYLOAD_MASTER_KEY_BASE64",
+        )
+    )
+    session_codec = SessionCodec(
+        decode_key(settings.session_secret_base64, name="SESSION_SECRET_BASE64")
+    )
+    auth_service = AuthService(
+        repository=repository,
+        verifier=PythonSiweVerifier(),
+        session_codec=session_codec,
+        clock=clock,
+        domain=settings.siwe_domain,
+        uri=settings.siwe_uri,
+        chain_id=settings.siwe_chain_id,
+    )
+    purchase_service = PurchaseService(
+        repository=repository,
+        cipher=cipher,
+        domains=DomainRegistry(
+            [
+                AiInferenceDomainModule(
+                    default_max_output_tokens=settings.aegis_max_output_tokens,
+                    system_prompt=settings.aegis_system_prompt,
+                )
+            ]
+        ),
+        clock=clock,
+    )
+    workflow = None if local_owner else build_legacy_workflow(settings, repository, clock)
     catalog = (
         load_model_catalog(Path(settings.aegis_model_catalog_path))
         if settings.aegis_model_catalog_path
-        else load_model_catalog(FIXTURE_CATALOG_PATH)
+        else load_model_catalog(RUNTIME_CATALOG_PATH if local_owner else FIXTURE_CATALOG_PATH)
     )
     aegis_workflow = AegisDecisionWorkflow(
         repository=repository,
@@ -273,12 +296,20 @@ def build_container(settings: Settings) -> AppContainer:
         cookie_secure=settings.cookie_secure,
         internal_service_token=settings.internal_service_token,
         admin_service_token=settings.admin_service_token,
+        local_owner_address=local_owner or None,
+        local_allowed_origins=tuple(
+            item.strip() for item in settings.aegis_local_allowed_origins.split(",")
+        ),
+        local_allowed_hosts=tuple(
+            item.strip() for item in settings.aegis_local_allowed_hosts.split(",")
+        ),
+        aegis_execution_mode=settings.aegis_execution_mode,
         token_balance_reader=(
             JsonRpcTokenBalanceReader(settings.base_sepolia_rpc_url)
-            if settings.base_sepolia_rpc_url
+            if settings.base_sepolia_rpc_url and not local_owner
             else None
         ),
-        ai_inference_workflow=workflow,
+        ai_inference_workflow=None if local_owner else workflow,
         aegis_workflow=aegis_workflow,
         aegis_evidence_reader=AegisEvidenceReader(repository=repository),
         commerce_gateway=HttpCommerceGatewayClient(
@@ -287,13 +318,17 @@ def build_container(settings: Settings) -> AppContainer:
         ),
         # The Mongo repository implements the reputation outbox, the snapshot store and
         # the atomic terminal orchestration, so one durable store owns all three.
-        terminal_coordinator=TerminalAuditCoordinator(
-            orchestration=repository,
-            outbox=repository,
-            clock=clock,
-            chain_id=BASE_SEPOLIA_CHAIN_ID,
-            registry_address=BASE_SEPOLIA_REPUTATION_REGISTRY,
+        terminal_coordinator=(
+            None
+            if local_owner
+            else TerminalAuditCoordinator(
+                orchestration=repository,
+                outbox=repository,
+                clock=clock,
+                chain_id=BASE_SEPOLIA_CHAIN_ID,
+                registry_address=BASE_SEPOLIA_REPUTATION_REGISTRY,
+            )
         ),
-        reputation_outbox=repository,
-        reputation_snapshots=repository,
+        reputation_outbox=None if local_owner else repository,
+        reputation_snapshots=None if local_owner else repository,
     )

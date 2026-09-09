@@ -32,12 +32,15 @@ from buyer_audit_api.core.aa_policy import (
     decimal_text,
     require_finite_decimal,
 )
+from buyer_audit_api.core.aa_policy import (
+    terms_binding_hash as policy_terms_binding_hash,
+)
 from buyer_audit_api.core.documents import (
     DOCUMENT_HASH_ALGORITHM,
     DOCUMENT_HASH_ENCODING,
 )
 from buyer_audit_api.core.errors import ExternalEvidenceError
-from buyer_audit_api.core.hashing import sha256_json, utc_iso
+from buyer_audit_api.core.hashing import utc_iso
 from buyer_audit_api.core.models import JsonObject
 
 AA_SNAPSHOT_DOCUMENT_KIND = "aaSnapshot"
@@ -516,18 +519,15 @@ def terms_binding_hash(
     token: TokenIdentity,
 ) -> str:
     """The single hash a 402 challenge and the signing module both bind themselves to."""
-    return sha256_json(
-        {
-            "amountUnits": winner.amount_units,
-            "modelVersion": winner.entry.model_version,
-            "providerId": winner.entry.provider_id,
-            "providerModelId": winner.entry.provider_model_id,
-            "purchaseId": purchase_id,
-            "recipient": winner.entry.recipient,
-            "scoringPolicyVersion": AA_SCORING_POLICY_VERSION,
-            "snapshotHash": snapshot_hash,
-            "token": token.to_payload(),
-        }
+    return policy_terms_binding_hash(
+        purchase_id=purchase_id,
+        snapshot_hash=snapshot_hash,
+        provider_id=winner.entry.provider_id,
+        provider_model_id=winner.entry.provider_model_id,
+        model_version=winner.entry.model_version,
+        amount_units=winner.amount_units,
+        recipient=winner.entry.recipient,
+        token=token.to_payload(),
     )
 
 

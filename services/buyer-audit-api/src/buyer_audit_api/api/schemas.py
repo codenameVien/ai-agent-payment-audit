@@ -804,3 +804,61 @@ class AegisDecisionEvidenceResponse(BaseModel):
     snapshot: JsonObject
     snapshot_event_hash: str = Field(pattern=SHA256_REGEX)
     snapshot_hash: str = Field(pattern=SHA256_REGEX)
+
+
+class AegisPaymentTermsResponse(BaseModel):
+    """The immutable terms a 402 challenge and an ERC-3009 signature must reproduce."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    purchase_id: str
+    amount_units: int = Field(ge=0)
+    budget_units: int = Field(ge=0)
+    decision_event_hash: str = Field(pattern=SHA256_REGEX)
+    snapshot_hash: str = Field(pattern=SHA256_REGEX)
+    terms_binding_hash: str = Field(pattern=SHA256_REGEX)
+    provider_id: str
+    provider_model_id: str
+    model_version: str
+    recipient: str
+    token: JsonObject
+
+
+class AegisPaymentReservationResponse(BaseModel):
+    """One durable attempt per purchase: the terms plus the intent that reserved it."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    terms: AegisPaymentTermsResponse
+    intent: PaymentIntentResponse
+
+
+class InternalAegisSettlementRequest(BaseModel):
+    """A Facilitator success answer. It is a status basis, never a chain verification."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    purchase_id: str = Field(min_length=1)
+    facilitator_transaction: str = Field(min_length=1)
+    facilitator_network: str = Field(min_length=1)
+    facilitator_payer: str = Field(min_length=1)
+
+
+class InternalAegisFailureRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    purchase_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
+
+
+class InternalAegisDeliveryRequest(BaseModel):
+    """The delivered Mock provider result, checked against the selected model."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    provider_id: str = Field(min_length=1)
+    provider_model_id: str = Field(min_length=1)
+    model_version: str = Field(min_length=1)
+    response_id: str = Field(min_length=1)
+    response_hash: str = Field(pattern=SHA256_REGEX)
+    observed_execution_ms: int = Field(ge=0)
