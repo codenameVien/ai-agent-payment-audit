@@ -38,3 +38,30 @@ RPC, 서명, 브로드캐스트를 읽거나 사용하지 않는다. `1,000,000 
 4. 실제 x402 Facilitator의 custom PBLC `exact + eip3009` verify/settle 수락 계획
 
 위 네 값을 제시한 뒤에만 사용자가 별도로 승인할 수 있다. 이 문서는 승인 자체가 아니다.
+
+## 실제 배포 승인 후의 로컬 입력 및 실행
+
+사용자 승인은 받았지만 개인키는 채팅에 입력하지 않는다. 먼저 아래 명령을 **사용자 터미널**에서
+실행해 `PBLC_USER_ADDRESS`와 일치하는 MetaMask 키를 숨김 입력으로 저장한다.
+
+```bash
+cd /Users/vien/MyProjects/PBL-aegis
+bash scripts/set_pblc_user_wallet_key.sh
+```
+
+그 다음 공개 정보만 다시 확인한다.
+
+```bash
+node scripts/pblc_user_token_deploy.mjs plan
+```
+
+`deployerOwnerInitialHolder`, `predictedTokenAddress`, `nativeBalanceEth`를 확인한 후에만 아래 명령이
+배포와 constructor 초기 mint를 한 번 수행한다. 성공 출력의 `contractAddress`가 새 PBLC 주소다.
+
+```bash
+PBLC_USER_TOKEN_DEPLOY_APPROVED=yes npm run pblc:user-token:deploy
+```
+
+이 명령은 기존 PBLC V2를 수정하거나 기존 자산을 이동하지 않는다. 배포 뒤 x402 custom-token
+verify/settle과 0.1 PBLC smoke 전송은 별도의 다음 단계이며, 새 계약 주소와 Facilitator 수락 여부를
+확인한 뒤 진행한다.
