@@ -349,6 +349,13 @@
 - 실제 x402 Facilitator verify/settle, seller 지급 전송, Provider API 호출, AWS 배포는 수행하지 않았다.
 - 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.
 
+## 2026-09-10 — `/request` 실제 PBLC 결제 실행 경로 준비
+
+- 사용자 방향전환: 기본 Mock 데모는 유지하되, 선택된 모델의 고정 가격을 사용자의 PBLC로 실제 Base Sepolia에서 결제할 수 있게 한다. Provider 응답은 계속 Mock이며 유료 Provider API와 AWS 배포는 진행하지 않는다.
+- `AEGIS_EXECUTION_MODE=live`와 `AEGIS_REAL_PAYMENT_APPROVED=yes`를 모두 요구하고, 결제 실행 모듈이 `PBLC_USER_PRIVATE_KEY`로부터 유도한 주소가 `PBLC_USER_ADDRESS`와 일치할 때만 시작하게 했다. 브라우저가 모드를 지정하거나 개인키를 받지 않는다.
+- 실제 제출은 `/request`의 실행 동의 뒤에만 외부 Facilitator `/verify`·`/settle`로 요청한다. 기본 x402.org Facilitator의 Base Sepolia exact 지원은 사전점검하지만, 사용자 정의 PBLC 수락 여부는 첫 승인된 요청의 외부 결과로만 확인된다.
+- 이 준비 변경에서는 live verify/settle, seller Transfer, 유료 Provider 호출, AWS 배포를 실행하지 않았다. 절차와 모델별 고정 가격은 [실제 PBLC 요청 흐름](../docs/LIVE_PBLC_REQUEST_FLOW.md)을 단일 운영 참고로 둔다.
+
 ## 2026-09-10 — 로컬 Mock 판매자 수신 지갑 매핑
 
 - 사용자가 정한 새 수신 지갑을 local runtime catalog에 적용했다: OpenAI→seller1, Anthropic→seller2, Google→seller3. 기존 기록은 변경하지 않고, 이후 Mock 실행의 결제 조건만 이 주소를 가리킨다.

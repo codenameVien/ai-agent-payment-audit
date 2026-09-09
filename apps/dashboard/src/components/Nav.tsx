@@ -7,7 +7,7 @@ export function Nav() {
     <header className="topbar">
       <Link className="brand" href="/" aria-label="감사 대시보드 홈">
         <span className="brandMark">A</span>
-        <span><strong>Agent Audit</strong><small>x402 exact · 모의 정산</small></span>
+        <span><strong>Agent Audit</strong><small>x402 exact · 결제 모드는 요청 화면에서 확인</small></span>
       </Link>
       <nav aria-label="주요 메뉴">
         <Link href="/">개요</Link>

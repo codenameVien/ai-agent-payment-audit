@@ -32,10 +32,12 @@ test("the request posts an aegis-aa-v1 body and omits priority when it is automa
   assert.match(source, /input\.priority === null \? \{\} : \{ priority: input\.priority \}/);
   assert.match(source, /priority === "auto" \? null : priority/);
   assert.match(source, /policy: \{\}/);
-  assert.match(source, /1 AEGIS 이하/);
+  assert.match(source, /1 PBLC 이하여야 합니다/);
   // The new surface never asks for a SIWE login and never sends the user to MetaMask.
   assert.doesNotMatch(source, /MetaMask|\/login|siwe/i);
-  assert.match(source, /Mock Provider · Mock Facilitator/);
+  assert.match(source, /실제 PBLC 결제 · Mock Provider/);
+  assert.match(source, /실제 x402 Facilitator 정산/);
+  assert.match(source, /실제 Base Sepolia PBLC를 한 번 전송할 수 있으며/);
 });
 
 test("the request surface only ever writes its own aegis pending key", async () => {

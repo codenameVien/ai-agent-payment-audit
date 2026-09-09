@@ -22,6 +22,7 @@ const DEFAULT_PROMPT = "사용자 요구에 가장 적합한 AI 모델을 선택
 const PBLC_UNITS_PER_TOKEN = 1_000_000;
 
 type Phase = "ready" | "invalid" | "creating" | "running";
+type RuntimeMode = "checking" | "mock" | "live" | "unavailable";
 
 function toBudgetUnits(value: FormDataEntryValue | null): number | null {
   const text = String(value ?? "").trim();
@@ -50,6 +51,7 @@ export function PurchaseRequest() {
   const [phase, setPhase] = useState<Phase>("ready");
   const [pending, setPending] = useState<PendingResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("checking");
 
   const resolvePending = useCallback(async () => {
     // The stored id is only trusted after a public detail GET proves what it is. Keys
@@ -63,6 +65,18 @@ export function PurchaseRequest() {
   useEffect(() => {
     void resolvePending();
   }, [resolvePending]);
+
+  useEffect(() => {
+    let active = true;
+    void api<{ execution_mode?: unknown }>("/health")
+      .then((health) => {
+        if (active) setRuntimeMode(health.execution_mode === "live" ? "live" : "mock");
+      })
+      .catch(() => {
+        if (active) setRuntimeMode("unavailable");
+      });
+    return () => { active = false; };
+  }, []);
 
   const busy = phase === "creating" || phase === "running";
   const checking = pending === null;
@@ -165,7 +179,15 @@ export function PurchaseRequest() {
             <p className="eyebrow">PURCHASE REQUEST</p>
             <h2>AI 구매 요청</h2>
           </div>
-          <span className="badge caution">Mock 실행 · PBLC V2 조건</span>
+          <span className={`badge ${runtimeMode === "live" ? "normal" : "caution"}`}>
+            {runtimeMode === "live"
+              ? "실제 PBLC 결제 · Mock Provider"
+              : runtimeMode === "checking"
+                ? "결제 모드 확인 중"
+                : runtimeMode === "unavailable"
+                  ? "결제 모드 확인 불가"
+                  : "Mock 결제 · PBLC V2 조건"}
+          </span>
         </div>
 
         <form className="experimentForm" onSubmit={run}>
@@ -202,7 +224,7 @@ export function PurchaseRequest() {
           <div className="experimentTerms" aria-label="구매 실행 조건">
             <div><span>구매 주체</span><strong>구매 에이전트</strong></div>
             <div><span>결제 자산</span><strong>PBLC · 표준 작업 최대 8,000 출력 토큰 기준</strong></div>
-            <div><span>실행·정산</span><strong>Mock Provider · Mock Facilitator</strong></div>
+            <div><span>실행·정산</span><strong>{runtimeMode === "live" ? "Mock Provider · 실제 x402 Facilitator 정산" : "Mock Provider · Mock Facilitator"}</strong></div>
             <div><span>감사 범위</span><strong>선택 · 결제 · 전달</strong></div>
           </div>
 
@@ -211,8 +233,10 @@ export function PurchaseRequest() {
             <span>
               구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
               ERC-3009 승인으로 한 번만 요청하고, 판단·결제·감사 증거를 같은 purchaseId로
-              기록하는 것을 확인했습니다. 제공자 호출과 정산은 모의 구성이며 실제 테스트넷 토큰
-              전송은 실행하지 않습니다.
+              기록하는 것을 확인했습니다. 서버가 <strong>실제 결제 모드</strong>로 구성된 경우에는
+              이 실행이 선택된 판매자 지갑에 실제 Base Sepolia PBLC를 한 번 전송할 수 있으며,
+              Provider 응답은 계속 모의 실행으로 표시됩니다. Mock 결제 모드에서는 토큰을 전송하지
+              않습니다.
             </span>
           </label>
 
@@ -293,8 +317,8 @@ export function PurchaseRequest() {
           <li><span><strong>요청 정규화</strong><small>예산과 우선순위를 확정하고 분류 근거를 남깁니다.</small></span></li>
           <li><span><strong>AA 스냅샷 캡처</strong><small>명시적으로 매핑된 모델의 가격·완료시간·성능을 그대로 저장합니다.</small></span></li>
           <li><span><strong>3요소 비교·선택</strong><small>하드 필터 뒤 고정 가중치로 점수를 계산하고 후보와 제외 사유를 기록합니다.</small></span></li>
-          <li><span><strong>정확히 한 번 결제</strong><small>결제 실행 모듈이 고정 금액을 서명하고 Facilitator 응답을 상태 근거로 기록합니다.</small></span></li>
-          <li><span><strong>결과·감사 반환</strong><small>모의 실행 응답과 감사 결과를 읽기 전용 대시보드에 연결합니다.</small></span></li>
+          <li><span><strong>정확히 한 번 결제</strong><small>결제 실행 모듈이 고정 금액을 서명하고, 실제 모드에서는 Facilitator가 정산합니다.</small></span></li>
+          <li><span><strong>결과·감사 반환</strong><small>Mock Provider 응답과 결제·감사 결과를 읽기 전용 대시보드에 연결합니다.</small></span></li>
         </ol>
         <p className="panelNote">이 페이지는 구매 요청 전용입니다. 거래 조회와 감사는 대시보드에서 수행합니다.</p>
       </aside>

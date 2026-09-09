@@ -16,7 +16,7 @@ import { AegisEvidenceClient } from "../src/aegis/evidence-client.js";
 import { MockFacilitator } from "../src/aegis/facilitator.js";
 import { AegisPaymentExecutor } from "../src/aegis/payment-executor.js";
 import { ProviderGateway } from "../src/aegis/provider-gateway.js";
-import { mockProviderFor } from "../src/aegis/providers.js";
+import { createMockProvider } from "../src/aegis/providers.js";
 import { AegisAuthorizationSigner } from "../src/aegis/signer.js";
 import { deriveTerms } from "../src/aegis/terms.js";
 import {
@@ -69,9 +69,15 @@ async function startStack(options: { facilitator?: MockFacilitator } = {}): Prom
     facilitatorUrl: facilitatorServer.url,
     signer,
     async newGateway() {
+      const model = TEST_MODELS.openai!;
       const gateway = new ProviderGateway({
         providerId: "openai",
-        provider: mockProviderFor("openai"),
+        provider: createMockProvider({
+          providerId: model.providerId,
+          providerModelId: model.providerModelId,
+          modelVersion: model.modelVersion,
+          vendorLabel: model.providerId,
+        }),
         evidence: new AegisEvidenceClient({
           baseUrl: evidence.url,
           internalServiceToken: INTERNAL_TOKEN,

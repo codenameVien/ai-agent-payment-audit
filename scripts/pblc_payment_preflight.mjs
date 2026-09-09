@@ -1,9 +1,9 @@
 /**
- * Read-only preparation for a future PBLC V2 / x402 payment.
+ * Read-only preparation for the deployed user-owned PBLC / x402 payment.
  *
  * This script deliberately does not create an authorization, call Facilitator /verify or
  * /settle, or broadcast a transaction. It needs only a public wallet address and proves
- * that it and the configured PBLC V2 contract line up before a separately approved payment.
+ * that it and the configured PBLC contract line up before a separately approved payment.
  */
 
 import { readFile } from "node:fs/promises";
@@ -12,7 +12,7 @@ import { resolve } from "node:path";
 import { createPublicClient, formatUnits, http } from "viem";
 import { baseSepolia } from "viem/chains";
 
-const EXPECTED_TOKEN = "0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3";
+const EXPECTED_TOKEN = "0xe75013d333bebb90b321dd658440c10b5a0face8";
 const EXPECTED_NAME = "PBL Agent Credit";
 const EXPECTED_SYMBOL = "PBLC";
 const EXPECTED_DECIMALS = 6;
@@ -67,8 +67,8 @@ function required(values, key) {
 
 function usage() {
   process.stdout.write([
-    "PBLC V2 / x402 read-only payment preflight",
-    "Reads .env.local and checks wallet, PBLC V2 metadata/balance, and Facilitator /supported.",
+    "User-owned PBLC / x402 read-only payment preflight",
+    "Reads .env.local and checks wallet, PBLC metadata/balance, and Facilitator /supported.",
     "It does not sign, call /verify or /settle, or broadcast any transaction.",
   ].join("\n") + "\n");
 }
@@ -80,15 +80,23 @@ if (process.argv.includes("--help")) {
 
 const repoRoot = resolve(new URL("..", import.meta.url).pathname);
 const values = envFromText(await readFile(resolve(repoRoot, ".env.local"), "utf8"));
-const payer = required(values, "AEGIS_LIVE_PAYER_ADDRESS");
+const payer = required(values, "PBLC_USER_ADDRESS");
 if (!/^0x[0-9a-fA-F]{40}$/.test(payer)) {
-  throw new Error("AEGIS_LIVE_PAYER_ADDRESS is not an address");
+  throw new Error("PBLC_USER_ADDRESS is not an address");
 }
 
 const token = required(values, "PBLC_TOKEN_ADDRESS");
 if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("PBLC_TOKEN_ADDRESS is not an address");
 const rpcUrl = required(values, "BASE_SEPOLIA_RPC_URL");
-const facilitatorUrl = (values.get("FACILITATOR_URL") || "https://x402.org/facilitator").replace(/\/$/, "");
+const configuredFacilitator = values.get("AEGIS_FACILITATOR_URL") || values.get("FACILITATOR_URL");
+// The normal Mock runner leaves a loopback URL in .env.local. A preflight must stay
+// useful before live mode is enabled, so only an explicit HTTPS Facilitator overrides
+// the public read-only default.
+const facilitatorUrl = (
+  configuredFacilitator?.startsWith("https://")
+    ? configuredFacilitator
+    : "https://x402.org/facilitator"
+).replace(/\/$/, "");
 const client = createPublicClient({ chain: baseSepolia, transport: http(rpcUrl) });
 
 const [nativeWei, name, symbol, decimals, tokenUnits, supportedResponse] = await Promise.all([
