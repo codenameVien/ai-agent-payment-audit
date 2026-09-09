@@ -787,3 +787,20 @@ class ReputationSnapshotResponse(BaseModel):
     freshness_age_seconds: int | None
     evidence_source: str
     snapshot_hash: str
+
+
+class AegisDecisionEvidenceResponse(BaseModel):
+    """The fixed `aa-three-factor-v1` decision, served to the runtime by the Evidence API.
+
+    The Provider Gateway and the payment execution module never reach MongoDB and never
+    trust a client-supplied amount; they recompute from exactly this evidence.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    purchase_id: str
+    decision: JsonObject
+    decision_event_hash: str = Field(pattern=SHA256_REGEX)
+    snapshot: JsonObject
+    snapshot_event_hash: str = Field(pattern=SHA256_REGEX)
+    snapshot_hash: str = Field(pattern=SHA256_REGEX)

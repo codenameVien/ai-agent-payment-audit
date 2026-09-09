@@ -1,18 +1,39 @@
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Protocol
 
-from buyer_audit_api.core.errors import EvidenceIntegrityError, EvidenceTransitionError
+from buyer_audit_api.core.aa_audit import is_aa_policy_request, recalculate_decision
+from buyer_audit_api.core.aa_policy import AA_SCORING_POLICY_VERSION
+from buyer_audit_api.core.documents import verify_immutable_document
+from buyer_audit_api.core.errors import (
+    EvidenceImmutabilityError,
+    EvidenceIntegrityError,
+    EvidenceTransitionError,
+)
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.hashing import sha256_json
-from buyer_audit_api.core.models import EventType, EvidenceEvent, EvidenceHead, JsonObject
+from buyer_audit_api.core.models import (
+    TERMINAL_PAYMENT_EVENT_TYPES,
+    EventType,
+    EvidenceEvent,
+    EvidenceHead,
+    ImmutableDocument,
+    JsonObject,
+)
 from buyer_audit_api.core.ports import Clock
 
 RULESET_VERSION = "phase6.rules.v1"
 LEGACY_RULESET_VERSION = "legacy.pre-phase6"
+
+#: Per-purchase singleton events in the `aa-three-factor-v1` lifecycle.
+_AA_SINGLETON_EVENT_TYPES: tuple[EventType, ...] = (
+    EventType.AA_SNAPSHOT_RECORDED,
+    EventType.DECIDED,
+)
 
 _QUOTE_PAYMENT_FIELD_ORDER = ("quote", "amount", "token", "recipient")
 
@@ -26,6 +47,23 @@ class AuditSeverity(StrEnum):
 class AuditAuthority(StrEnum):
     DETERMINISTIC = "DETERMINISTIC"
     SEMANTIC_ADVISORY = "SEMANTIC_ADVISORY"
+
+
+class AddFinding(Protocol):
+    """The collector a rule block appends one structured outcome through."""
+
+    def __call__(
+        self,
+        rule_id: str,
+        severity: AuditSeverity,
+        title: str,
+        detail: str,
+        evidence_refs: tuple[str, ...],
+        *,
+        expected: JsonObject | None = None,
+        observed: JsonObject | None = None,
+        mismatched_fields: tuple[str, ...] = (),
+    ) -> None: ...
 
 
 _LEGACY_AUTHORITY: dict[str, AuditAuthority] = {
@@ -108,6 +146,10 @@ class AuditRepository(Protocol):
         expected_event_count: int | None = None,
         expected_head_event_hash: str | None = None,
     ) -> EvidenceEvent: ...
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None:
+        """The immutable body a snapshot event references, for independent recomputation."""
+        ...
 
 
 class SemanticAuditAdvisor(Protocol):
@@ -293,11 +335,17 @@ class AuditEvaluator:
         self,
         events: list[EvidenceEvent],
         ruleset_version: str = RULESET_VERSION,
+        *,
+        referenced_documents: Mapping[str, JsonObject] | None = None,
     ) -> AuditDraft:
         if not events:
             raise EvidenceIntegrityError("purchase evidence is missing")
         purchase_id = events[0].purchase_id
-        findings = self.deterministic_findings(events, ruleset_version=ruleset_version)
+        findings = self.deterministic_findings(
+            events,
+            ruleset_version=ruleset_version,
+            referenced_documents=referenced_documents,
+        )
         return self.draft(
             purchase_id=purchase_id,
             events=events,
@@ -344,6 +392,7 @@ class AuditEvaluator:
         events: list[EvidenceEvent],
         *,
         ruleset_version: str = RULESET_VERSION,
+        referenced_documents: Mapping[str, JsonObject] | None = None,
     ) -> tuple[AuditFinding, ...]:
         by_type = {event.type: event for event in events}
         findings: list[AuditFinding] = []
@@ -444,6 +493,17 @@ class AuditEvaluator:
             for event in events
             if event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
         ]
+
+        if requested is not None and is_aa_policy_request(requested.payload):
+            # `aa-three-factor-v1` purchases are judged by their own rules. The superseded
+            # seller-quote rules below stay exactly as they are for stored history.
+            _aa_deterministic_findings(
+                events=events,
+                requested=requested,
+                add=add,
+                referenced_documents=referenced_documents or {},
+            )
+            return tuple(findings)
 
         if requested is None or quoted is None or decided is None:
             add(
@@ -920,6 +980,145 @@ class AuditEvaluator:
         return tuple(findings)
 
 
+def _aa_deterministic_findings(
+    *,
+    events: list[EvidenceEvent],
+    requested: EvidenceEvent,
+    add: AddFinding,
+    referenced_documents: Mapping[str, JsonObject],
+) -> None:
+    """Judge an `aa-three-factor-v1` purchase by recomputing its own decision.
+
+    The stored snapshot binding, amounts, filters, scores and rank are all derived again
+    from the preserved AA source values; nothing the buyer wrote is accepted as proof of
+    itself.
+    """
+    by_type = {event.type: event for event in events}
+    for event_type in _AA_SINGLETON_EVENT_TYPES:
+        duplicates = [event for event in events if event.type == event_type]
+        if len(duplicates) > 1:
+            add(
+                "AUD-AA-DUPLICATE-DECISION-EVENT",
+                AuditSeverity.RISK,
+                "구매 판단 이벤트가 중복 기록됐습니다",
+                f"{event_type.value} 이벤트가 한 구매에 여러 번 기록됐습니다.",
+                tuple(event.event_hash for event in duplicates),
+                expected={"eventType": event_type.value, "count": 1},
+                observed={"eventType": event_type.value, "count": len(duplicates)},
+            )
+    snapshot = by_type.get(EventType.AA_SNAPSHOT_RECORDED)
+    decided = by_type.get(EventType.DECIDED)
+    if snapshot is None or decided is None:
+        add(
+            "AUD-AA-EVIDENCE-INCOMPLETE",
+            AuditSeverity.RISK,
+            "AA 근거 또는 결정 증거가 없습니다",
+            "요청·AA snapshot·결정 중 하나 이상이 기록되지 않았습니다.",
+            tuple(event.event_hash for event in events),
+            expected={"events": ["REQUESTED", "AA_SNAPSHOT_RECORDED", "DECIDED"]},
+            observed={"events": sorted({event.type.value for event in events})},
+        )
+        return
+    if decided.payload.get("scoringPolicyVersion") != AA_SCORING_POLICY_VERSION:
+        add(
+            "AUD-AA-POLICY-VERSION-MISMATCH",
+            AuditSeverity.RISK,
+            "결정에 기록된 정책 버전이 요청 정책과 다릅니다",
+            "aegis-aa-v1 요청은 aa-three-factor-v1 정책으로만 결정될 수 있습니다.",
+            (requested.event_hash, decided.event_hash),
+            expected={"scoringPolicyVersion": AA_SCORING_POLICY_VERSION},
+            observed={"scoringPolicyVersion": decided.payload.get("scoringPolicyVersion")},
+            mismatched_fields=("scoringPolicyVersion",),
+        )
+        return
+    refs = (requested.event_hash, snapshot.event_hash, decided.event_hash)
+    snapshot_id = snapshot.payload.get("snapshotId")
+    snapshot_body = (
+        referenced_documents.get(str(snapshot_id)) if isinstance(snapshot_id, str) else None
+    )
+    if snapshot_body is None:
+        # Without the immutable body there is no independent input to recompute from, so
+        # the decision is reported as unverified rather than quietly accepted. The cheap
+        # evidence-local checks below still run.
+        add(
+            "AUD-AA-SNAPSHOT-BODY-UNAVAILABLE",
+            AuditSeverity.RISK,
+            "AA snapshot 원본을 읽지 못해 결정을 재계산할 수 없습니다",
+            "결정이 참조하는 immutable snapshot 문서를 찾지 못했습니다.",
+            refs,
+            expected={"snapshotDocument": snapshot_id},
+            observed={"snapshotDocument": None},
+        )
+    else:
+        for issue in recalculate_decision(
+            requested_payload=requested.payload,
+            snapshot_payload={
+                **snapshot_body,
+                "snapshotHash": snapshot.payload.get("snapshotHash"),
+            },
+            decided_payload=decided.payload,
+        ):
+            add(
+                issue.rule_id,
+                AuditSeverity.RISK if issue.is_contradiction else AuditSeverity.CAUTION,
+                (
+                    "저장된 결정이 정책 재계산과 다릅니다"
+                    if issue.is_contradiction
+                    else "재계산으로 확인할 수 없는 범위가 있습니다"
+                ),
+                issue.detail,
+                refs,
+                expected=issue.expected,
+                observed=issue.observed,
+                mismatched_fields=issue.mismatched_fields,
+            )
+    budget = requested.payload.get("budgetUnits")
+    amount = decided.payload.get("amountUnits")
+    if isinstance(budget, int) and isinstance(amount, int) and amount > budget:
+        add(
+            "AUD-BUDGET-EXCEEDED",
+            AuditSeverity.RISK,
+            "결제 금액이 요청 예산을 초과했습니다",
+            "선택된 모델의 선결제 금액이 사용자가 승인한 예산보다 큽니다.",
+            (requested.event_hash, decided.event_hash),
+            expected={"maxAmountUnits": budget},
+            observed={"amountUnits": amount},
+            mismatched_fields=("amount",),
+        )
+    explanation = decided.payload.get("generatedExplanation")
+    winner = decided.payload.get("winner")
+    priority = decided.payload.get("priority")
+    tokens = (
+        str(priority.get("effectivePriority")) if isinstance(priority, dict) else "",
+        str(winner.get("providerId")) if isinstance(winner, dict) else "",
+        str(winner.get("providerModelId")) if isinstance(winner, dict) else "",
+    )
+    if not isinstance(explanation, str) or any(
+        not token or token not in explanation for token in tokens
+    ):
+        add(
+            "AUD-EXPLANATION-SELECTION-MISMATCH",
+            AuditSeverity.RISK,
+            "구매 에이전트 설명과 실제 선택이 다릅니다",
+            "설명에 적용된 우선순위와 선택된 제공자·모델이 모두 반영되지 않았습니다.",
+            (decided.event_hash,),
+            expected={"explanationMentions": list(tokens)},
+            observed={"explanationPresent": isinstance(explanation, str)},
+        )
+    if by_type.get(EventType.PAYMENT_SETTLED) is None and not (
+        {event.type for event in events} & set(TERMINAL_PAYMENT_EVENT_TYPES)
+    ):
+        add(
+            "AUD-PAYMENT-PENDING",
+            AuditSeverity.CAUTION,
+            "결제가 아직 정산되지 않았습니다",
+            "결정은 고정됐지만 Facilitator 정산 증거가 아직 없습니다.",
+            (decided.event_hash,),
+            expected={"settled": True},
+            observed={"settled": False},
+        )
+
+
 def _quote_payment_mismatch(
     *,
     selected_quote: dict[str, object] | None,
@@ -1030,6 +1229,36 @@ class AuditService:
         self._evaluator = AuditEvaluator()
         self._reader = AuditReportReader()
 
+    async def _referenced_documents(
+        self, events: list[EvidenceEvent]
+    ) -> dict[str, JsonObject]:
+        """Load the immutable bodies the evidence points at, verifying each on the way.
+
+        A body whose stored hash does not describe it is dropped, so the recalculation
+        reports the decision as unverified instead of trusting a rewritten document.
+        """
+        documents: dict[str, JsonObject] = {}
+        for event in events:
+            if event.type is not EventType.AA_SNAPSHOT_RECORDED:
+                continue
+            document_id = event.payload.get("snapshotId")
+            if not isinstance(document_id, str):
+                continue
+            stored = await self._repository.get_document(document_id)
+            if stored is None or stored.purchase_id != event.purchase_id:
+                continue
+            try:
+                verify_immutable_document(stored)
+            except EvidenceImmutabilityError:
+                continue
+            if stored.content_hash != event.payload.get("snapshotHash"):
+                continue
+            documents[document_id] = {
+                **stored.payload,
+                "snapshotId": stored.document_id,
+            }
+        return documents
+
     async def audit(self, purchase_id: str) -> AuditReport:
         events = await self._repository.list_events(purchase_id)
         head = await self._repository.get_event_head(purchase_id)
@@ -1044,7 +1273,10 @@ class AuditService:
         if current is not None:
             return current
 
-        deterministic = self._evaluator.deterministic_findings(events)
+        referenced = await self._referenced_documents(events)
+        deterministic = self._evaluator.deterministic_findings(
+            events, referenced_documents=referenced
+        )
         semantic = await self._semantic.advise(
             purchase_id=purchase_id,
             public_events=tuple(events),

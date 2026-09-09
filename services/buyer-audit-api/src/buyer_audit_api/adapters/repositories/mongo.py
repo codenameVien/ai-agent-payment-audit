@@ -10,8 +10,10 @@ from pymongo.asynchronous.client_session import AsyncClientSession
 from pymongo.errors import DuplicateKeyError
 from pymongo.server_api import ServerApi
 
+from buyer_audit_api.core.documents import verify_immutable_document
 from buyer_audit_api.core.errors import (
     DuplicateEventError,
+    EvidenceImmutabilityError,
     EvidenceIntegrityError,
     EvidenceTransitionError,
     PaymentConflictError,
@@ -25,6 +27,7 @@ from buyer_audit_api.core.models import (
     EvidenceEvent,
     EvidenceHead,
     EvidenceSource,
+    ImmutableDocument,
     JsonObject,
     SensitivePayload,
     TransactionRef,
@@ -150,6 +153,31 @@ def _sensitive_from_document(document: dict[str, Any]) -> SensitivePayload:
         key_version=str(document["keyVersion"]),
         content_hash=str(document["contentHash"]),
         created_at=cast(datetime, document["createdAt"]),
+    )
+
+
+def _immutable_document(document: ImmutableDocument) -> dict[str, Any]:
+    return {
+        "contentHash": document.content_hash,
+        "createdAt": document.created_at,
+        "documentId": document.document_id,
+        "kind": document.kind,
+        "payload": document.payload,
+        "purchaseId": document.purchase_id,
+    }
+
+
+def _immutable_from_document(document: dict[str, Any]) -> ImmutableDocument:
+    payload = document["payload"]
+    if not isinstance(payload, dict):
+        raise EvidenceIntegrityError("stored immutable document payload is malformed")
+    return ImmutableDocument(
+        document_id=str(document["documentId"]),
+        purchase_id=str(document["purchaseId"]),
+        kind=str(document["kind"]),
+        content_hash=str(document["contentHash"]),
+        created_at=cast(datetime, document["createdAt"]),
+        payload=cast(JsonObject, payload),
     )
 
 
@@ -550,6 +578,7 @@ class MongoEvidenceRepository:
         self._events = self._database["purchaseEvents"]
         self._heads = self._database["evidenceHeads"]
         self._sensitive = self._database["sensitivePayloads"]
+        self._documents = self._database["immutableDocuments"]
         self._wallet_policies = self._database["walletPolicies"]
         self._payment_intents = self._database["paymentIntents"]
         self._seller_executions = self._database["sellerExecutions"]
@@ -725,6 +754,12 @@ class MongoEvidenceRepository:
         await self._events.create_index(
             [("purchaseId", ASCENDING)],
             unique=True,
+            name="unique_aa_snapshot_per_purchase",
+            partialFilterExpression={"type": EventType.AA_SNAPSHOT_RECORDED.value},
+        )
+        await self._events.create_index(
+            [("purchaseId", ASCENDING)],
+            unique=True,
             name="unique_payment_intent_per_purchase",
             partialFilterExpression={"type": EventType.PAYMENT_INTENT_CLAIMED.value},
         )
@@ -891,6 +926,10 @@ class MongoEvidenceRepository:
         await self._heads.create_index([("purchaseId", ASCENDING), ("eventCount", DESCENDING)])
         await self._sensitive.create_index([("payloadId", ASCENDING)], unique=True)
         await self._sensitive.create_index([("purchaseId", ASCENDING), ("kind", ASCENDING)])
+        await self._documents.create_index([("documentId", ASCENDING)], unique=True)
+        await self._documents.create_index(
+            [("purchaseId", ASCENDING), ("kind", ASCENDING)]
+        )
         policy_index_name = "unique_wallet_policy_day"
         policy_index_keys = [
             ("buyerWalletAddress", ASCENDING),
@@ -1604,6 +1643,37 @@ class MongoEvidenceRepository:
     async def get_sensitive_payload(self, payload_id: str) -> SensitivePayload | None:
         document = await self._sensitive.find_one({"payloadId": payload_id})
         return _sensitive_from_document(document) if document else None
+
+    async def put_document(self, document: ImmutableDocument) -> ImmutableDocument:
+        """Insert-only: an identical body is idempotent, a different one is a conflict."""
+        verify_immutable_document(document)
+        existing = await self._documents.find_one({"documentId": document.document_id})
+        if existing is not None:
+            stored = _immutable_from_document(existing)
+            if stored.content_hash != document.content_hash:
+                raise EvidenceImmutabilityError(
+                    "an immutable document cannot be rewritten once stored"
+                )
+            return stored
+        try:
+            await self._documents.insert_one(_immutable_document(document))
+        except DuplicateKeyError as exc:
+            duplicate = await self._documents.find_one(
+                {"documentId": document.document_id}
+            )
+            if duplicate is None:
+                raise
+            stored = _immutable_from_document(duplicate)
+            if stored.content_hash != document.content_hash:
+                raise EvidenceImmutabilityError(
+                    "an immutable document cannot be rewritten once stored"
+                ) from exc
+            return stored
+        return document
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None:
+        found = await self._documents.find_one({"documentId": document_id})
+        return _immutable_from_document(found) if found else None
 
     async def claim_seller_execution(
         self, execution: SellerExecution

@@ -15,6 +15,7 @@ from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response, s
 from fastapi.responses import JSONResponse, StreamingResponse
 
 from buyer_audit_api.api.schemas import (
+    AegisDecisionEvidenceResponse,
     AuditAlertResponse,
     AuditFinalizeResponse,
     AuditFindingResponse,
@@ -74,6 +75,7 @@ from buyer_audit_api.api.schemas import (
     transaction_ref_response,
 )
 from buyer_audit_api.composition import AppContainer
+from buyer_audit_api.core.aa_audit import is_aa_policy_request
 from buyer_audit_api.core.audit import (
     AuditReport,
     AuditReportReader,
@@ -85,15 +87,18 @@ from buyer_audit_api.core.errors import (
     DomainNotRegisteredError,
     EvidenceIntegrityError,
     EvidenceTransitionError,
+    ExternalEvidenceError,
     PaymentConflictError,
     PaymentEvidenceError,
     PaymentPolicyError,
+    SelectionAbortedError,
 )
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.models import (
     EventType,
     EvidenceEvent,
     EvidenceSource,
+    JsonObject,
     ScenarioMetadata,
     TransactionRef,
     transaction_ref_from_payload,
@@ -1889,6 +1894,10 @@ def create_app(container: AppContainer) -> FastAPI:
             raise HTTPException(status_code=422, detail=f"unknown domain: {exc}") from exc
         except PaymentPolicyError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except ValueError as exc:
+            # A request the domain cannot normalize is a client error, and the message
+            # names the accepted values instead of failing opaquely.
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
         return PurchaseResponse(
             purchase_id=created.purchase_id,
             event_hash=created.event.event_hash,
@@ -1907,6 +1916,33 @@ def create_app(container: AppContainer) -> FastAPI:
         existing = next((event for event in events if event.type == EventType.DECIDED), None)
         if existing is not None:
             return _event_response(existing)
+        requested_payload = events[0].payload
+        if is_aa_policy_request(requested_payload):
+            aegis = container.aegis_workflow
+            if aegis is None:
+                raise HTTPException(
+                    status_code=503, detail="aa-three-factor-v1 workflow unavailable"
+                )
+            try:
+                await aegis.decide(purchase_id=purchase_id)
+            except (
+                ExternalEvidenceError,
+                SelectionAbortedError,
+                ValueError,
+                httpx.HTTPError,
+                EvidenceTransitionError,
+            ) as exc:
+                raced = await verified_events(purchase_id)
+                decided = next(
+                    (event for event in raced if event.type == EventType.DECIDED), None
+                )
+                if decided is not None:
+                    return _event_response(decided)
+                raise HTTPException(status_code=409, detail=str(exc)) from exc
+            settled = await verified_events(purchase_id)
+            return _event_response(
+                next(event for event in settled if event.type == EventType.DECIDED)
+            )
         workflow = container.ai_inference_workflow
         requested = events[0]
         if requested.payload.get("domain") != "ai_inference" or workflow is None:
@@ -1932,6 +1968,36 @@ def create_app(container: AppContainer) -> FastAPI:
         completed = await verified_events(purchase_id)
         decided = next(event for event in completed if event.type == EventType.DECIDED)
         return _event_response(decided)
+
+    @app.get(
+        "/internal/purchases/{purchase_id}/aegis-decision",
+        response_model=AegisDecisionEvidenceResponse,
+    )
+    async def aegis_decision_evidence(
+        purchase_id: str,
+        authorization: str | None = Header(default=None),
+    ) -> AegisDecisionEvidenceResponse:
+        """Read-only source of truth for the gateway and the payment execution module."""
+        require_internal(authorization)
+        reader = container.aegis_evidence_reader
+        if reader is None:
+            raise HTTPException(
+                status_code=503, detail="aa-three-factor-v1 evidence reader unavailable"
+            )
+        try:
+            bundle = await reader.decision_evidence(purchase_id)
+        except SelectionAbortedError as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        except EvidenceIntegrityError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        return AegisDecisionEvidenceResponse(
+            purchase_id=str(bundle["purchaseId"]),
+            decision=cast(JsonObject, bundle["decision"]),
+            decision_event_hash=str(bundle["decisionEventHash"]),
+            snapshot=cast(JsonObject, bundle["snapshot"]),
+            snapshot_event_hash=str(bundle["snapshotEventHash"]),
+            snapshot_hash=str(bundle["snapshotHash"]),
+        )
 
     @app.post("/purchases/{purchase_id}/run", response_model=PurchaseRunResponse)
     async def run_purchase(

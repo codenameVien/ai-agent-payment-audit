@@ -5,7 +5,9 @@ from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
 
+from buyer_audit_api.core.documents import verify_immutable_document
 from buyer_audit_api.core.errors import (
+    EvidenceImmutabilityError,
     EvidenceIntegrityError,
     EvidenceTransitionError,
     PaymentConflictError,
@@ -18,6 +20,7 @@ from buyer_audit_api.core.models import (
     EventType,
     EvidenceEvent,
     EvidenceHead,
+    ImmutableDocument,
     JsonObject,
     SensitivePayload,
     TransactionRef,
@@ -88,6 +91,7 @@ class InMemoryEvidenceRepository:
         self._outbox: dict[str, ReputationPublishJob] = {}
         self._outbox_by_identity: dict[str, str] = {}
         self._outbox_transactions: dict[str, str] = {}
+        self._documents: dict[str, ImmutableDocument] = {}
         self._snapshots: dict[str, ReputationSnapshot] = {}
         self._snapshot_fingerprints: dict[tuple[str, int], str] = {}
         self._lock = asyncio.Lock()
@@ -1006,6 +1010,26 @@ class InMemoryEvidenceRepository:
                 )
                 if not job.is_terminal and not job.lease_held_at(now)
             ]
+
+    # ---- Immutable side documents --------------------------------------------------
+
+    async def put_document(self, document: ImmutableDocument) -> ImmutableDocument:
+        verify_immutable_document(document)
+        async with self._lock:
+            existing = self._documents.get(document.document_id)
+            if existing is not None:
+                if existing.content_hash != document.content_hash:
+                    raise EvidenceImmutabilityError(
+                        "an immutable document cannot be rewritten once stored"
+                    )
+                return deepcopy(existing)
+            self._documents[document.document_id] = document
+            return deepcopy(document)
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None:
+        async with self._lock:
+            document = self._documents.get(document_id)
+            return deepcopy(document) if document is not None else None
 
     # ---- Reputation snapshots ----------------------------------------------------
 

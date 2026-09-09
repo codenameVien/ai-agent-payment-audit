@@ -4,11 +4,16 @@ import base64
 import json
 import os
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from buyer_audit_api.adapters.ai_inference import (
     HttpSellerQuoteClient,
     JsonRpcSellerIdentityVerifier,
+)
+from buyer_audit_api.adapters.artificial_analysis import (
+    FixtureArtificialAnalysisSource,
+    HttpArtificialAnalysisSource,
 )
 from buyer_audit_api.adapters.auth.siwe import PythonSiweVerifier
 from buyer_audit_api.adapters.chain.json_rpc import JsonRpcTokenBalanceReader
@@ -40,6 +45,22 @@ from buyer_audit_api.core.session import SessionCodec
 from buyer_audit_api.core.terminal import TerminalAuditCoordinator
 from buyer_audit_api.core.time import SystemClock
 from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
+from buyer_audit_api.domains.ai_inference.aa_catalog import (
+    FIXTURE_CATALOG_PATH,
+    FIXTURE_PAGE_PATHS,
+    AaFieldPaths,
+    load_model_catalog,
+)
+from buyer_audit_api.domains.ai_inference.aa_models import (
+    MappingProvenance,
+    ModelCatalog,
+    TokenIdentity,
+)
+from buyer_audit_api.domains.ai_inference.aa_ports import AaCaptureSource
+from buyer_audit_api.domains.ai_inference.aa_workflow import (
+    AegisDecisionWorkflow,
+    AegisEvidenceReader,
+)
 from buyer_audit_api.domains.ai_inference.benchmark import ManualBenchmarkProvider
 from buyer_audit_api.domains.ai_inference.quote_verification import Eip712SellerQuoteVerifier
 from buyer_audit_api.domains.ai_inference.workflow import (
@@ -75,10 +96,43 @@ class AppContainer:
     admin_service_token: str = "test-admin-token"
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
+    aegis_workflow: AegisDecisionWorkflow | None = None
+    aegis_evidence_reader: AegisEvidenceReader | None = None
     commerce_gateway: HttpCommerceGatewayClient | None = None
     terminal_coordinator: TerminalAuditCoordinator | None = None
     reputation_outbox: ReputationOutboxPort | None = None
     reputation_snapshots: ReputationSnapshotPort | None = None
+
+
+def build_aa_capture_source(
+    settings: Settings, catalog: ModelCatalog
+) -> AaCaptureSource:
+    """Fail closed: a live capture is only possible with an explicitly mapped catalog.
+
+    Without a server AA key the buyer reads the checked-in fixture pages and records
+    `mode=fixture`, so no local run can present itself as verified live AA data.
+    """
+    try:
+        overrides = json.loads(settings.aa_field_paths_json)
+    except json.JSONDecodeError as exc:
+        raise ConfigurationError("AA_FIELD_PATHS_JSON must be valid JSON") from exc
+    if not isinstance(overrides, dict):
+        raise ConfigurationError("AA_FIELD_PATHS_JSON must be a JSON object")
+    field_paths = AaFieldPaths.from_mapping(overrides)
+    api_key = (settings.aa_api_key or "").strip()
+    if not api_key:
+        return FixtureArtificialAnalysisSource(
+            page_paths=FIXTURE_PAGE_PATHS, field_paths=field_paths
+        )
+    if catalog.provenance != {MappingProvenance.CONFIGURED}:
+        raise ConfigurationError(
+            "AA_API_KEY is set but the model catalog is not an explicitly configured "
+            "live mapping; set AEGIS_MODEL_CATALOG_PATH or unset the key"
+        )
+    return HttpArtificialAnalysisSource(
+        api_key=api_key,
+        field_paths=field_paths,
+    )
 
 
 def build_container(settings: Settings) -> AppContainer:
@@ -108,7 +162,14 @@ def build_container(settings: Settings) -> AppContainer:
     purchase_service = PurchaseService(
         repository=repository,
         cipher=cipher,
-        domains=DomainRegistry([AiInferenceDomainModule()]),
+        domains=DomainRegistry(
+            [
+                AiInferenceDomainModule(
+                    default_max_output_tokens=settings.aegis_max_output_tokens,
+                    system_prompt=settings.aegis_system_prompt,
+                )
+            ]
+        ),
         clock=clock,
     )
     try:
@@ -184,6 +245,25 @@ def build_container(settings: Settings) -> AppContainer:
         explanation=DeterministicExplanationAdapter(),
         reputation=reputation_provider,
     )
+    catalog = (
+        load_model_catalog(Path(settings.aegis_model_catalog_path))
+        if settings.aegis_model_catalog_path
+        else load_model_catalog(FIXTURE_CATALOG_PATH)
+    )
+    aegis_workflow = AegisDecisionWorkflow(
+        repository=repository,
+        clock=clock,
+        catalog=catalog,
+        source=build_aa_capture_source(settings, catalog),
+        token=TokenIdentity(
+            name="AEGIS",
+            symbol="AEGIS",
+            decimals=6,
+            address=settings.aegis_token_address.lower(),
+            chain_id=settings.siwe_chain_id,
+            status=settings.aegis_token_status,
+        ),
+    )
     return AppContainer(
         repository=repository,
         cipher=cipher,
@@ -199,6 +279,8 @@ def build_container(settings: Settings) -> AppContainer:
             else None
         ),
         ai_inference_workflow=workflow,
+        aegis_workflow=aegis_workflow,
+        aegis_evidence_reader=AegisEvidenceReader(repository=repository),
         commerce_gateway=HttpCommerceGatewayClient(
             base_url=settings.commerce_gateway_url,
             service_token=settings.gateway_service_token,

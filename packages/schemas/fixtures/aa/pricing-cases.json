@@ -1,0 +1,71 @@
+{
+  "policyVersion": "aa-three-factor-v1",
+  "formula": "amountUnits = ceil(estimatedInputTokens * inputPricePerMillion + maxOutputTokens * outputPricePerMillion)",
+  "note": "Prices are USD per 1e6 tokens and AEGIS has 6 decimals, so the two 1e6 bases cancel. Every implementation must use exact decimal arithmetic, never binary floats.",
+  "cases": [
+    {
+      "name": "fixture openai alpha at the shipped request size",
+      "estimatedInputTokens": 25,
+      "maxOutputTokens": 1024,
+      "inputPricePerMillion": "0.15",
+      "outputPricePerMillion": "0.6",
+      "amountUnits": 619
+    },
+    {
+      "name": "fixture anthropic beta lands on a whole unit",
+      "estimatedInputTokens": 25,
+      "maxOutputTokens": 1024,
+      "inputPricePerMillion": "0.8",
+      "outputPricePerMillion": "4",
+      "amountUnits": 4116
+    },
+    {
+      "name": "fixture google gamma rounds a half unit up",
+      "estimatedInputTokens": 25,
+      "maxOutputTokens": 1024,
+      "inputPricePerMillion": "0.3",
+      "outputPricePerMillion": "2.5",
+      "amountUnits": 2568
+    },
+    {
+      "name": "any fraction of a unit rounds up, never to nearest",
+      "estimatedInputTokens": 1,
+      "maxOutputTokens": 1,
+      "inputPricePerMillion": "0.4",
+      "outputPricePerMillion": "0.4",
+      "amountUnits": 1
+    },
+    {
+      "name": "an exact whole amount is not inflated",
+      "estimatedInputTokens": 1,
+      "maxOutputTokens": 1,
+      "inputPricePerMillion": "1",
+      "outputPricePerMillion": "1",
+      "amountUnits": 2
+    },
+    {
+      "name": "3 times 0.1 is 0.3, not 0.30000000000000004",
+      "estimatedInputTokens": 3,
+      "maxOutputTokens": 1,
+      "inputPricePerMillion": "0.1",
+      "outputPricePerMillion": "0",
+      "amountUnits": 1
+    },
+    {
+      "name": "an exact single unit at the smallest published precision",
+      "estimatedInputTokens": 1000000,
+      "maxOutputTokens": 1,
+      "inputPricePerMillion": "0.000001",
+      "outputPricePerMillion": "0",
+      "amountUnits": 1
+    },
+    {
+      "name": "zero unit prices give zero units, which this policy refuses to settle",
+      "estimatedInputTokens": 10,
+      "maxOutputTokens": 10,
+      "inputPricePerMillion": "0",
+      "outputPricePerMillion": "0",
+      "amountUnits": 0
+    }
+  ]
+}

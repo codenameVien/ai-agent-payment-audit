@@ -8,6 +8,7 @@ from buyer_audit_api.core.models import (
     EventType,
     EvidenceEvent,
     EvidenceHead,
+    ImmutableDocument,
     JsonObject,
     SensitivePayload,
     TransactionRef,
@@ -43,6 +44,18 @@ class EvidenceReadPort(Protocol):
     async def get_event_head(self, purchase_id: str) -> EvidenceHead | None: ...
 
     async def list_owner_purchase_ids(self, owner_address: str) -> list[str]: ...
+
+
+class ImmutableDocumentPort(Protocol):
+    """Content-addressed append-only side documents; a stored body is never rewritten.
+
+    Re-storing the identical body returns the stored document, so a retried capture is
+    idempotent. A different body under a known id raises instead of overwriting.
+    """
+
+    async def put_document(self, document: ImmutableDocument) -> ImmutableDocument: ...
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None: ...
 
 
 class PurchaseProjectionPort(Protocol):
@@ -257,6 +270,10 @@ class EvidenceRepository(Protocol):
     async def store_sensitive_payload(self, payload: SensitivePayload) -> None: ...
 
     async def get_sensitive_payload(self, payload_id: str) -> SensitivePayload | None: ...
+
+    async def put_document(self, document: ImmutableDocument) -> ImmutableDocument: ...
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None: ...
 
     async def claim_seller_execution(
         self, execution: SellerExecution

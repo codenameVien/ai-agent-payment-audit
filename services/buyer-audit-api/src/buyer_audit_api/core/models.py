@@ -19,6 +19,7 @@ LOCAL_TRANSACTION_ID_PATTERN = re.compile(
 class EventType(StrEnum):
     REQUESTED = "REQUESTED"
     QUOTED = "QUOTED"
+    AA_SNAPSHOT_RECORDED = "AA_SNAPSHOT_RECORDED"
     DECIDED = "DECIDED"
     PAYMENT_INTENT_CLAIMED = "PAYMENT_INTENT_CLAIMED"
     PAYMENT_AUTHORIZED = "PAYMENT_AUTHORIZED"
@@ -252,6 +253,24 @@ class EvidenceHead:
     purchase_id: str
     event_count: int
     head_event_hash: str
+
+
+@dataclass(frozen=True, slots=True)
+class ImmutableDocument:
+    """An append-only side document the Evidence API owns and never rewrites.
+
+    Purchase events stay small by referencing one of these by `document_id`; the document
+    itself carries a bulky immutable body such as a captured external API snapshot. The
+    identity is derived from the content, so storing the same body twice is idempotent
+    and storing a different body under a known id is a conflict, never an overwrite.
+    """
+
+    document_id: str
+    purchase_id: str
+    kind: str
+    content_hash: str
+    created_at: datetime
+    payload: JsonObject
 
 
 @dataclass(frozen=True, slots=True)

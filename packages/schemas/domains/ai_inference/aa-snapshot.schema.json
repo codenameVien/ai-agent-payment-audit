@@ -1,0 +1,90 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pbl.local/schemas/domains/ai_inference/aa-snapshot.schema.json",
+  "title": "Artificial Analysis capture recorded for one purchase",
+  "description": "Immutable evidence body. Numbers are preserved as decimal text so no implementation reads a published price through a binary float.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "snapshotId", "purchaseId", "sourceUrl", "mode", "fetchedAt",
+    "intelligenceIndexVersion", "rawResponseHash", "rawPages", "pageCount",
+    "totalModelCount", "catalogVersion", "catalogProvenance", "catalogEntries", "models",
+    "hashAlgorithm", "hashEncoding", "attributionUrl", "completionBenchmark"
+  ],
+  "properties": {
+    "snapshotId": { "type": "string", "pattern": "^aaSnapshot:[0-9a-f]{32}$" },
+    "purchaseId": { "type": "string", "minLength": 1 },
+    "sourceUrl": { "type": "string", "minLength": 1 },
+    "mode": { "type": "string", "enum": ["fixture", "live"] },
+    "fetchedAt": { "type": "string", "minLength": 1 },
+    "intelligenceIndexVersion": { "type": "string", "pattern": "^-?[0-9]+(\\.[0-9]+)?$" },
+    "rawResponseHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "rawPages": { "type": "array", "minItems": 1, "items": { "type": "string" } },
+    "pageCount": { "type": "integer", "minimum": 1 },
+    "totalModelCount": { "type": "integer", "minimum": 1 },
+    "catalogVersion": { "type": "string", "minLength": 1 },
+    "catalogProvenance": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "type": "string", "enum": ["fixture", "configured"] }
+    },
+    "catalogEntries": {
+      "description": "The explicit catalog fixed at capture time; the audit rebuilds the full candidate set from exactly this.",
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "candidateKey", "providerId", "providerModelId", "modelVersion",
+          "aaModelId", "aaSlug", "displayName", "recipient", "capabilities",
+          "capabilitiesSource", "mappingProvenance"
+        ],
+        "properties": {
+          "candidateKey": { "type": "string", "minLength": 1 },
+          "providerId": { "type": "string", "minLength": 1 },
+          "providerModelId": { "type": "string", "minLength": 1 },
+          "modelVersion": { "type": "string", "minLength": 1 },
+          "aaModelId": { "type": "string", "minLength": 1 },
+          "aaSlug": { "type": "string", "minLength": 1 },
+          "displayName": { "type": "string", "minLength": 1 },
+          "recipient": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+          "capabilities": { "type": "array", "items": { "type": "string" } },
+          "capabilitiesSource": { "type": "string", "const": "catalog" },
+          "mappingProvenance": { "type": "string", "enum": ["fixture", "configured"] }
+        }
+      }
+    },
+    "hashAlgorithm": { "type": "string", "const": "sha256" },
+    "hashEncoding": { "type": "string", "const": "rfc8785-canonical-json" },
+    "attributionUrl": { "type": "string", "const": "https://artificialanalysis.ai/" },
+    "completionBenchmark": {
+      "type": "string",
+      "const": "aa-median-end-to-end-500-answer-tokens"
+    },
+    "models": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "aaModelId", "aaSlug", "aaName", "modelCreator", "candidateKey",
+          "inputPricePerMillion", "outputPricePerMillion",
+          "medianEndToEndSeconds", "intelligenceIndex"
+        ],
+        "properties": {
+          "aaModelId": { "type": "string", "minLength": 1 },
+          "aaSlug": { "type": "string", "minLength": 1 },
+          "aaName": { "type": "string", "minLength": 1 },
+          "modelCreator": { "type": "string", "minLength": 1 },
+          "candidateKey": { "type": "string", "minLength": 1 },
+          "inputPricePerMillion": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+          "outputPricePerMillion": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+          "medianEndToEndSeconds": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" },
+          "intelligenceIndex": { "type": "string", "pattern": "^[0-9]+(\\.[0-9]+)?$" }
+        }
+      }
+    }
+  }
+}

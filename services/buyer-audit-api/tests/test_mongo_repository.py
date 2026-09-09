@@ -1298,6 +1298,7 @@ async def test_preflight_precedes_every_new_phase6_unique_index() -> None:
         ("_events", "events"),
         ("_heads", "evidenceHeads"),
         ("_sensitive", "sensitive"),
+        ("_documents", "immutableDocuments"),
         ("_wallet_policies", "walletPolicies"),
         ("_payment_intents", "paymentIntents"),
         ("_seller_executions", "sellerExecutions"),

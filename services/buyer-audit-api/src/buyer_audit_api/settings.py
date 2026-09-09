@@ -26,3 +26,14 @@ class Settings(BaseSettings):
     gemini_model_version: str = "gemini-2.5-flash"
     nemotron_model_id: str = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
     nemotron_model_version: str = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+    # aa-three-factor-v1. The AA key is a server-only value; absent means fixture mode
+    # and the live Artificial Analysis contract stays an unfinished external gate.
+    aa_api_key: str | None = None
+    aa_field_paths_json: str = "{}"
+    aegis_model_catalog_path: str | None = None
+    aegis_max_output_tokens: int = 1024
+    aegis_system_prompt: str = ""
+    # AEGIS is prepared, not deployed. The zero address means "no deployment yet" and is
+    # recorded as such in evidence; it is never presented as a live token address.
+    aegis_token_address: str = "0x0000000000000000000000000000000000000000"
+    aegis_token_status: str = "prepared"
