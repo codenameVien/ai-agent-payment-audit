@@ -1,4 +1,8 @@
-# Coder AEGIS-03 — UI and full local abnormal-scenario E2E
+# USER SCOPE OVERRIDE — READ FIRST
+
+Follow `.agent/DEMO_SCOPE.md` over conflicting instructions below. User authorized Terra (`gpt-5.6-terra`) on 2026-09-10; do not wait for Opus. Verify only three Mock Provider full flows, budget-before-payment, mismatched402, duplicate successful payment prevention, dashboard build/basic lint. Preserve all dirty work. Previous harness-review gaps are deferred known limitations. No broad suites, extra hardening, external deployment or payment.
+
+# Historical Coder AEGIS-03 instructions — superseded where conflicting
 
 Mongo runner safety subtask is already implemented and focused-tested in `.agent/outbox/aegis-mongo-runner-result.md`; do not rewrite it again. Include its test in repeatable root scripts and perform actual Mongo integration after AA/runtime stability. Preserve the existing safe runner.
 
@@ -12,7 +16,9 @@ Preserve pending legacy purchase IDs in browser storage, but never reinterpret/r
 
 Build safe revised Phase6 scenario harness. Selectively reuse only isolation/history digest/server shell from P6-03, not SIWE/manual five-factor/reputation/RPC/quote paths. Important prior review: P6-03 outbound counters hardcoded0 are NOT transport tripwires. Instrument actual outbound transport or socket boundary to reject non-loopback, count attempts and test rejection. Include true HTTP integration across buyer/evidence, Mock Gateways, signer, Mock Facilitator with purchaseId + evidence + actual settle call counts. Three normal OpenAI/Claude/Gemini selections, missing/null AA, bad mapping/mixed version, no eligible, tampered weights/score, 402 mismatch, concurrent same purchase, timeout ambiguous (no repayment), success then response failure (no repayment), historical read zero writes, mock/live provenance confusion. Test no keys in browser/evidence, internal unauthorized rejection, local Origin/host boundary.
 
-Use isolated temporary Mongo instance/database for actual Mongo roundtrip and restart/idempotency evidence. Existing scripts/test_mongo_local.sh is unsafe on port collision: cleanup shutdown by port can stop preexisting process. Fix runner to refuse occupied port before spawning, verify PID/process ownership and exact generated dbpath; cleanup only owned instance/validated ephemeral test directory, never existing DB. Do not run on existing user DB. Add new Mongo tests to command (old runner targets only legacy test_mongo_repository.py). Safe temp cleanup may remove only generated test-only DB/files and record that.
+Use isolated temporary Mongo instance/database for actual Mongo roundtrip and restart/idempotency evidence. Reuse the already-fixed `scripts/test_mongo_local.sh` from 8315830: owned process/dbpath only, occupied-port refusal, all pytest mongo-marked tests included. Never use an existing user DB. Add relevant new tests with the mongo marker and record cleanup of generated test-only resources.
+
+For the final browser demonstration prefer the isolated Mongo-backed runtime, not an in-memory run presented as persistent Mongo storage. Report repository mode and whether demonstration data is temporary/retained. Never use the user's existing DB as the write target.
 
 Run full npm test + dashboard tests (root npm test currently omits dashboard), node --test scripts/aegis_token_plan.test.mjs, npm run lint (includes TS noEmit/mypy), dashboard build, actual Mongo tests, new all-provider abnormal HTTP E2E. Add suitable root scripts so these remain repeatable. Do not delete old tests because legacy retained. Run browser smoke of actual pages if browser available through tools; otherwise report requirement to orchestrator with runner URLs. No production deployment.
 

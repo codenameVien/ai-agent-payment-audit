@@ -1,5 +1,13 @@
 # AEGIS 구현 작업 — 2026-09-09
 
+## 현재 실행 계약 우선 — 2026-09-10
+
+사용자가 목표를 발표용 로컬 데모로 축소했다. `.agent/DEMO_SCOPE.md`가 아래 기존 완료 조건·assurance·Opus 배정보다 우선한다. Coder는 Terra(`gpt-5.6-terra`), Planner/Reviewer는 Astra Light다. 이전 구현/검증 이력과 미커밋 변경은 보존하며 새 packet이나 추가 리뷰 단계를 만들지 않는다.
+
+남은 완료 기준은 세 Mock Provider 각각의 요청→AA 선택→Mock x402 결제→결과→감사 E2E, 예산 초과 결제 전 중단, 402 조건 불일치 중단, purchaseId별 중복 성공 결제 방지, dashboard build·기본 lint, README 양 언어·구조도·project log·handoff 최소 갱신과 실제/모의/미검증 구분 보고다. 필요한 기존 focused tests만 실행한다.
+
+전체 Python outbound 계측, 광범위 역사 zero-write 회귀, Mongo 실패 cleanup 스트레스, broad suite 반복, 추가 hardening은 유예한다. 아래 미완료 체크박스를 억지로 완료 표시하지 않으며 이번 데모의 차단 조건으로 재활성화하지 않는다. 기존 데이터는 보존하고 소유한 임시 저장소만 사용한다. 실제 AA/Provider 호출·토큰 배포·자산 이동·실제 테스트넷 결제·AWS 배포는 수행하지 않는다.
+
 사용자 확정 요구로 로컬 구현 승인됨. Planner/Reviewer Astra Light, Coder Opus. 구현 worktree `/Users/vien/MyProjects/PBL-aegis`, branch `feature/aegis-aa-v1`, base d084388. 기존 `/Users/vien/MyProjects/PBL-coder` dirty P6-03은 그대로 둔다.
 
 - packet-count: 3

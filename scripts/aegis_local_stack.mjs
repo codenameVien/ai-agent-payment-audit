@@ -26,7 +26,16 @@ const OWNED_DIR_PREFIX = "pbl-aegis-stack.";
 // there is no option through which a caller could point this stack at an existing store.
 const DATABASE = "pbl_aegis_local";
 const REPLICA_SET = "aegisrs";
-const ALLOWED_OPTIONS = new Set(["perTransactionLimitUnits", "dailyLimitUnits"]);
+// Storage is deliberately absent from this list: this run always owns its own mongod.
+const ALLOWED_OPTIONS = new Set([
+  "perTransactionLimitUnits",
+  "dailyLimitUnits",
+  // Abnormal-evidence scenarios point the fixture capture at other shipped fixtures.
+  "modelCatalogPath",
+  "aaFixturePages",
+  // Real outbound tripwire: every child is started with the guard preloaded.
+  "outboundLogPath",
+]);
 const PROVIDERS = ["openai", "anthropic", "google"];
 const NETWORK = "eip155:84532";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
@@ -56,14 +65,19 @@ function freePort() {
 }
 
 /** A deliberately minimal child environment: nothing about the developer's setup leaks in. */
-function baseEnv() {
+function baseEnv(options = {}) {
   const parent = process.env;
-  return {
+  const env = {
     PATH: parent.PATH ?? "/usr/bin:/bin",
     HOME: parent.HOME ?? "",
     TMPDIR: parent.TMPDIR ?? "/tmp",
     LANG: parent.LANG ?? "en_US.UTF-8",
   };
+  if (options.outboundLogPath !== undefined) {
+    env.AEGIS_OUTBOUND_LOG = options.outboundLogPath;
+    env.NODE_OPTIONS = `--require ${join(REPO_ROOT, "scripts/aegis_outbound_guard.cjs")}`;
+  }
+  return env;
 }
 
 class ChildProcesses {
@@ -283,7 +297,10 @@ export async function startAegisStack(options = {}) {
       `unsupported stack option(s): ${unknown.join(", ")}; this runner owns its own mongod`,
     );
   }
-  const children = new ChildProcesses();
+  // The storage this run owns and the services that talk to it are stopped separately,
+  // so a restart can replace every service against the same durable store.
+  const infra = new ChildProcesses();
+  let services = new ChildProcesses();
   const owned = { dbPath: null };
   try {
     if (!existsSync(join(REPO_ROOT, "services/commerce-gateway/dist/src/aegis/main.js"))) {
@@ -291,7 +308,7 @@ export async function startAegisStack(options = {}) {
         "build the runtime first: npm run build --workspace @pbl/commerce-gateway",
       );
     }
-    const mongo = await startOwnedMongo(children, owned);
+    const mongo = await startOwnedMongo(infra, owned);
 
     const secrets = {
       internalServiceToken: token(),
@@ -302,6 +319,9 @@ export async function startAegisStack(options = {}) {
       // Ephemeral test key, generated per run. No real wallet key is ever used here.
       signerPrivateKey: `0x${randomBytes(32).toString("hex")}`,
     };
+
+    /** Start one full set of services against the store this run already owns. */
+    async function startServices() {
     const ports = {
       evidence: await freePort(),
       facilitator: await freePort(),
@@ -317,7 +337,7 @@ export async function startAegisStack(options = {}) {
       PROVIDERS.map((providerId) => [providerId, `http://127.0.0.1:${ports[providerId]}`]),
     );
 
-    children.spawn(
+    services.spawn(
       "evidence-api",
       "uv",
       [
@@ -340,23 +360,29 @@ export async function startAegisStack(options = {}) {
         AEGIS_TOKEN_ADDRESS: ZERO_ADDRESS,
         AEGIS_TOKEN_STATUS: "prepared",
         AEGIS_EXECUTION_MODE: "mock",
+        ...(options.modelCatalogPath === undefined
+          ? {}
+          : { AEGIS_MODEL_CATALOG_PATH: options.modelCatalogPath }),
+        ...(options.aaFixturePages === undefined
+          ? {}
+          : { AA_FIXTURE_PAGES_JSON: JSON.stringify(options.aaFixturePages) }),
       },
     );
 
-    children.spawn(
+    services.spawn(
       "facilitator",
       process.execPath,
       ["services/commerce-gateway/dist/src/aegis/main.js", "facilitator"],
-      { ...baseEnv(), PORT: String(ports.facilitator) },
+      { ...baseEnv(options), PORT: String(ports.facilitator) },
     );
 
     for (const providerId of PROVIDERS) {
-      children.spawn(
+      services.spawn(
         `gateway-${providerId}`,
         process.execPath,
         ["services/commerce-gateway/dist/src/aegis/main.js", "provider-gateway"],
         {
-          ...baseEnv(),
+          ...baseEnv(options),
           PORT: String(ports[providerId]),
           AEGIS_PROVIDER_ID: providerId,
           AEGIS_NETWORK: NETWORK,
@@ -367,12 +393,12 @@ export async function startAegisStack(options = {}) {
       );
     }
 
-    children.spawn(
+    services.spawn(
       "payment-executor",
       process.execPath,
       ["services/commerce-gateway/dist/src/aegis/main.js", "payment-executor"],
       {
-        ...baseEnv(),
+        ...baseEnv(options),
         PORT: String(ports.executor),
         AEGIS_NETWORK: NETWORK,
         AEGIS_GATEWAY_ROUTES_JSON: JSON.stringify(gatewayRoutes),
@@ -427,24 +453,51 @@ export async function startAegisStack(options = {}) {
         daily_limit_units: options.dailyLimitUnits ?? 1_000_000,
       }),
     });
-    if (!policy.ok) throw new Error(`configuring the wallet policy failed: ${await policy.text()}`);
+    if (!policy.ok) {
+      const detail = await policy.text();
+      // After a restart the same policy is already in place and may hold reservations,
+      // which the Evidence API refuses to replace. That is the correct answer, not a
+      // startup failure, so only an unexpected refusal aborts.
+      if (!detail.includes("active wallet policy cannot be replaced")) {
+        throw new Error(`configuring the wallet policy failed: ${detail}`);
+      }
+    }
 
-    return {
-      evidenceUrl,
-      facilitatorUrl,
-      executorUrl,
-      gatewayRoutes,
+      return {
+        evidenceUrl,
+        facilitatorUrl,
+        executorUrl,
+        gatewayRoutes,
+        buyerWalletAddress,
+      };
+    }
+
+    const handle = (started) => ({
+      ...started,
       ownerAddress: LOCAL_OWNER,
-      buyerWalletAddress,
       internalServiceToken: secrets.internalServiceToken,
       mongodbUri: mongo.uri,
-      async stop() {
-        // Only after every child has really exited, and only this run's stamped directory.
-        await reclaim(children, owned);
+      /**
+       * Replace every service process while keeping the same durable store.
+       *
+       * This is what makes restart evidence real: nothing in memory survives, so what
+       * the new processes can still see came out of MongoDB.
+       */
+      async restart() {
+        await services.stopAll();
+        services = new ChildProcesses();
+        return handle(await startServices());
       },
-    };
+      async stop() {
+        await services.stopAll();
+        // Only after every child has really exited, and only this run's stamped directory.
+        await reclaim(infra, owned);
+      },
+    });
+    return handle(await startServices());
   } catch (error) {
-    await reclaim(children, owned);
+    await services.stopAll();
+    await reclaim(infra, owned);
     throw error;
   }
 }

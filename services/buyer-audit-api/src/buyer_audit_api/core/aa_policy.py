@@ -18,7 +18,7 @@ is a true tie. Decimal text is produced only for storage and display.
 from __future__ import annotations
 
 import unicodedata
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from decimal import ROUND_HALF_EVEN, Decimal, localcontext
 from enum import StrEnum
@@ -170,6 +170,17 @@ class PriorityClassification:
             "reason": self.reason.value,
             "weights": self.weights.to_payload(),
         }
+
+
+def classification_inputs(payload: Mapping[str, object]) -> tuple[str, object]:
+    """The exact two raw-request fields the priority classification is derived from.
+
+    Normalization at request time and the audit's re-classification of the stored original
+    must read the same fields the same way, so the convention is defined once here rather
+    than restated in each caller.
+    """
+    raw_prompt = payload.get("prompt", payload.get("query"))
+    return (raw_prompt if isinstance(raw_prompt, str) else ""), payload.get("priority")
 
 
 def parse_priority(value: object) -> RequestPriority | None:

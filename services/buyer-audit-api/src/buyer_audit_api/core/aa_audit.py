@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 
 from buyer_audit_api.core.aa_policy import (
     AA_REQUEST_SCHEMA_VERSION,
+    PRIORITY_CLASSIFICATION_METHOD,
     PRIORITY_KEYWORDS,
     PRIORITY_WEIGHTS,
     CandidateMetrics,
@@ -35,6 +36,7 @@ from buyer_audit_api.core.aa_policy import (
 )
 from buyer_audit_api.core.documents import raw_parts_hash
 from buyer_audit_api.core.models import JsonObject
+from buyer_audit_api.core.request_classification import OriginalClassification
 
 
 @dataclass(frozen=True, slots=True)
@@ -97,6 +99,7 @@ def recalculate_decision(
     requested_payload: Mapping[str, object],
     snapshot_payload: Mapping[str, object],
     decided_payload: Mapping[str, object],
+    original_classification: OriginalClassification | None = None,
 ) -> tuple[AaRecalculationIssue, ...]:
     """Rebuild the decision from the snapshot document and report every disagreement.
 
@@ -129,7 +132,9 @@ def recalculate_decision(
     tokens_in, tokens_out, token_issue = _token_estimate(normalized, decided_payload)
     if token_issue is not None:
         issues.append(token_issue)
-    weights, priority_issues = _priority_issues(normalized, decided_payload)
+    weights, priority_issues = _priority_issues(
+        normalized, decided_payload, original_classification
+    )
     issues.extend(priority_issues)
     if tokens_in is None or tokens_out is None or weights is None:
         return tuple(issues)
@@ -432,12 +437,15 @@ def _token_estimate(
 def _priority_issues(
     normalized: Mapping[str, object],
     decided_payload: Mapping[str, object],
+    original: OriginalClassification | None = None,
 ) -> tuple[PolicyWeights | None, list[AaRecalculationIssue]]:
     """Check the priority, its recorded justification and the fixed weight table.
 
-    The prompt itself is never in the evidence chain, so a keyword classification cannot
-    be re-derived here. Internal consistency and dictionary membership are checked, and
-    the un-rederivable part is reported instead of being presented as verified.
+    Internal consistency and dictionary membership are always checked. When the audit was
+    also able to re-classify the stored original request, the recorded classification is
+    compared with that re-derivation, which is what makes a normalization and a decision
+    that were edited together detectable. Without it, the un-rederivable part is reported
+    as unverified rather than presented as verified.
     """
     issues: list[AaRecalculationIssue] = []
     stored = _mapping(decided_payload.get("priority"))
@@ -477,13 +485,14 @@ def _priority_issues(
             )
         )
     blocking = bool(issues)
-    issues.extend(_classification_issues(normalized, priority))
+    issues.extend(_classification_issues(normalized, priority, original))
     return (None if blocking else expected_weights), issues
 
 
 def _classification_issues(
     normalized: Mapping[str, object],
     priority: RequestPriority | None,
+    original_request: OriginalClassification | None = None,
 ) -> list[AaRecalculationIssue]:
     original = normalized.get("original_priority")
     raw_reason = normalized.get("priority_reason")
@@ -602,11 +611,33 @@ def _classification_issues(
                 mismatched_fields=("matched_keywords",),
             )
         )
-    if reason in (PriorityReason.KEYWORD_MATCH, PriorityReason.CONFLICTING_KEYWORD_MATCH):
-        # The prompt is never part of the evidence chain, so this audit can confirm the
-        # recorded justification is internally consistent and uses only dictionary terms,
-        # but it cannot re-derive the match from the original text.
-        issues.append(
+    issues.extend(
+        _original_request_issues(normalized, original_request, reason, matched_keywords)
+    )
+    return issues
+
+
+def _original_request_issues(
+    normalized: Mapping[str, object],
+    original_request: OriginalClassification | None,
+    reason: PriorityReason,
+    matched_keywords: tuple[str, ...],
+) -> list[AaRecalculationIssue]:
+    """Compare the recorded classification with a re-classification of the original.
+
+    Only policy names and fixed dictionary terms are compared and reported. The prompt is
+    never an input to a finding, so this closes the re-derivation gap without putting the
+    user's text into the evidence chain.
+    """
+    keyword_reason = reason in (
+        PriorityReason.KEYWORD_MATCH,
+        PriorityReason.CONFLICTING_KEYWORD_MATCH,
+    )
+    if original_request is None:
+        if not keyword_reason:
+            return []
+        # No reader is wired: historical behaviour, reported as not re-derivable.
+        return [
             AaRecalculationIssue(
                 rule_id="AUD-AA-PRIORITY-CLASSIFICATION-UNVERIFIABLE",
                 detail=(
@@ -614,14 +645,58 @@ def _classification_issues(
                     "기록된 근거의 내부 정합성만 확인했습니다."
                 ),
                 expected={"promptDerivedClassification": "not re-derivable"},
-                observed={
-                    "reason": reason.value,
-                    "matchedKeywords": list(matched_keywords),
-                },
+                observed={"reason": reason.value, "matchedKeywords": list(matched_keywords)},
                 is_contradiction=False,
             )
+        ]
+    if original_request.status == "binding_invalid":
+        return [
+            AaRecalculationIssue(
+                rule_id="AUD-AA-PRIORITY-ORIGINAL-BINDING-INVALID",
+                detail=(
+                    "저장된 요청 원문이 이 구매의 기록과 결속되지 않습니다. "
+                    f"{original_request.detail}"
+                ),
+                expected={"originalRequestBinding": "purchase, kind and rawRequestHash"},
+                observed={"originalRequestBinding": "invalid"},
+                mismatched_fields=("rawRequestHash",),
+            )
+        ]
+    if original_request.status == "unavailable":
+        return [
+            AaRecalculationIssue(
+                rule_id="AUD-AA-PRIORITY-ORIGINAL-UNAVAILABLE",
+                detail=(
+                    "요청 원문으로 분류를 재도출하지 못했습니다. "
+                    f"기록된 근거의 내부 정합성만 확인했습니다. {original_request.detail}"
+                ),
+                expected={"originalRequest": "decryptable"},
+                observed={"originalRequest": "unavailable"},
+                is_contradiction=False,
+            )
+        ]
+    recorded = {
+        "classificationMethod": PRIORITY_CLASSIFICATION_METHOD,
+        "effectivePriority": normalized.get("effective_priority"),
+        "matchedKeywords": list(_strings(normalized.get("matched_keywords"))),
+        "matchedPriorities": list(_strings(normalized.get("matched_priorities"))),
+        "originalPriority": normalized.get("original_priority"),
+        "reason": normalized.get("priority_reason"),
+    }
+    rederived = original_request.to_payload()
+    if recorded == rederived:
+        return []
+    return [
+        AaRecalculationIssue(
+            rule_id="AUD-AA-PRIORITY-ORIGINAL-MISMATCH",
+            detail="기록된 우선순위 분류가 요청 원문을 재분류한 결과와 다릅니다.",
+            expected=rederived,
+            observed=recorded,
+            mismatched_fields=tuple(
+                sorted(key for key in rederived if rederived[key] != recorded.get(key))
+            ),
         )
-    return issues
+    ]
 
 
 def _filter_issues(

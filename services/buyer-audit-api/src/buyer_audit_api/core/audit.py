@@ -25,6 +25,10 @@ from buyer_audit_api.core.models import (
     JsonObject,
 )
 from buyer_audit_api.core.ports import Clock
+from buyer_audit_api.core.request_classification import (
+    OriginalClassification,
+    StoredRequestClassifier,
+)
 
 RULESET_VERSION = "phase6.rules.v1"
 LEGACY_RULESET_VERSION = "legacy.pre-phase6"
@@ -393,6 +397,7 @@ class AuditEvaluator:
         *,
         ruleset_version: str = RULESET_VERSION,
         referenced_documents: Mapping[str, JsonObject] | None = None,
+        original_classification: OriginalClassification | None = None,
     ) -> tuple[AuditFinding, ...]:
         by_type = {event.type: event for event in events}
         findings: list[AuditFinding] = []
@@ -502,6 +507,7 @@ class AuditEvaluator:
                 requested=requested,
                 add=add,
                 referenced_documents=referenced_documents or {},
+                original_classification=original_classification,
             )
             return tuple(findings)
 
@@ -986,6 +992,7 @@ def _aa_deterministic_findings(
     requested: EvidenceEvent,
     add: AddFinding,
     referenced_documents: Mapping[str, JsonObject],
+    original_classification: OriginalClassification | None = None,
 ) -> None:
     """Judge an `aa-three-factor-v1` purchase by recomputing its own decision.
 
@@ -1057,6 +1064,7 @@ def _aa_deterministic_findings(
                 "snapshotHash": snapshot.payload.get("snapshotHash"),
             },
             decided_payload=decided.payload,
+            original_classification=original_classification,
         ):
             add(
                 issue.rule_id,
@@ -1222,10 +1230,14 @@ class AuditService:
         repository: AuditRepository,
         clock: Clock,
         semantic_advisor: SemanticAuditAdvisor | None = None,
+        original_requests: StoredRequestClassifier | None = None,
     ) -> None:
         self._repository = repository
         self._clock = clock
         self._semantic = semantic_advisor or NoopSemanticAuditAdvisor()
+        # Optional on purpose: without it the audit keeps AEGIS-01's honest "not
+        # re-derivable" report instead of silently claiming a verification it did not do.
+        self._original_requests = original_requests
         self._evaluator = AuditEvaluator()
         self._reader = AuditReportReader()
 
@@ -1259,6 +1271,26 @@ class AuditService:
             }
         return documents
 
+    async def _original_classification(
+        self, events: list[EvidenceEvent]
+    ) -> OriginalClassification | None:
+        """Re-classify the stored original request, for `aa-three-factor-v1` purchases only.
+
+        The result carries policy names and dictionary terms, never the prompt, so nothing
+        that reaches a finding, the semantic advisor or a log line contains user text.
+        """
+        if self._original_requests is None or not events:
+            return None
+        requested = events[0]
+        if requested.type is not EventType.REQUESTED:
+            return None
+        if not is_aa_policy_request(requested.payload):
+            return None
+        return await self._original_requests.classify(
+            purchase_id=requested.purchase_id,
+            requested_payload=requested.payload,
+        )
+
     async def audit(self, purchase_id: str) -> AuditReport:
         events = await self._repository.list_events(purchase_id)
         head = await self._repository.get_event_head(purchase_id)
@@ -1274,8 +1306,11 @@ class AuditService:
             return current
 
         referenced = await self._referenced_documents(events)
+        original = await self._original_classification(events)
         deterministic = self._evaluator.deterministic_findings(
-            events, referenced_documents=referenced
+            events,
+            referenced_documents=referenced,
+            original_classification=original,
         )
         semantic = await self._semantic.advise(
             purchase_id=purchase_id,

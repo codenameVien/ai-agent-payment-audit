@@ -576,6 +576,24 @@ def test_delivery_requires_a_settled_payment_and_the_decided_model(
         assert recorded.status_code == 200, recorded.text
         assert recorded.json()["payload"]["executionMode"] == "mock"
 
+        # The same result delivered again is the same delivery, even if this mock
+        # execution happened to take a different number of milliseconds.
+        repeated = client.post(
+            f"/internal/evidence/aegis/purchases/{purchase_id}/delivery",
+            json={**delivery, "observed_execution_ms": delivery["observed_execution_ms"] + 7},
+            headers=INTERNAL_HEADERS,
+        )
+        assert repeated.status_code == 200, repeated.text
+        assert repeated.json()["event_hash"] == recorded.json()["event_hash"]
+
+        # A genuinely different result is still a conflict.
+        conflicting = client.post(
+            f"/internal/evidence/aegis/purchases/{purchase_id}/delivery",
+            json={**delivery, "response_hash": "sha256:" + "3" * 64},
+            headers=INTERNAL_HEADERS,
+        )
+        assert conflicting.status_code == 409
+
 
 def test_a_reservation_needs_a_budget_that_covers_the_decided_amount(
     runtime_container: AppContainer,

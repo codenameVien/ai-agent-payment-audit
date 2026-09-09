@@ -30,6 +30,10 @@ class Settings(BaseSettings):
     # and the live Artificial Analysis contract stays an unfinished external gate.
     aa_api_key: str | None = None
     aa_field_paths_json: str = "{}"
+    # Test-only: point the fixture capture at a different set of shipped AA pages so the
+    # abnormal-evidence scenarios can be exercised against the real service. Empty means
+    # the shipped pages. It has no effect once AA_API_KEY selects the live adapter.
+    aa_fixture_pages_json: str = ""
     aegis_model_catalog_path: str | None = None
     aegis_max_output_tokens: int = 1024
     aegis_system_prompt: str = ""

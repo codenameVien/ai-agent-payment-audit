@@ -126,6 +126,7 @@ from buyer_audit_api.core.reputation import (
     ReputationPublishJob,
     ReputationSnapshot,
 )
+from buyer_audit_api.core.request_classification import StoredRequestClassifier
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 from buyer_audit_api.domains.ai_inference.models import NormalizedAiRequest
 
@@ -552,6 +553,13 @@ def create_app(container: AppContainer) -> FastAPI:
     audit_service = AuditService(
         repository=cast(AuditRepository, container.repository),
         clock=container.clock,
+        # The audit decrypts the stored original request under its own authority to
+        # re-derive the priority classification. Nothing but the classification result
+        # leaves that boundary.
+        original_requests=StoredRequestClassifier(
+            store=container.repository,
+            cipher=container.cipher,
+        ),
     )
 
     @asynccontextmanager
@@ -2269,7 +2277,21 @@ def create_app(container: AppContainer) -> FastAPI:
         }
         existing = [event for event in events if event.type == EventType.DELIVERED]
         if existing:
-            if len(existing) == 1 and existing[0].payload == payload:
+            # Identity, not the whole payload: `observedExecutionMs` is how long this
+            # mock execution happened to take, so a repeated delivery of the same result
+            # would otherwise conflict with itself on a one millisecond difference.
+            identity = (
+                "executionMode",
+                "modelId",
+                "modelVersion",
+                "providerId",
+                "responseHash",
+                "responseId",
+                "termsBindingHash",
+            )
+            if len(existing) == 1 and all(
+                existing[0].payload.get(key) == payload[key] for key in identity
+            ):
                 return _event_response(existing[0])
             raise HTTPException(status_code=409, detail="different delivery already recorded")
         try:

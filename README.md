@@ -1,130 +1,111 @@
 [한국어](README.md) | [English](README.en.md)
 
-# AI 에이전트 M2M 결제 감사
-
-구매 에이전트의 선택 근거와 실제 블록체인 결제를 연결해 사용자가 검증할 수 있게 하는 감사 시스템이다.
+# AEGIS — AI 모델 구매와 감사
 
 ## 왜 만들었나
 
-결제 성공만으로는 AI 에이전트가 사용자 요구·예산·정책에 맞는 서비스를 골랐는지 알 수 없다. 요청, 후보, 견적, 선택, 결제, 전달, 감사 증거를 하나의 `purchaseId`로 연결하고 실제 Base Sepolia 거래와 교차 검증한다.
+사용자 요청에 맞춰 구매 에이전트가 모델을 비교하고, 고정 가격 결제 요청과 결과를 같은 `purchaseId`로 연결하는 시스템입니다. 발표용 단일 사용자 로컬 데모의 핵심 검증을 완료했습니다. 실제 API·온체인 결제·공개 서비스 완성을 뜻하지 않습니다. 완료·미완료 범위는 [검증 기록](docs/AEGIS_VERIFICATION.md)을 확인하세요.
 
 ## 주요 기능
 
-현재 로컬 구현 범위:
-
-- SIWE challenge와 서명 검증, nonce 원자 소비, replay·domain·URI·chain·expiry 거부
-- 사용자 MetaMask 주소와 프로그램형 buyer wallet의 고유 바인딩
-- RFC 8785 기반 append-only 이벤트 hash chain과 변조 검출
-- AES-256-GCM envelope encryption을 사용한 민감 원문 분리 저장
-- 인증된 소유자만 가능한 원문 열람과 열람 감사 이벤트
-- AI 추론 구현을 import하지 않는 재사용 core와 fake-domain 검증
-- PyMongo Async 기반 실제 MongoDB 원자성·동시성 통합 테스트
-- 수동 benchmark snapshot 정규화·24시간 freshness와 결정적 hard filter
-- balanced/quality/price/speed 네 가지 고정 가중치 선택과 근거 저장
-- Gemini/Nemotron 공통 판매 엔진, mock 및 실제 HTTP provider adapter
-- ERC-8004 agent ID까지 서명하는 EIP-712 seller quote와 필드 변조/만료 검출
-- provider 내부 최대 1회 counteroffer와 request ID idempotency
-- 공통 payment quote와 `ai_inference` 확장 schema 분리
-- `/health`, `/internal/quotes`, x402-gated `/v1/inference` transport
-- 인증된 `/purchases/{id}/run`으로 요청→선택→결제→전달→감사를 한 번에 실행하는 E2E
-- 판매자 `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` durable journal과 응답 유실·재시작 복구
-- 전달 결과의 seller/provider/model/version을 선택된 서명 견적과 결속하는 무결성 감사
-- PBLC V2 x402 v2 `exact + ERC-3009` 단일 신규 결제 경로와 과거 Permit2 감사 기록 읽기 호환성
-- 원자적 예산 예약과 독립 Base Sepolia receipt·정확한 ERC-20 Transfer 검증
-- 결정적 normal/caution/risk 감사와 semantic advisor 권한 제한
-- audit bundle hash에 결합된 ERC-8004 객관 100/0 평판 및 tx evidence
-- 성공 receipt와 정확한 event 이후에만 기록하는 EvidenceAnchor
-- 지갑·거래·선택 이유·평판·감사 경고를 보여주는 읽기 전용 Next.js 대시보드와 SSE
-- 별도 `/request` 구매 요청 화면과 구매 폼·실험 실행기가 없는 `/`·`/dashboard` 읽기 전용 감사 화면
-- MongoDB·API·대시보드·두 Seller·Gateway Compose와 비용 기본 차단 AWS Terraform handoff
-
-Base Sepolia x402 결제·ERC-8004 평판·EvidenceAnchor 실거래는 완료했다. 실제 provider API·AWS·대시보드 캡처 등 남은 외부 게이트와 거래 링크는 [인계 문서](docs/HANDOFF.md)에 정리했다.
+요청별 모델 비교, 고정 가격 결제 요청, 결과 반환과 선택 근거 감사를 하나의 기록으로 연결합니다. 구매는 `/request`, 감사 조회는 `/dashboard`에서 수행합니다.
 
 ## 구조
 
 ```mermaid
 flowchart LR
   U[사용자] --> R[구매 요청 /request]
-  U --> D[감사 대시보드 /dashboard]
-  R --> B[Buyer Agent]
-  subgraph BUYER[Buyer Agent 논리 경계]
-    B --> BW[Buyer SDK Wrapper]
-    BW --> P[Payment Executor\n별도 프로세스·키 격리]
-  end
-  BW --> S[판매 에이전트]
-  S --> SW[Seller SDK Wrapper\nGemini · Nemotron]
-  BW --> E[Audit Evidence API]
+  R --> B[구매 에이전트]
+  B --> P[결제 실행 모듈 · 키 격리]
+  P --> G[세 Provider Mock Gateway]
+  G --> F[Mock Facilitator]
+  G -->|결과| B
+  B -->|결과| R
+  B --> E[감사 증거 기록 API]
   P --> E
-  S --> E
+  G --> E
   E --> M[(MongoDB)]
-  P --> F[x402 Facilitator]
-  F --> C[Base Sepolia\nPBLC V2 ERC-3009]
-  P -. 독립 RPC .-> C
+  U --> D[읽기 전용 대시보드]
   D --> E
 ```
 
-`core/`는 `domains/ai_inference/`, Gemini, Nemotron을 import하지 않는다. 다음 구매 도메인은 core를 수정하지 않고 domain port, schema, seller adapter, UI renderer로 연결한다.
+OpenAI·Anthropic Claude·Google Gemini Gateway는 선택된 모델의 결과를 반환하는 일반 코드입니다. 구매 에이전트가 요청 분석, AA 데이터 조회, 가격 계산, 필터·비교·선택을 담당합니다. 별도 프로세스의 **결제 실행 모듈**이 키를 격리하고 x402 v2 exact + ERC-3009 승인에 서명하며, Gateway가 Facilitator의 verify/settle 확인 후 결과를 제공합니다.
+
+현재 Provider와 Facilitator는 모두 Mock이고 AA 수치는 synthetic fixture입니다. 실제 모델 ID를 표시해도 fixture 숫자가 해당 모델의 실제 벤치마크는 아닙니다. 실제 Provider·AA·블록체인·AWS 호출 없이 실행합니다. [구조도와 책임 경계](docs/AEGIS_ARCHITECTURE.md)
 
 ## 시작하기
 
+Node.js 20 이상, npm 의존성, Python 3.12/uv, 로컬 `mongod`·`mongosh`가 필요합니다. 저장소 루트에서 실행합니다.
+
 ```bash
-cd /Users/vien/MyProjects/PBL
 npm run setup:python
-npm run lint
-npm test
-npm run test:mongo:local
+npm run aegis:stack
 ```
 
-Compose 실행과 실제 체인 smoke 순서는 [docs/HANDOFF.md](docs/HANDOFF.md)에 있다.
+runner는 전용 임시 MongoDB replica set과 증거 API, 세 Gateway, Mock Facilitator, 결제 실행 모듈을 시작합니다. 기존 환경 파일·MongoDB를 사용하지 않고 임시 테스트 키를 생성합니다. **Ctrl-C 종료 시 이 실행의 임시 DB와 기록이 제거됩니다.** 기존 PBLC 거래나 사용자 MongoDB 기록에는 접근하지 않습니다.
 
-로그인 후 `/`와 `/dashboard`는 기록을 읽기만 한다. 구매는 `/request`에서 Base Sepolia
-결제 고지를 확인한 뒤 실행하며, `/experiments`는 `/request`로 이동한다. 현재 기본 `PROVIDER_MODE=mock`에서는 결제·체인 검증·감사
-증거는 실제지만 AI 응답 본문은 mock provider가 만든다.
-
-API를 직접 실행하려면 시크릿을 채팅에 붙이지 말고 별도 터미널에서 한 번 생성한다.
+출력의 `evidence API` 주소를 복사하고 다른 터미널에서 다음을 실행합니다. `API_ORIGIN`에는 출력된 실제 주소를 넣습니다.
 
 ```bash
-cd /Users/vien/MyProjects/PBL
-python3 scripts/setup_keys.py
-npm run api
+API_ORIGIN="http://127.0.0.1:출력된포트" npm run dev --workspace @pbl/dashboard -- --hostname 127.0.0.1 --port 3000
 ```
 
-환경 변수 이름은 `.env.example`에 있으며 실제 값은 Git에서 제외된다.
-
-기본 `PROVIDER_MODE=mock`에서는 Gemini/NVIDIA 키가 필요 없다. 실제 provider 호출을 검증할 때만 값을 채팅에 보내지 말고 별도 터미널에서 숨김 입력한 뒤 `PROVIDER_MODE=real`로 바꾼다.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-python3 scripts/input_provider_keys.py
-```
+`http://localhost:3000/request`에서 요청·예산·선택적 우선순위와 실행 동의를 입력합니다. `/dashboard`는 읽기 중심 감사 화면입니다. SIWE 로그인은 신규 흐름에 없습니다. 단일 로컬 사용자 범위이며 공개 다중 사용자 인증 완성을 의미하지 않습니다. 내부 API 보호와 원문 암호화는 유지합니다.
 
 ## 사용 예시
 
-현재 빌드에서 수행한 검증:
+실제 임시 MongoDB·로컬 HTTP 서비스에서 `allowed_providers: ["openai"]`인 요청은 AA fixture 기반 OpenAI 선택 → Mock 결제 → 결과 반환 → `AUDITED` 기록까지 통과했습니다. Claude·Gemini도 각각 같은 경로를 검증했습니다. 아래는 2026-09-10 집중 E2E 실제 출력입니다.
 
 ```text
-75 passed, 1 skipped  # Python; native Mongo is isolated by default
-30 passed             # Seller Service
-35 passed             # Payment Executor (internal package name: commerce-gateway)
-11 passed             # Solidity Foundry
-3 passed              # Dashboard request/read-only boundary
-1 passed              # Native MongoDB replica-set integration
-Success: no issues found in 43 source files  # strict mypy
+ok 1 - openai is selected, paid once and delivered
+ok 2 - anthropic is selected, paid once and delivered
+ok 3 - google is selected, paid once and delivered
+ok 4 - a budget below every candidate leaves no eligible model and no payment
+ok 5 - two concurrent runs of one purchase settle exactly once
+# tests 5
+# pass 5
+# fail 0
 ```
 
-SIWE 인증 후 fake domain purchase를 만들면 공개 이벤트에는 정규화 결과와 원문 hash만 남고, 원문은 암호화 저장소에서 소유자 인증 후 별도로 조회된다.
+세 Provider 경로는 각각 허용 목록으로 선택 대상을 제한한 통합 검증입니다. 실제 모델 성능 비교 실험이나 실거래 결과가 아닙니다.
 
-## 기술 선택
+`aa-three-factor-v1`의 가격·완료시간·성능 가중치는 고정입니다.
 
-- FastAPI: Python 구매·감사 core를 인증된 HTTP/SSE 경계로 노출하는 API 프레임워크
-- PyMongo Async: 폐기 예정 Motor 대신 공식 비동기 드라이버 사용
-- RFC 8785 + SHA-256: 동일한 JSON 증거가 동일한 hash를 갖게 함
-- AES-256-GCM envelope encryption: 원문별 data key와 이후 AWS KMS 교체 경계 제공
-- SIWE: MetaMask 소유권과 자율 결제 buyer wallet을 분리
-- 자체 PBLC V2 + ERC-3009: 고정 견적을 정확히 한 번 가스리스 결제하는 유일한 신규 결제 경로. 과거 Permit2 거래는 감사 조회용 데이터로만 남고 재실행할 수 없음
-- ERC-8004: provider 단위 판매 에이전트 신원과 객관적 결제 결과 평판
-- Next.js: 공통 감사 shell과 도메인별 renderer를 분리한 대시보드
+| priority | 가격 | 완료시간 | 성능 |
+|---|---:|---:|---:|
+| default | 40% | 30% | 30% |
+| price | 60% | 20% | 20% |
+| speed | 20% | 60% | 20% |
+| intelligence | 20% | 20% | 60% |
+
+명시적 priority가 우선이며, 미지정이면 요청 문구를 분류합니다. 예산·기능·최대 허용시간·허용 Provider를 먼저 필터링한 뒤 통과 후보의 세 점수를 비교합니다. 평판·freshness·수동 품질 점수는 신규 선택에 쓰지 않습니다.
+
+`quoteAEGIS = (예상 입력 토큰 × 입력 단가 + 최대 출력 토큰 × 출력 단가) / 1,000,000`
+
+markup 없이 6-decimal 정수 단위로 올림합니다. 최대 출력량을 반영한 사전 고정 결제액이며 사용량 사후 정산이 아닙니다. **1 AEGIS = 1 USD는 명목 환산이고 달러 담보·상환 약속이 아닙니다.**
+
+데이터 계약 출처는 [Artificial Analysis](https://artificialanalysis.ai/data-api/docs)입니다. 완료시간은 기본 500 answer tokens 조건의 벤치마크 참고값이며 실제 완료 보장이 아닙니다. snapshot·정확한 mapping·필수 값 검증에 실패하면 결제 전 중단합니다.
+
+## 감사와 검증
+
+감사 증거 API가 MongoDB의 요청·snapshot·전체 후보·선택·결제·응답을 연결하고 이벤트 순서와 해시 체인을 검사합니다. Gateway와 결제 실행 모듈은 MongoDB에 직접 접근하지 않습니다. 신규 결제 상태 근거는 Facilitator 응답이며 독립 RPC Transfer 검증이나 온체인 Anchor 보장을 주장하지 않습니다. Mock 실행시간과 조회하지 않은 잔액은 실제 측정값으로 표시하지 않습니다.
+
+```bash
+npm run build --workspace @pbl/commerce-gateway
+node --test --require ./scripts/aegis_outbound_guard.cjs --test-name-pattern='(openai is selected|anthropic is selected|google is selected|budget below every candidate|two concurrent runs)' scripts/aegis_phase6_scenarios.test.mjs
+node --test --test-name-pattern='tampered 402|gateway refuses a payment payload' services/commerce-gateway/dist/tests/aegis-runtime.test.js
+npm run lint
+npm run build --workspace @pbl/dashboard
+```
+
+집중 E2E 5건·402 불일치 2건, dashboard build·기본 lint가 통과했습니다. Python 전체 outbound 계측, 과거 증거 광범위 zero-write 회귀, Mongo 실패 정리 스트레스, 전체 테스트 반복 및 추가 보안·성능 강화는 후속 과제입니다. 이를 완료하거나 운영 보안을 보장한다고 주장하지 않습니다.
 
 ## 로드맵
 
-[docs/ROADMAP.md](docs/ROADMAP.md)
+[작업 상태](docs/ROADMAP.md)와 [검증 기록](docs/AEGIS_VERIFICATION.md)에서 남은 구현과 검증을 추적합니다.
+
+### 과거 기록과 외부 게이트
+
+과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다. [과거 증거와 인계](docs/HANDOFF.md)
+
+AEGIS 계약은 로컬 준비 단계이며 실제 배포·자산 이동·실제 테스트넷 결제는 지갑·방식·예상 주소·가스·금액을 제시하고 별도 승인받습니다. AA 실제 API 검증은 서버 키와 진짜 ID/slug mapping 검증이 필요한 외부 게이트입니다. Provider 실제 키는 연결하지 않습니다. **AWS 배포는 진행하지 않습니다.** 공개 접근 제어와 원문 보존 정책은 향후 배포 전에 별도로 결정합니다.

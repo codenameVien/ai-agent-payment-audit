@@ -1,5 +1,11 @@
 # Project Overview
 
+## Current user override — 2026-09-10
+
+The current goal is the presentation local demo defined in `.agent/DEMO_SCOPE.md`; it supersedes conflicting completion/assurance gates below. Coder is Terra (`gpt-5.6-terra`); Planner/Reviewer remain Astra Light. Finish only three Mock Provider request→AA selection→Mock x402 payment→result→audit E2Es, over-budget rejection, 402-condition mismatch rejection, duplicate-success prevention per purchaseId, dashboard build/basic lint, and minimal documentation. Preserve existing implementation, uncommitted changes and historical evidence.
+
+Defer full Python outbound instrumentation, broad historical zero-write regression, Mongo failure-cleanup stress tests, broad-suite repeats and additional hardening. These are reported limitations, not demo completion blockers; do not claim they passed. Use owned disposable storage only. Do not invoke real AA/Provider APIs, deploy tokens, move assets, make real testnet payments or deploy AWS. Prior broader task checklists remain history, not mandatory work for this reduced goal.
+
 This graduation PBL audits whether an AI buyer's model choice obeyed the request, budget, and deterministic Artificial Analysis policy. The 2026-09-09 confirmed scope supersedes earlier active seller/reputation/anchor/SIWE/RPC requirements. Preserve prior implementation and transaction history.
 
 ## Product Intent & Invariants

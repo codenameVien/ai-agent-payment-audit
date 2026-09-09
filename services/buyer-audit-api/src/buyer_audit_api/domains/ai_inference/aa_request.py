@@ -27,6 +27,7 @@ from buyer_audit_api.core.aa_policy import (
     RequestPriority,
     TokenEstimate,
     TokenEstimationMethod,
+    classification_inputs,
     classify_priority,
     estimate_tokens,
 )
@@ -105,8 +106,7 @@ def normalize_aegis_request(
     system_prompt: str = "",
 ) -> AegisNormalizedRequest:
     """Build the stored normalization, including the whole input the model will receive."""
-    raw_prompt = payload.get("prompt", payload.get("query"))
-    prompt = raw_prompt if isinstance(raw_prompt, str) else ""
+    prompt, explicit_priority = classification_inputs(payload)
     raw_max_output = payload.get("max_output_tokens", payload.get("maxOutputTokens"))
     max_output_tokens = (
         default_max_output_tokens if raw_max_output is None else raw_max_output
@@ -114,7 +114,7 @@ def normalize_aegis_request(
     if isinstance(max_output_tokens, bool) or not isinstance(max_output_tokens, int):
         raise ValueError("max_output_tokens must be a positive integer")
     try:
-        classification = classify_priority(prompt=prompt, explicit=payload.get("priority"))
+        classification = classify_priority(prompt=prompt, explicit=explicit_priority)
         estimate = estimate_tokens(
             model_input_parts=(system_prompt, prompt),
             max_output_tokens=max_output_tokens,

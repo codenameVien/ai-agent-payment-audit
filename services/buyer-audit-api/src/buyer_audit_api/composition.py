@@ -128,8 +128,19 @@ def build_aa_capture_source(
     field_paths = AaFieldPaths.from_mapping(overrides)
     api_key = (settings.aa_api_key or "").strip()
     if not api_key:
+        pages: tuple[Path, ...] = FIXTURE_PAGE_PATHS
+        if settings.aa_fixture_pages_json.strip():
+            try:
+                declared = json.loads(settings.aa_fixture_pages_json)
+            except json.JSONDecodeError as exc:
+                raise ConfigurationError("AA_FIXTURE_PAGES_JSON must be valid JSON") from exc
+            if not isinstance(declared, list) or not all(
+                isinstance(item, str) and item.strip() for item in declared
+            ):
+                raise ConfigurationError("AA_FIXTURE_PAGES_JSON must be a list of paths")
+            pages = tuple(Path(item) for item in declared)
         return FixtureArtificialAnalysisSource(
-            page_paths=FIXTURE_PAGE_PATHS, field_paths=field_paths
+            page_paths=pages, field_paths=field_paths
         )
     if catalog.provenance != {MappingProvenance.CONFIGURED}:
         raise ConfigurationError(
