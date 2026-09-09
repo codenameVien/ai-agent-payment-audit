@@ -1,10 +1,10 @@
 [한국어](README.md) | [English](README.en.md)
 
-# AEGIS — AI Model Purchasing and Audit
+# PBLC V2 — AI Model Purchasing and Audit
 
 ## Why
 
-A system connecting a buyer agent's model selection, fixed-price payment request, and result through one `purchaseId`. Core verification of the presentation single-user local demo is complete. This is not completion of live APIs, on-chain payments, or a public service. See the [verification record](docs/AEGIS_VERIFICATION.md) for measured completion and remaining work.
+A system connecting a buyer agent's model selection, PBLC V2 fixed-price payment request, and result through one `purchaseId`. Core verification of the presentation single-user local demo is complete. This is not completion of live Provider APIs, on-chain payments, or a public service. See the [verification record](docs/AEGIS_VERIFICATION.md) for measured completion and remaining work.
 
 ## Features
 
@@ -31,7 +31,7 @@ flowchart LR
 
 OpenAI, Anthropic Claude, and Google Gemini Gateways are ordinary code modules. The buyer analyzes the request, reads AA data, calculates prices, filters candidates, and selects a model. An isolated payment execution module signs x402 v2 exact + ERC-3009 authorizations; the Gateway releases the result after Facilitator verify/settle confirmation.
 
-Providers and the Facilitator are currently **Mock**, and AA values are **synthetic fixtures**. Real model identifiers do not make fixture values real benchmarks for those models. The local stack makes no real Provider, AA, blockchain, or AWS calls. See the [architecture](docs/AEGIS_ARCHITECTURE.md).
+Providers and the Facilitator are currently **Mock**. AA uses fixtures by default; only a server-side `AA_API_KEY` plus an exact configured `AA_MODEL_CATALOG_PATH` enables a live Artificial Analysis snapshot. The local stack makes no real Provider, blockchain, or AWS calls. See the [architecture](docs/AEGIS_ARCHITECTURE.md).
 
 ## Getting Started
 
@@ -80,9 +80,9 @@ Fixed `aa-three-factor-v1` weights:
 
 Explicit priority wins; otherwise request wording selects the preset. Budget, capabilities, maximum allowed time, and allowed Providers are hard filters applied before scoring. Reputation, freshness, and manual quality scores are excluded from new selection.
 
-`quoteAEGIS = (estimated input tokens × input price + maximum output tokens × output price) / 1,000,000`
+`quotePBLC = (estimated input tokens × input price + maximum output tokens × output price) / 1,000,000`
 
-There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 AEGIS = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
+There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 PBLC = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
 
 The data contract comes from [Artificial Analysis](https://artificialanalysis.ai/data-api/docs). Completion time is a benchmark reference, normally based on 500 answer tokens, not a completion guarantee. Invalid snapshots, missing required values, or failed exact mapping stop purchasing before payment.
 
@@ -108,4 +108,4 @@ The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION
 
 Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
 
-AEGIS is prepared locally, not deployed. Deployment, asset movement, and real testnet payment require separate approval after wallets, method, predicted address, gas estimate, and test amount are presented. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
+The new execution path reuses deployed PBLC V2 ERC-3009 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` on Base Sepolia (6 decimals) as its payment terms. The Facilitator remains Mock, so it does not move real assets. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping; run `bash scripts/set_aa_api_key.sh` locally rather than sharing a key in chat. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
