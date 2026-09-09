@@ -340,6 +340,13 @@
 - 현재 pending nonce 기준 예상 CREATE 주소·가스·초기 공급량은 [PBLC 사용자 소유 토큰 준비](../docs/PBLC_USER_TOKEN_PREPARATION.md)에 기록했다. 이 패킷은 개인키·RPC·서명·브로드캐스트를 사용하지 않으며 실제 배포·민팅·전송은 하지 않았다.
 - OpenAI GPT-4.1 mini, Claude Haiku 4.5, Gemini 2.5 Flash의 정확한 model ID, seller 수신 지갑, 공개 1M-token 가격을 [모델별 표준 작업 결제 조건](../docs/MODEL_TASK_PRICING.md)에 기록했다. 현재는 Mock Gateway/Mock Facilitator 검증용 가격이며 실제 Provider 호출은 미구현이다.
 - 서버의 AA free endpoint를 읽기 전용으로 확인한 결과 세 고정 모델의 exact ID/slug mapping을 얻지 못했다. live AA 모드는 fail-closed로 남기고 fixture AA를 유지한다.
+
+## 2026-09-10 — 사용자 소유 PBLC Base Sepolia 배포·초기 민팅 완료
+
+- 사용자 명시 승인 후 `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3`를 deployer/owner/initial holder로 사용해 별도 PBLC ERC-3009 계약을 배포했다.
+- 계약 `0xe75013d333bebb90b321dd658440c10b5a0face8`, 배포 tx `0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339`, block `46613692`.
+- constructor가 사용자 지갑에 `1,000,000 PBLC` (6 decimals raw `1000000000000`)를 mint했음을 공개 RPC로 name/symbol/version/owner/totalSupply/balanceOf와 함께 재확인했다.
+- 실제 x402 Facilitator verify/settle, seller 지급 전송, Provider API 호출, AWS 배포는 수행하지 않았다.
 - 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.
 
 ## 2026-09-10 — 로컬 Mock 판매자 수신 지갑 매핑

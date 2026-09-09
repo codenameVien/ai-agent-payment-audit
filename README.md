@@ -110,7 +110,7 @@ npm run build --workspace @pbl/dashboard
 
 과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다. [과거 증거와 인계](docs/HANDOFF.md)
 
-신규 Mock 실행은 기존 PBLC V2 ERC-3009 계약(`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, 6 decimals)을 결제 조건으로만 사용합니다. 기존 계약 owner는 사용자 지갑이 아니므로 민팅하지 않습니다. 실제 결제용 사용자 소유 PBLC 새 주소는 [준비 문서](docs/PBLC_USER_TOKEN_PREPARATION.md)의 별도 승인 패킷 뒤에만 배포할 수 있습니다. 현재 Facilitator는 Mock이므로 실제 자산 이동·테스트넷 결제는 하지 않습니다. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
+신규 Mock 실행은 사용자 소유 PBLC ERC-3009 계약([`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8), Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 사용자 지갑이 owner이며 초기 `1,000,000 PBLC` mint는 완료됐습니다. 과거 PBLC V2와 거래는 읽기 전용으로 보존합니다. 현재 Facilitator는 Mock이므로 이 앱의 구매 실행은 실제 자산 이동·실제 x402 결제가 아닙니다. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
 
 현재 로컬 실행 catalog의 수신 지갑은 OpenAI→seller1 `0xF00E…97a0`, Anthropic→seller2 `0xC774…26d8`, Google→seller3 `0x5363…80E4`로 설정했다. 이 매핑은 Mock 실행의 결제 조건에도 기록되지만, Mock Facilitator는 자산을 전송하지 않는다.
 

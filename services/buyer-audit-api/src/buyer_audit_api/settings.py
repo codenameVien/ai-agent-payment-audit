@@ -40,10 +40,10 @@ class Settings(BaseSettings):
     # standard-answer-v1: a fixed maximum output allocation used for the one-task quote.
     aegis_max_output_tokens: int = 8_000
     aegis_system_prompt: str = ""
-    # PBLC V2 is the already deployed six-decimal ERC-3009 test token. The local
-    # composition still uses a Mock Facilitator, so this address is payment terms only
-    # until a separately approved real settlement is performed.
-    pblc_token_address: str = "0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3"
+    # User-owned six-decimal ERC-3009 PBLC on Base Sepolia. The local composition
+    # still uses a Mock Facilitator, so this address is payment terms only until a
+    # separately approved real settlement is implemented.
+    pblc_token_address: str = "0xe75013d333bebb90b321dd658440c10b5a0face8"
     pblc_token_status: str = "deployed-base-sepolia"
     # Single-user local demo identity. This is server configuration, not a login: the
     # browser can never choose it. Clearing it restores the historical SIWE composition

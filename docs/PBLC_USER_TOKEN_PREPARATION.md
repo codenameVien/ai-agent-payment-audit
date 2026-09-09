@@ -1,6 +1,6 @@
 # 사용자 소유 PBLC 결제 준비
 
-상태: **준비만 완료. 배포·민팅·자산 이동·실제 Facilitator 호출은 미실행.**
+상태: **Base Sepolia 배포 및 초기 민팅 완료. 실제 Facilitator 호출·x402 결제는 미실행.**
 
 ## 왜 새 PBLC 주소가 필요한가
 
@@ -38,6 +38,16 @@ RPC, 서명, 브로드캐스트를 읽거나 사용하지 않는다. `1,000,000 
 4. 실제 x402 Facilitator의 custom PBLC `exact + eip3009` verify/settle 수락 계획
 
 위 네 값을 제시한 뒤에만 사용자가 별도로 승인할 수 있다. 이 문서는 승인 자체가 아니다.
+
+## 2026-09-10 실제 배포 및 초기 민팅 결과
+
+- deployer = owner = initial holder: `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3`
+- 새 PBLC ERC-3009 계약: [`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8)
+- 배포 거래: [`0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339`](https://base-sepolia.blockscout.com/tx/0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339), block `46613692`
+- constructor 초기 mint: `1,000,000 PBLC` = `1,000,000,000,000` raw units (6 decimals)
+- 배포 후 공개 RPC 조회: name `PBL Agent Credit`, symbol `PBLC`, version `2`, owner와 holder 잔액이 위 사용자 지갑과 일치
+
+과거 PBLC V2와 과거 거래는 수정하거나 이동하지 않았다. 이 결과는 실제 x402 Facilitator verify/settle 또는 실제 Provider 호출을 뜻하지 않는다.
 
 ## 실제 배포 승인 후의 로컬 입력 및 실행
 
