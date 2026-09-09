@@ -22,6 +22,7 @@
     "api": "uv run --project services/buyer-audit-api uvicorn buyer_audit_api.main:app --app-dir services/buyer-audit-api/src --env-file .env.local --reload",
     "aegis:stack": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_local_stack.mjs",
     "aegis:live-payment": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_live_payment_stack.mjs",
+    "aegis:local-crypto:setup": "bash scripts/setup_aegis_local_crypto.sh",
     "aegis:smoke": "npm run build --workspace @pbl/commerce-gateway && node --test scripts/aegis_local_smoke.test.mjs",
     "pblc:payment:preflight": "node scripts/pblc_payment_preflight.mjs",
     "pblc:user-token:plan": "forge build --root infra/contracts && node scripts/pblc_user_token_plan.mjs",
