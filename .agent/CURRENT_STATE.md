@@ -1,29 +1,34 @@
 # Current State
 
-Updated: 2026-09-05 00:06 KST
+Updated: 2026-09-09 KST — AEGIS / AA scope supersedes prior active Phase 6 direction.
 
 ## Active owners
-- Orchestrator: autonomous execution owner; AWS deployment is the hard stop.
-- Planner (Sol xhigh): Phase 6 requirements/design/tasks and four Work Orders completed and relayed.
-- Coder (OMP Claude Opus 5 xhigh): WO-P6-01 is approved to start in an isolated worktree.
-- Reviewer (Sol xhigh): waiting for an implementation handoff.
+- Orchestrator: local implementation and verification owner; no actual AWS deployment.
+- Planner/Reviewer: Astra Light (`gpt-6-astra`, low); approved current plan and contract review.
+- Coder: OMP `anthropic/claude-opus-5`, xhigh. AEGIS-01 implementation in progress.
 
 ## Last verified repo state
-- Canonical checkout: `main` at `8886745`, synchronized with `origin/main`; `.agent/` is newly initialized.
-- Existing PBLC V2 ERC-3009 live-payment evidence and MongoDB records are preservation constraints.
+- Canonical `/Users/vien/MyProjects/PBL`: `feature/phase6-audit-e2e` at `d084388`, left unchanged.
+- Active `/Users/vien/MyProjects/PBL-aegis`: `feature/aegis-aa-v1`, contract commit `d889363`.
+- Original `/Users/vien/MyProjects/PBL-coder`: dirty P6-03 preserved, 25 file hashes and original HEAD verified unchanged. See `docs/p6-preservation-baseline.json`.
+- Existing PBLC transactions and real MongoDB records have not been modified or used as test write storage.
 
 ## Completed
-- User approved proactive implementation of provisional abnormal scenarios before the team meeting.
-- Requested role/model routing was verified: Planner/Reviewer use `gpt-5.6-sol` xhigh; Coder uses OMP `anthropic/claude-opus-5` xhigh.
-- Execution endpoint is fixed immediately before actual AWS deployment.
-- Phase 6 requirements, design, tasks, and WO-P6-01..04 were hash-verified and relayed without rewriting the previous baseline.
+- Current user-approved design/requirements/tasks and impact are recorded at `44295ba`.
+- Existing baseline tests, dashboard tests, lint/types pass; baseline Mongo tests skipped without local test instance.
+- AEGIS contract plus offline plan-only script implemented and independently reviewed: 15 contract and 11 planner tests pass; PBLC source unchanged.
+- P6-03 selective reuse review and soft execution-budget checkpoint recorded in outbox.
 
 ## In progress
-- Execute WO-P6-01 core truth model from the approved work order.
-- Intent lock: preserve historical successful, failed, and incomplete transaction/evidence records; never simulate anomalies on the public chain.
+- AEGIS-01: AA adapter/snapshot/policy/selection/audit and tests, not yet complete or reviewed.
+- AEGIS-02 runtime and AEGIS-03 UI/full E2E remain pending. Contract subtask is done; do not repeat it.
+- New runtime excludes negotiation/SIWE/8004/Anchor/independent RPC payment verification, while historical readers and evidence remain.
+- No actual AA authenticated API, provider API, token deployment, asset movement, testnet payment, or AWS action has been executed.
 
 ## Next safe action
-1. Commit the approved planning baseline on `feature/phase6-audit-e2e`.
-2. Create `../PBL-coder` and branch `wo/P6-01` from that exact commit.
-3. Coder implements only WO-P6-01.
-4. Reviewer independently verifies before WO-P6-02.
+1. Finish current Opus AEGIS-01 session, then review its coherent diff and focused results.
+2. Use `.agent/aegis-coder-02.md`, then `.agent/aegis-coder-03.md` with Opus; preserve role/model routing.
+3. Complete required local HTTP/Mongo/UI E2E, full checks, documentation/diagram/log/handoff. Do not mark complete before evidence exists.
+4. Present concrete wallets/address/gas/test amount before requesting actual deployment/payment approval. AWS actual deployment remains outside this run.
+
+Current Opus session: `/Users/vien/.omp/agent/sessions/-MyProjects-PBL-aegis/2026-09-09T11-56-32-034Z_01a08606-dda2-715e-92c2-f9bd87cb5e2a.jsonl`. Read current diff before resuming; never re-create already completed work. Later packets must restrict editing to `apply_patch` via bash.
