@@ -1,0 +1,577 @@
+# Turn Log
+
+Append-only log of meaningful agent turns. Keep entries concise and factual.
+
+- 읽기: 턴 시작 시 최근 엔트리만 tail로 읽는다. 현재 상태의 출처는 CURRENT_STATE / HANDOFF.
+- 로테이션: 500줄 초과 시 검증자가 `TURN_LOG-archive-<yyyymm>.md`로 이관 (최근 10턴만 유지) —
+  단, 모든 WO 브랜치가 main에 머지된 시점에만 (merge=union은 truncate를 부활시킨다).
+
+---
+
+## 2026-09-04 06:00 KST — orchestrator — abnormal scenarios and E2E kickoff
+
+### Intent
+- Coordinate planning, implementation, independent review, and full local E2E up to the AWS deployment gate.
+
+### Files changed
+- `.agent/*` — initialized persistent coordination state and user-approved autonomy boundary.
+
+### Commands / verification
+- `git fetch origin`; `git pull --ff-only origin main` — already up to date.
+- `omp models find opus --json` and OMP readiness probe — `anthropic/claude-opus-5` xhigh available and responsive.
+- Tests not run yet; planning gate is in progress.
+
+### Decisions / assumptions
+- Public-chain anomaly injection is prohibited; abnormal payment evidence will use fakes or isolated local fixtures.
+- Existing live and historical evidence remains append-only.
+
+### Handoff
+- Planner must produce the phase requirements revision before design and task decomposition.
+
+## 2026-09-05 00:06 KST — planner/orchestrator — Phase 6 planning baseline
+
+### Intent
+- Convert the user-approved abnormal-scenario and full-local-E2E scope into an implementation-ready AI-DLC baseline.
+
+### Files changed
+- `aidlc-docs/inception/requirements.md` — append-only Phase 6 requirements.
+- `aidlc-docs/inception/design.md` — append-only Phase 6 component/data/test design.
+- `aidlc-docs/inception/tasks.md` — append-only Phase 6 four-packet execution plan.
+- `work-orders/WO-P6-01..04` — self-contained sequential coder contracts.
+- `.agent/outbox/*` — planner source artifacts and hash relay receipts.
+
+### Commands / verification
+- Source/target SHA-256, old-prefix preservation, marker/ID uniqueness, 78/78 requirement trace, 15/15 design-ID trace, and `git diff --check` all passed.
+- No product tests run at this gate; no implementation changed.
+
+### Decisions / assumptions
+- Local deterministic mock/provider and fake chain/registry boundaries are the required Phase 6 E2E truth; live external calls remain separately labeled external gates.
+- Twelve provisional scenarios are configurable and remain subject to later team review without blocking implementation.
+
+### Handoff
+- Commit the planning baseline, then start WO-P6-01 with OMP Claude Opus 5 xhigh in `../PBL-coder`.
+
+## 2026-09-05 01:00 KST — coder — WO-P6-01 canonical core truth model
+
+### Intent
+- Implement `P6-DES-WO-01` only: orthogonal status projection, append-only terminal payment
+  outcomes with real proofs, structured deterministic audit, and zero-write read paths.
+
+### Files changed
+- `services/buyer-audit-api/src/buyer_audit_api/core/models.py` — Phase 6 event types,
+  `EvidenceSource`, `ScenarioMetadata`, EVM/LOCAL transaction union with type-confusion guards.
+- `services/buyer-audit-api/src/buyer_audit_api/core/projections.py` (new) — pure
+  `PurchaseProjectionService`; conflicting terminals and mixed sources fail closed.
+- `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — `MISMATCH_CONFIRMED` /
+  `RECONCILED_NO_TRANSFER` states, `ReconciliationCheck`/`ConfirmedMismatchProof`/
+  `NoTransferProof`/`ConfirmedOutflow`, bounded reconciliation policy, `terminalOutcomeKey`,
+  actual-spend accounting, legacy Permit2 reconciliation stays fail-closed.
+- `services/buyer-audit-api/src/buyer_audit_api/core/audit.py` — `AuditEvaluator` (pure) and
+  `AuditReportReader` (parse-only) split, structured findings with legacy `code` compatibility,
+  Phase 6 rules, semantic advisory warning ceiling.
+- `services/buyer-audit-api/src/buyer_audit_api/core/ports.py` — read/projection/terminal ports.
+- `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/{memory,mongo}.py` —
+  terminal CAS, `confirmedOutflows`, attempt uniqueness, Phase 6 partial unique indexes.
+- `services/buyer-audit-api/src/buyer_audit_api/api/{schemas,app}.py` — projection DTOs,
+  discriminated transaction union, three internal terminal endpoints, persisted-only reads.
+- `services/commerce-gateway/src/{contracts,gateway}.ts` — transaction union guards, terminal
+  proof ports, receipt mismatch/no-transfer classification behind an explicit capability.
+- Tests: new `test_phase6_{projections,audit,payment_terminal}.py`,
+  `tests/phase6-truth-model.test.ts`; updated `test_payment_service.py`, `test_api.py`,
+  `test_mongo_repository.py`, `gateway.test.ts`.
+
+### Commands / verification
+- Upstream gate: requirements/design/tasks SHA-256 matched the Work Order exactly; branch
+  `wo/P6-01`, clean worktree, base SHA `685472c2178fac1ed1d16fedd4dde4dda7d3ed64`; TCP 27019 free.
+- `ruff check src tests` — exit 0. `mypy src` — exit 0 (44 files).
+- Focused pytest (projections/audit/payment-terminal/payment-service/api) — exit 0, 109 passed.
+- `npm run build --workspace @pbl/commerce-gateway` — exit 0.
+- `node --test dist/tests/{gateway,phase6-truth-model}.test.js` — exit 0, 37 passed.
+- `npm run test:mongo:local` — exit 0, 4 passed (native loopback replica set, temp DBs dropped).
+- `git diff --check` — exit 0. Protected planning/gate/infra diff — exit 0.
+- Regression sweep: full non-mongo pytest 159 passed; full gateway suite 52 passed.
+- `npm ci --ignore-scripts` was needed to populate this worktree's `node_modules`; the lockfile
+  and manifests are unchanged.
+
+### Decisions / assumptions
+- Native Mongo exposed two real defects that are now fixed: a same-proof terminal retry lost the
+  unique-index race and returned 409, and cross-purchase transaction reuse needed to be separated
+  from same-purchase idempotency. Both repositories now classify them identically.
+- The gateway requires an explicit `TerminalPaymentEvidenceApi` capability before emitting a
+  terminal proof, because the Evidence HTTP adapter belongs to WO-P6-02's allowed writes.
+- `SENSITIVE_PAYLOAD_ACCESSED` remains appended by the sensitive-payload GET; it is a security
+  access record, not audit/reconciliation/feedback evidence, and weakening it was out of scope.
+
+### Handoff
+- Reviewer verifies the tip of `wo/P6-01` independently; `.agent/outbox/WO-P6-01-coder.done.md`
+  holds the full evidence report. WO-P6-02 must not start before an `APPROVE` and integration.
+
+## 2026-09-05 03:20 KST — coder — WO-P6-01 review correction round
+
+### Intent
+- Resolve every finding in `.agent/outbox/WO-P6-01-review.md` (`REJECT`: C1, H1-H4, M1, M2)
+  without weakening any approved requirement, and stay inside the WO allowed-write list.
+
+### Files changed
+- `services/commerce-gateway/src/contracts.ts` — `TERMINAL_PAYMENT_INTENT_STATE` record;
+  `ReceiptProof` split into mutually exclusive `EvmReceiptProof | LocalReceiptProof`;
+  `TransactionRef` carried on receipts instead of a raw hash field.
+- `services/commerce-gateway/src/gateway.ts` — C1: all four terminal states stop execution
+  before any seller, signing or submission call; H1: validated receipt classification with
+  source/variant cross-checks; H2/H3: reconciliation bound to the submitted identity with a
+  configured minimum finality gate before a no-transfer close.
+- `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — H2: mismatch proofs bind
+  quote, submission, source, scenario, chain and a canonical proof fingerprint; same-proof
+  retries compare the whole immutable proof and aliases conflict; H3: no-transfer requires the
+  persisted reconciliation series, nonce hash, timestamps and configured finality; M1: canonical
+  lowercase EVM hash validation at the core boundary.
+- `services/buyer-audit-api/src/buyer_audit_api/core/projections.py` — H1: resolved evidence
+  source cross-validated against the terminal transaction reference; audit head coverage exposed.
+- `services/buyer-audit-api/src/buyer_audit_api/core/audit.py` — H4: a persisted audit must
+  describe the head it was appended to, and a changed head fails closed instead of returning stale.
+- `services/buyer-audit-api/src/buyer_audit_api/api/schemas.py` — M1: required expected state,
+  event count and head hash on every terminal mutation; canonical `^0x[0-9a-f]{64}$` everywhere.
+- `services/buyer-audit-api/src/buyer_audit_api/api/app.py` — H4: sensitive payload access is a
+  `POST .../access` mutation, so every GET is zero-write; M1: guards enforced with replay-aware
+  compare-and-set so a genuine retry still returns the committed result.
+- `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py` — M2: read-only
+  `phase6_index_collision_report()` preflight; canonical proof fingerprint persisted.
+- Tests: direct regressions for C1, H1, H2, H3, H4, M1 and M2 in
+  `tests/test_phase6_projections.py`, `tests/test_phase6_audit.py`,
+  `tests/test_phase6_payment_terminal.py`, `tests/test_api.py`, `tests/test_mongo_repository.py`
+  and `services/commerce-gateway/tests/phase6-truth-model.test.ts`.
+
+### Commands / verification
+- `ruff check` src+tests 0; `mypy` strict src 0.
+- Focused pytest (`test_phase6_projections`, `test_phase6_audit`,
+  `test_phase6_payment_terminal`, `test_payment_service`, `test_api`): 134 passed.
+- `npm run build --workspace @pbl/commerce-gateway` 0; `node --test` gateway + truth-model:
+  41/41 pass.
+- `npm run test:mongo:local`: 4 passed, including the M2 preflight and the coherent
+  synthetic terminal race.
+- Preservation: full non-mongo pytest 184 passed, full gateway suite 56/56, `git diff --check` 0,
+  protected paths byte-identical to the base commit.
+
+### Decisions / assumptions
+- A local receipt can never answer an EVM submission and unknown finality never closes a payment.
+  Two pre-review gateway tests asserted the looser behaviour and were rewritten to the reviewed
+  contract rather than the code being weakened.
+- Mandatory expected-state/head guards would have broken the approved same-proof idempotency, so
+  the precondition is skipped only when the request replays evidence the purchase already holds;
+  the service then compares the complete proof and answers 200 or 409.
+- Phase 6 Mongo fixtures are now a coherent synthetic run: a local submission is closed only by
+  synthetic proofs, so the terminal race uses three synthetic writers instead of a chain failure.
+- A purchase can only be closed by the submission it actually holds, so a rejected purchase keeps
+  its quoted reservation; that is asserted explicitly instead of released.
+
+### Handoff
+- Reviewer re-runs the full fixed focused sequence on the corrected `wo/P6-01` tip;
+  `.agent/outbox/WO-P6-01-coder.done.md` carries the correction SHA and `READY_FOR_REVIEW`.
+
+## 2026-09-05 05:10 KST — coder — WO-P6-01 review correction round 2
+
+### Intent
+- Close the four items left open by `.agent/outbox/WO-P6-01-review-r2.md` (`REJECT`: H1, H2, H4,
+  M2) inside the WO-P6-01 allowed-write list, without weakening any approved requirement.
+
+### Files changed
+- `services/commerce-gateway/src/gateway.ts` — H1: `classifyReceipt` now requires the receipt
+  reference's evidence source to equal the submitted reference's source, so a same-hash
+  `HISTORICAL_ON_CHAIN` receipt can no longer prove an active `BASE_SEPOLIA_VERIFIED` submission;
+  `evmTransactionRef` names the synthetic-into-EVM confusion explicitly.
+- `services/buyer-audit-api/src/buyer_audit_api/core/payment.py` — H1/H2: new
+  `SubmittedReference` + `submitted_reference()` resolve the submission from the persisted
+  `PAYMENT_RECONCILIATION_REQUIRED`/`PAYMENT_SUBMISSION_IDENTIFIED` evidence, including its
+  recorded evidence source and complete scenario metadata; `assert_submission_binding()` is the
+  single gate that every check, mismatch proof and no-transfer proof passes. Submission events now
+  record `evidenceSource` explicitly (`BASE_SEPOLIA_VERIFIED` for active EIP-3009 submissions).
+- `services/buyer-audit-api/src/buyer_audit_api/core/audit.py` — H4: `require_current_audit()` and
+  `AuditReportReader.current()` centralize P6-AC-03.5; the normal path and the append-race
+  recovery path both require the current `RULESET_VERSION` and exact covered head, and the race
+  path re-verifies the chain before answering.
+- `services/buyer-audit-api/src/buyer_audit_api/core/projections.py` — H4: `_audit_projection`
+  now parses through the shared `AuditReportReader`, so a summary rejects exactly the audit
+  evidence the detail path rejects instead of presenting `AUDITED_NORMAL`.
+- `services/buyer-audit-api/src/buyer_audit_api/adapters/repositories/mongo.py` — M2:
+  `_PHASE6_SINGLETON_INDEXES`/`_EXISTING_SINGLETON_INDEXES` split the loop, the collision report
+  covers all eight newly introduced unique indexes including both per-purchase terminal
+  singletons, and the read-only preflight now runs before creating any of them.
+- Tests: direct regressions for every reproduced probe in
+  `tests/test_phase6_payment_terminal.py` (H1 historical proof/check, H2 foreign-run check,
+  no-transfer proof and mismatch proof), `tests/test_phase6_projections.py` (H4 malformed head,
+  malformed payload, legacy-ruleset history), `tests/test_phase6_audit.py` (H4 old ruleset,
+  append-race stale rejection and current-report recovery), `tests/test_mongo_repository.py`
+  (M2 native collision coverage, refusal before creation, call order, coverage drift) and
+  `services/commerce-gateway/tests/phase6-truth-model.test.ts` (H1 same-hash wrong source and
+  no terminalization on a historical proof).
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` strict 0, focused pytest 145 passed, gateway build 0,
+  `node --test` 43/43, `npm run test:mongo:local` 6 passed, `git diff --check` 0.
+- Preservation: full non-mongo pytest 195 passed, full gateway suite 58/58, protected paths
+  byte-identical to `685472c`, allowed-write scope only, 27019 free and no mongod/temp left.
+- Independent probe reproduction (`node` + `uv run python`, local only): all seven probes the
+  reviewer reported as accepted now fail closed — historical proof (`spent=0`), run-B check
+  (`attempts=0`), run-B no-transfer proof (`reserved=100000`), old-ruleset audit, append race
+  (`attempts=1`), malformed audit head in the summary, and preflight at call 16 before the new
+  singleton indexes at calls 24 and 25.
+
+### Decisions / assumptions
+- The submitted evidence source is now recorded on the submission event instead of inferred.
+  Historical rows without that field are still read as `BASE_SEPOLIA_VERIFIED`; nothing is
+  written or backfilled.
+- P6-AC-03.5 is enforced literally: any event after `AUDITED` makes the persisted report
+  non-current and demands an explicit correction/re-audit policy. The approved post-audit
+  reputation flow (design 18.8) therefore plugs into the single `require_current_audit()`
+  predicate in WO-P6-02 rather than into scattered read paths, and history stays readable through
+  the projection's `audit_covers_head` signal.
+- A legacy-ruleset audit remains readable history in the read model but is never served as the
+  current audit. Malformed audit evidence fails closed in both the summary and the detail path.
+- Projection fixtures previously fabricated `evidenceHeadEventHash`; they now record their real
+  predecessor, which is why the shared reader accepts them.
+
+### Handoff
+- Reviewer re-verifies `wo/P6-01` independently against `685472c`; the coder evidence report
+  carries the round-2 implementation anchor and `READY_FOR_REVIEW`. WO-P6-02 stays blocked.
+
+## 2026-09-05 06:40 KST — coder — WO-P6-02 blocked at the start gate
+
+### Intent
+- Implement `P6-DES-WO-02` (terminal audit → reputation loop) from
+  `work-orders/WO-P6-02-reputation-loop.md` on `wo/P6-02` at base
+  `feb13f94d3a7934dec3a21a56c2cd3477afac179`.
+
+### Files changed
+- `.agent/outbox/WO-P6-02-blocked.md` (new) — blocked report.
+- `.agent/TURN_LOG.md` (this append-only entry).
+- No product source or test file was modified. `git status --porcelain` showed a clean worktree
+  through the whole survey.
+
+### Commands / verification
+- Start gate passed: worktree/branch clean; base contains both the approved integration SHA
+  `feb13f94…` and the predecessor tip `ca037c9…` (`git merge-base --is-ancestor` exit 0 for both);
+  requirements/design/tasks SHA-256 match the WO; `P6-02` task marker present; TCP 27019 free
+  (`lsof` exit 1, no process signalled); predecessor artifact
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-01-review-r3.md` read, verdict `APPROVE`,
+  reviewed tip matches.
+- The WO's fixed verification sequence was not run: there is no implementation to verify.
+- Read-only survey only: `git`, `grep`, `sha256sum`, `wc`, plus two read-only scout agents that
+  mapped the `ai_inference` domain and the commerce-gateway ERC-8004 surface.
+
+### Decisions / assumptions
+- **Blocker:** design §18.6.1 (`design.md:944-953`) requires two new appendable event types,
+  `REPUTATION_DECIDED` and `REPUTATION_PUBLICATION_CONFLICT`, and §18.6.4 (`design.md:1013`) fixes
+  `unique_reputation_decision_per_purchase` as a unique partial index on `REPUTATION_DECIDED`.
+  The only declaration site for appendable event types is `EventType` at
+  `core/models.py:19`, which is absent from the WO-P6-02 allowed-write list
+  (`work-orders/WO-P6-02-reputation-loop.md:64-107`). `EventType` is a closed `StrEnum`
+  (unsubclassable), `EvidenceEvent.type`/`create_event`/`append_event` are all typed on it, and
+  `pyproject.toml:49` sets mypy `strict = true`, so no allowed file can supply the members.
+- Four in-scope workarounds were considered and rejected in the report: a parallel `StrEnum`,
+  overloading `CORRECTION_RECORDED`, keeping decision/conflict as outbox-only mutable state, and
+  editing `core/models.py` regardless. Each either breaks strict typing, contradicts design
+  §18.6.4 line 1022 / WO 설계 결정 5, or violates the allowed-write contract at WO line 107.
+- Stopped per WO line 124 and the assignment's explicit instruction rather than widening scope.
+  Minimum Planner decision requested: add `core/models.py` to the allowed-write list scoped to
+  appending those two enum members. Appending `StrEnum` members changes no existing value and no
+  existing event hash, so it cannot weaken a WO-P6-01 acceptance condition.
+- The rest of the packet was surveyed and is implementable inside the current allowed-write list;
+  the report carries the file:line implementation map, including that `core/terminal.py` can use
+  the pure audit evaluator/reader read-only (so `core/audit.py` needs no edit), that the
+  reputation score component is the single line `selection.py:137`, and that hard filters already
+  `continue` at `selection.py:131` before scoring, which makes `P6-AC-06.4` structural.
+
+### Handoff
+- Branch `wo/P6-02` stays unintegrated with no implementation. WO-P6-03 must not start.
+  Planner decides the one-line allowed-write amendment; on amendment WO-P6-02 is implementable
+  end to end from this same base.
+
+## 2026-09-05 14:30 KST — planner — WO-P6-02 bounded allowed-write correction
+
+### Intent
+- Resolve only the packet-boundary omission proven by blocker commit
+  `0c10b91ce1067ffe3f245a3aef11b032cff9f249`; do not revise approved product requirements,
+  design, tasks, implementation steps, acceptance criteria, or security constraints.
+
+### Evidence and decision
+- Design §18.6.1 requires append-only `REPUTATION_DECIDED` and
+  `REPUTATION_PUBLICATION_CONFLICT`; §18.6.4 names the former in the singleton index and keeps
+  decision/conflict evidence in the purchase event chain.
+- `services/buyer-audit-api/src/buyer_audit_api/core/models.py` owns the single closed
+  `EventType(StrEnum)` used by `EvidenceEvent`, `create_event`, and repository ports. The two
+  required values were absent, and the original WO-P6-02 allow-list omitted this declaration file.
+- Amend WO-P6-02 Buyer/Audit allowed writes with that file, scoped to adding exactly those two
+  members. Explicitly forbid a parallel event enum or overloading an existing event type.
+
+### Files changed
+- `work-orders/WO-P6-02-reputation-loop.md` — bounded allow-list correction and matching
+  anti-workaround prohibition.
+- `.agent/TURN_LOG.md` — this append-only planner record.
+- `.agent/outbox/WO-P6-02-planner-amendment.done.md` — handoff evidence.
+- No requirements/design/tasks, WO-P6-01/03/04, product source/test, or `.githooks` file changed.
+
+### Verification and handoff
+- Canonical start gate: `feature/phase6-audit-e2e` at
+  `feb13f94d3a7934dec3a21a56c2cd3477afac179`; only pre-existing untracked
+  `.githooks/pre-commit` and `.githooks/pre-push` were present.
+- Upstream requirements/design/tasks hashes remain the approved Phase 6 hashes.
+- `git diff --check`, exact allowed-path diff, protected-path diff, required-line uniqueness, and
+  product-code no-diff checks are required immediately before the coherent planning commit.
+- Orchestrator must bring the resulting planning commit into `wo/P6-02`; Coder may then resume
+  the same packet without inventing a new product decision.
+
+## 2026-09-05 09:30 KST — coder — WO-P6-02 reputation loop implemented
+
+### Intent
+- Implement `P6-DES-WO-02` on the amended Work Order: persisted terminal audit → 100/0/DEFER
+  decision, Mongo transaction/CAS + durable outbox, PREPARED/SUBMITTED_UNKNOWN recovery,
+  confirmed-only `REPUTATION_RECORDED` evidence, immutable query provenance, and provider-level
+  reputation as a bounded selection signal.
+
+### Files changed
+- `core/models.py` — exactly the two amended `EventType` members (`REPUTATION_DECIDED`,
+  `REPUTATION_PUBLICATION_CONFLICT`). No other member, value or order touched.
+- `core/reputation.py` (new) — publish identity + identity hash, immutable payload fingerprint,
+  typed `Publish|Defer` policy for `P6-AC-05.2`, outbox state machine, confirmed-feedback proof
+  with agent/tag/value/transaction binding, snapshot + query scope + neutral-mean aggregation.
+- `core/terminal.py` (new) — `TerminalAuditCoordinator.finalize_if_eligible` and the recovery
+  sweep; reuses the pure `AuditEvaluator`/`AuditReportReader` read-only so `core/audit.py` is
+  untouched, and reuses an already-persisted current audit instead of appending a second one.
+- `core/ports.py` — `ReputationOutboxPort`, `ReputationSnapshotPort`, `TerminalOrchestrationPort`.
+- `adapters/repositories/memory.py`, `adapters/repositories/mongo.py` — outbox, snapshots and
+  `finalize_atomic`; Mongo adds `unique_reputation_publish_identity`,
+  `unique_reputation_decision_per_purchase`, the EVM/LOCAL partial unique transaction indexes,
+  `reputation_publish_lease`, `unique_reputation_snapshot_query`, all created only after the
+  read-only M2 collision preflight, which now covers them.
+- `adapters/reputation_gateway.py` (new) — read-only `POST /reputation-query` client and the
+  `SellerReputationProvider` that stores an immutable snapshot; a failed query degrades to a
+  fresh-enough `STALE` snapshot or `NO_EVIDENCE/50`, never to a favourable score.
+- `api/schemas.py`, `api/app.py` — finalize plus the five outbox endpoints with required lease
+  owner and fingerprint, `404/409/422/503` mapping and same-proof `200`.
+- `composition.py` — production wiring of the coordinator, outbox and snapshot store.
+- `domains/ai_inference/{models,ports,workflow,selection}.py` — `SellerReputationProvider`,
+  `ReputationScoreEvidence`, provider-level snapshot cached per seller agent, persisted in
+  `QUOTED.reputationSnapshots` and read back on resume; the `reputation` component now comes from
+  the snapshot (or neutral 50) and never from `benchmark.reputation_score`.
+- Payment Executor `contracts.ts`, `erc8004.ts`, `adapters/http.ts`, `adapters/viem-erc8004.ts`,
+  `main.ts` — the in-process dedupe `Map` is deleted; the publisher drives the durable outbox with
+  find-before-submit, prepare-before-broadcast, bounded recovery, receipt+event confirmation,
+  query provenance, and a writer that defaults to `disabled` and rejects `fake`.
+- Tests: `tests/test_phase6_reputation.py`, `tests/test_phase6_terminal.py`,
+  `tests/phase6-reputation-loop.test.ts` (new) plus `test_api.py`, `test_mongo_repository.py`,
+  `test_ai_inference_workflow.py`, `test_ai_inference_domain.py`, `erc8004.test.ts`,
+  `runtime.test.ts`.
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` strict 0 (47 files), focused pytest 95 passed, gateway build 0,
+  `node --test` erc8004+phase6-reputation-loop+runtime 26/26, `npm run test:mongo:local` 8 passed,
+  `git diff --check` 0.
+- Preservation: full non-mongo pytest 265 passed, full gateway suite 77/77, protected paths
+  unchanged, 27 changed paths all inside the amended allowed-write list, `core/models.py` diff is
+  exactly the two permitted enum members, 27019 free and no mongod/temp left.
+
+### Decisions / assumptions
+- **PREPARED records the payload commitment, not a fabricated reference.** An EVM hash does not
+  exist before broadcast, and inventing a `SYNTHETIC_LOCAL` identifier for a live submission would
+  fake provenance (exactly the confusion WO-P6-01 hardened against). `PREPARED` therefore freezes
+  the feedback hash; the transaction reference is bound exactly once, by whichever step first
+  knows it, and is immutable afterwards. A different reference for a bound job is a conflict.
+- **Failure reasons are derived from the event-backed projection**, not the mutable payment intent
+  document, so a lagging or absent intent cannot change an objective reason code. A terminal state
+  that contradicts the projection is treated as conflicting proof and defers.
+- The coordinator does not take over `AuditService.audit()`; that WO-P6-01-approved read path
+  stays as-is and the coordinator reuses its persisted audit, so `core/audit.py` needed no edit.
+  `P6-AC-03.5` still governs: a stale or wrong-ruleset audit blocks the decision.
+- `settings.py` is not in the allowed-write list, so the Base Sepolia reputation registry is a
+  protocol constant in `core/reputation.py` matching the Payment Executor's compiled-in default.
+- No live ERC-8004, RPC, facilitator, provider, AWS or Atlas call was made; every test uses
+  in-process fakes or the native loopback replica set.
+
+### Handoff
+- Reviewer independently re-runs the fixed order plus native Mongo and both protected checks on
+  the `wo/P6-02` tip; `.agent/outbox/WO-P6-02-coder.done.md` carries the anchors and results.
+  WO-P6-03 must not start before an `APPROVE` and Orchestrator integration.
+
+## 2026-09-05 16:42 KST — planner — WO-P6-02 payment ordering amendment
+
+### Intent
+- Correct only the second packet-boundary omission uncovered while resolving the independent
+  WO-P6-02 review: append-only reputation events must not make payment view/existing claim fail,
+  while illegal event orderings remain fail closed.
+
+### Evidence and decision
+- `PaymentService.claim()` always calls `load_payment_view()` before returning an existing intent.
+  The payment lifecycle parser predates `REPUTATION_DECIDED` and
+  `REPUTATION_PUBLICATION_CONFLICT`, so a valid post-terminal append can otherwise invalidate both
+  payment read and idempotent claim surfaces.
+- Add `core/payment.py` to the WO-P6-02 allow-list only for post-payment ordering recognition, and
+  add `test_payment_service.py` for direct view/claim and illegal-order regression coverage.
+- Both events may be excluded from payment state reconstruction only after a verified terminal
+  payment and their audit/decision prerequisites. An unconditional/global auxiliary filter is
+  forbidden because it would accept forged pre-terminal or out-of-order evidence.
+
+### Acceptance delta
+- After terminal finalize, confirmed `REPUTATION_RECORDED`, or one-or-more append-only publication
+  conflicts, `load_payment_view()` and an existing-intent `claim()` return the same payment binding
+  without adding a claim, reservation, spend, or event.
+- Pre-terminal reputation events, decision-before-audit, duplicate decision, and
+  conflict-before-decision remain `PaymentEvidenceError` with no payment/policy mutation.
+- The focused pytest command now includes `test_payment_service.py`; existing
+  `test_phase6_terminal.py` and `test_api.py` retain end-to-end/service ownership.
+
+### Scope and handoff
+- Planning writes only: `work-orders/WO-P6-02-reputation-loop.md`, append-only
+  `.agent/TURN_LOG.md`, and `.agent/outbox/WO-P6-02-planner-amendment-r2.done.md`.
+- Requirements/design/tasks, WO-P6-01/03/04, product source/tests, historical evidence/data, and
+  existing untracked `.githooks` remain untouched by Planner.
+- Orchestrator applies the resulting planning commit to `wo/P6-02`; Coder then implements and
+  re-runs the amended focused suite before Reviewer correction review.
+
+## 2026-09-05 18:10 KST - coder - WO-P6-02 review correction round 2
+
+### Intent
+- Close the independent review `REJECT` in `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`
+  at rejected tip `72e9611f70132bd63b268fd806ada327f4253981` without rewriting history: the
+  implementation commit `c201b39`, the evidence commit `72e9611` and the blocker commit
+  `0c10b91` all stay in the branch.
+- Findings closed: C1 (atomic `CONFIRMED + REPUTATION_RECORDED`, tx-only writer removed),
+  C2 (restarted `PREPARED` fails closed instead of re-broadcasting), H1 (full confirmation
+  binding), H2 (strict query/snapshot provenance), H3 (production wiring plus a bounded
+  latest window), H4 (append-only conflict evidence with reachable call sites),
+  M1 (`unique_reputation_job_id`/`unique_reputation_snapshot` in the preflight and the drift
+  list), M2 (native Mongo atomic, rollback and race probes).
+
+### Commands / verification
+- Fixed order: `ruff` 0, `mypy` 47 files, focused pytest `116 passed`, gateway build 0,
+  `node --test` 34/34, `npm run test:mongo:local` `9 passed`, `git diff --check` 0.
+- Broad: full non-mongo pytest `293 passed, 9 deselected`; full gateway suite 85/85.
+- Independent probe reproduction: all seven Python probes and all five Node probes now fail
+  closed (`/tmp/r2_probe.py`, `/tmp/r2_probe_node.mjs`); no product code was changed to make
+  a probe pass after it was written.
+- Protected diff against packet base `b8f3f3f` is empty and zero protected paths are touched.
+
+### Decisions / assumptions
+- The trusted feedback-client allow-list is read from the `PBL_AUDIT_FEEDBACK_CLIENTS`
+  environment variable and parsed strictly in the composition root. No wallet address is
+  compiled in, and an absent declaration is a valid fail-closed state: the provider answers
+  `NO_EVIDENCE/50` without issuing a call.
+- `core/payment.py` and `tests/test_payment_service.py` were edited under an explicit
+  Orchestrator scope amendment. The post-payment tail is now validated as an ordered,
+  conditional sequence rather than an unordered bag, so `REPUTATION_DECIDED` requires a
+  preceding `AUDITED`, a publication conflict requires a preceding decision and may repeat,
+  and a Phase 5 chain that only ever had `REPUTATION_RECORDED` still loads.
+- `POST /internal/evidence/purchases/{id}/reputation` and its `reputation-intent` companion
+  are removed rather than disabled; the only writer is the outbox confirmed transition.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip against
+  `/Users/vien/MyProjects/PBL/.agent/outbox/WO-P6-02-review.md`;
+  `.agent/outbox/WO-P6-02-coder-r2.done.md` carries the correction and merge anchors.
+  The original `WO-P6-02-coder.done.md` and the review report are unmodified.
+
+## 2026-09-05 17:24 KST — reviewer — WO-P6-02 correction round 2
+
+### Boundary and verification
+- Independently reviewed coder `wo/P6-02` exact tip
+  `f7deffa582d5762ad19783b1872955082a578b7a` against amended packet base
+  `411e475f728344bad728c81c72bb7437a30da15e`; merge-base matched the packet base.
+- Read the amended WO/planner artifact, preserved original rejection, coder r2 evidence,
+  canonical Phase 6 requirements/design/tasks, and exact source/test diff. Coder report was not
+  treated as proof.
+- Fixed order passed: Ruff 0; strict mypy 0/47 files; focused Python 142 passed; gateway build 0;
+  focused Node 34/34; native Mongo 9 passed; diff-check 0.
+- Broad/targeted passed: non-Mongo 293 passed (9 deselected); full gateway 85/85; legacy/read-side
+  7/7; prior-finding focus 17/17; payment-ordering focus 7/7.
+- Exact packet-base protected diff was 0. Main merge-base showed only older approved Phase 6
+  requirements/design/tasks. Coder worktree remained clean; local Mongo listener/temp data were
+  absent after teardown. No live RPC/provider/facilitator/AWS/Atlas/public-chain calls occurred.
+
+### Independent findings and verdict
+- Prior C1, C2, H1, H2, H3, M1, M2 were fixed. H4 remained open.
+- High: payment tail validation sees event types only, so a decision for publish identity A accepts
+  conflict or recorded evidence for identity B; independent in-memory probes returned the settled
+  view/claim instead of `PaymentEvidenceError`.
+- High: every outbox lease/CAS 409 is converted by the publisher into `recordConflict` with the
+  job's unchanged fingerprint; repositories accept equal existing/requested fingerprints and
+  terminalize the valid job as `CONFLICT`.
+- Medium: isolated native Mongo concurrent identical-conflict probe completed 8 calls but appended
+  7 duplicate logical conflict events instead of converging to one.
+- Canonical report: `.agent/outbox/WO-P6-02-review-r2.md`. Verdict: `REJECT`; keep coder branch
+  unintegrated and preserve all history for a bounded correction.
+
+## 2026-09-05 21:05 KST - coder - WO-P6-02 review correction round 3
+
+### Intent
+- Close the round-2 independent `REJECT`
+  (`.agent/outbox/WO-P6-02-review-r2.md`, canonical commit `66e7256`) at reviewed tip
+  `f7deffa582d5762ad19783b1872955082a578b7a`, preserving every prior commit and report.
+- R2-H1: payment lifecycle validation now inspects `EvidenceEvent` payloads, not just
+  types. Once a decision exists, every following conflict/recorded event must carry that
+  decision's `publishIdentityHash`, and a conflict must restate its `payloadFingerprint`
+  as `existingFingerprint`; missing or mismatched values fail closed. The Phase 5
+  `REPUTATION_RECORDED`-without-decision branch stays valid as an explicit isolated case.
+  The conflict and publication branches are mutually exclusive in both directions.
+- R2-H2: a restated fingerprint is no longer a conflict. `publication_conflict_payload`
+  and both `record_conflict` implementations refuse `requested == existing` before any
+  write, with typed `OutboxConflictReason`. The API answers a typed conflict with
+  `{"reason", "message"}`, and the Payment Executor requests conflict evidence only for
+  `PAYLOAD_FINGERPRINT_MISMATCH`; every other reason leaves the job to its worker.
+- R2-M1: a deterministic `conflictKey` is part of the conflict payload, looked up inside
+  the Mongo transaction and backed by the unique partial index
+  `unique_reputation_conflict_key`, which is covered by the read-only preflight and the
+  drift list. A duplicate race resolves to the one committed event.
+
+### Commands / verification
+- Fixed order at the merged tip: `ruff` 0, `mypy` 47 files, focused pytest `152 passed`,
+  gateway build 0, `node --test` 37/37, `npm run test:mongo:local` `10 passed`,
+  `git diff --check` 0.
+- Broad: full non-mongo pytest `303 passed, 10 deselected`; full gateway suite 88/88.
+- Probes: 10 Python and 7 Node probes pass, including the reviewer's same-fingerprint CAS
+  probe, the payment-identity probe and the 8-way identical-conflict convergence.
+- Protected diff against canonical `66e7256` is empty; all six prior reports are
+  byte-identical.
+
+### Decisions / assumptions
+- `ReputationOutboxConflict` subclasses `PaymentConflictError` inside `core/reputation.py`,
+  so every existing `except PaymentConflictError` keeps working while callers that need
+  the reason can branch on it. No change to `core/errors.py`.
+- An unrecognised or absent 409 reason parses to `UNSPECIFIED`, which never records
+  evidence: an unknown refusal is treated as contention, never as a payload conflict.
+- The TURN_LOG merge kept every section from both parents byte-for-byte and ordered the
+  canonical reviewer entry before this correction handoff.
+
+### Handoff
+- Reviewer re-verifies the merged `wo/P6-02` tip;
+  `.agent/outbox/WO-P6-02-coder-r3.done.md` carries the merge and correction anchors.
+  Prior review and evidence reports are unmodified.
+
+## 2026-09-05 18:22 KST — reviewer — WO-P6-02 correction round 3
+
+### Boundary and verification
+- Independently reviewed Coder `wo/P6-02` exact tip
+  `ce6b403833c1e58240dfd02f9f286ac32ae97c6a` against canonical packet base
+  `66e72560a3ebbf06c18865d84a0712228d4ea1d7`; merge-base matched exactly and the Coder
+  worktree stayed clean.
+- Read the WO, both preserved rejection reports, Coder r3 evidence, canonical Phase 6
+  requirements/design/tasks, and the exact base-to-tip source/test diff. Exact diff accounting is
+  35 paths: 30 source/test paths and five append-only agent artifacts.
+- Fixed order passed: Ruff; strict mypy 47 files; focused Python 152; Gateway build; focused Node
+  37/37; native Mongo 10; exact-range/worktree diff checks. Broad non-Mongo 303 and full Gateway
+  88 also passed; legacy/Permit2/read-side focus 7/7 and prior-finding focus 19/19 passed.
+- Exact-base protected diff was zero. Main merge-base showed only older approved Phase 6
+  planning/WO history. No dashboard/scenario/AWS/contracts/tools scope leakage occurred.
+
+### Independent r2 probes and verdict
+- Payment probe rejected identity A→identity B recorded/conflict in both view and claim, rejected
+  a wrong existing fingerprint and mixed branches, isolated Phase 5 recorded-without-decision,
+  and confirmed valid reads had no event/accounting side effect.
+- Gateway/Memory/API probes produced no conflict evidence for eight ordinary/non-payload 409
+  reasons or same fingerprint. Only a real payload mismatch requested one conflict record.
+- Separate `127.0.0.1:27021` replica-set probe converged eight identical conflict calls to one
+  event; deterministic key, unique partial index, collision preflight, duplicate recovery, and a
+  separate logical conflict were verified. Listener/process/temp directories were cleaned.
+- Prior C1/C2/H1-H4/M1/M2 and new R2-H1/R2-H2/H4/R2-M1 are fixed and independently verified.
+  Existing PBLC/ERC-3009/Permit2/Mongo history was not connected to or mutated; no public
+  RPC/provider/facilitator/ERC-8004/AWS/Atlas call occurred.
+- Canonical report: `.agent/outbox/WO-P6-02-review-r3.md`. Verdict: `APPROVE`; integrate only exact
+  reviewed tip `ce6b403833c1e58240dfd02f9f286ac32ae97c6a`.

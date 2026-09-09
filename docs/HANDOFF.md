@@ -1,6 +1,27 @@
 # 로컬 완료 및 외부 실행 인계
 
-## 현재 로컬 완료 범위
+> **최신 범위 축소:** 발표용 로컬 데모만 완료한다. 세 Mock Provider E2E, 예산 초과·402 불일치·중복 결제 방지, dashboard build·기본 lint만 재검증한다. Python 포함 완전한 outbound 계측, 과거 증거 광범위 zero-write 회귀, Mongo 실패 정리 추가 스트레스, 광범위 테스트 반복 및 추가 보안·성능 강화는 Known limitations/후속 과제다. 기존 리뷰 발견이 해결된 것은 아니다. 2026-09-10 사용자 승인으로 Coder를 Terra로 바꿔 재개했다. 실제 배포·결제·AWS는 실행하지 않는다. 작업 기준: `../.agent/DEMO_SCOPE.md`.
+
+> 2026-09-09: 이 문서의 아래 PBLC 구성·명령·실거래 결과는 **전환 전 역사 기록**이다. 신규 AEGIS/AA 구현의 현재 상태는 [AEGIS 검증 기록](AEGIS_VERIFICATION.md), [구조도](AEGIS_ARCHITECTURE.md), `.agent/CURRENT_STATE.md`를 따른다. 신규 Provider/Facilitator는 Mock이며 실제 AA 인증 API·AEGIS 배포·실제 결제는 미검증/미실행이다. 과거 smoke·키 설정·AWS 명령을 신규 로컬 데모의 다음 실행 단계로 사용하지 않는다. 사용자는 AWS 배포를 아직 원하지 않는다.
+
+## 신규 AEGIS 로컬 인계 — 2026-09-09
+
+구매 요청은 `/request`, 감사 대시보드는 읽기 중심 `/`이다. 신규 실행은 AA synthetic fixture와 OpenAI·Claude·Gemini Mock Gateway, Mock Facilitator를 사용한다. 결제 실행 모듈은 별도 프로세스의 임시 키로 ERC-3009 승인을 서명하지만 실제 블록체인 전송은 하지 않는다. 원문은 암호화해 분리 저장하고 내부 API 보호는 유지한다.
+
+`npm run aegis:stack`은 별도의 임시 MongoDB와 로컬 서비스들을 시작한다. 출력된 Evidence API 주소를 대시보드의 `API_ORIGIN`으로 지정하고 대시보드는 허용 origin인 `127.0.0.1:3000`에서 실행한다. 이 runner가 소유한 임시 데이터는 정상 종료 때 정리된다. 기존 사용자 MongoDB에 연결하거나 그 기록을 수정하는 데 사용하지 않는다. 자세한 명령은 [README](../README.md)를 따른다.
+
+2026-09-10 발표용 로컬 데모 범위를 완료했다. Terra의 핵심 E2E5건·402검사2건·dashboard build·기본 lint가 통과했고, 오케스트레이터 재검증7건과 Astra Light 최종 리뷰도 통과했다. 기존 UI·AA 정책·결제 런타임을 유지했으며 이번 재개에서 핵심 코드 추가 수정은 없었다. 정확한 범위·유예 검증은 [검증 기록](AEGIS_VERIFICATION.md)을 따른다. 결제 확인은 Facilitator 응답 기준이고 독립 RPC 검증을 의미하지 않는다. 미조회 잔액은 실제 잔액으로 표시하지 않는다.
+
+실제 테스트용 HTTP·Mongo 저장과 임시 키 서명은 실행했지만, AA 데이터·Provider 응답·정산은 모의다. 테스트 서버는 종료했으므로 발표 때 README 명령으로 새 임시 실행을 시작한다. 새 데이터는 종료하면 사라진다. AEGIS 미커밋 작업은 2026-09-10 사용자 요청에 따라 `93c9df3`에 기록했다. 원래 P6-03 worktree 변경은 그대로 보존한다. GitHub 전달과 AWS 배포는 별개이며 AWS는 실행하지 않는다.
+
+외부 게이트는 다음과 같이 분리한다.
+
+- 실제 AA 인증 API: 서버 키가 없는 상태에서는 fixture 검증만 완료할 수 있다.
+- AEGIS 배포·자산 이동·테스트넷 결제: 지갑, 방식, 예상 주소, 가스, 금액을 제시하고 별도 승인받기 전에는 실행하지 않는다.
+- 실제 Provider API: 이번 범위에서 연결하지 않는다.
+- AWS: 사용자가 아직 진행하지 않겠다고 명시했다. 배포하지 않는다. 공개 다중 사용자 접근 제어와 원문 보존 정책은 향후 별도 결정이다.
+
+## 과거 PBLC 로컬 완료 범위 — 당시 구현 기록
 
 요청·견적·결정·예산 예약·x402 ERC-3009 결제·독립 영수증 검증·전달·결정적 감사·ERC-8004 평판·외부 evidence anchor를 `purchaseId`로 연결하는 코드와 테스트가 완료됐다. Gemini/Nemotron은 공통 판매 계약 뒤에 있고, AI 추론 UI만 `apps/dashboard/src/features/ai-inference/`에 분리되어 다른 구매 도메인이 공통 결제·감사 코드를 재사용할 수 있다. 과거 Permit2 증거는 조회만 가능하고 다시 실행할 수 없다.
 
@@ -25,7 +46,7 @@ flowchart LR
   E --> A
 ```
 
-## 로컬 실행
+## 과거 PBLC 실행 방법 — 신규 데모에 사용하지 않음
 
 시크릿은 채팅에 붙이지 않는다. 별도 터미널에서 다음을 실행한다.
 
@@ -74,7 +95,7 @@ npm run test:mongo:local
 npm audit --omit=dev
 ```
 
-## PBLC V2 Base Sepolia smoke 재현
+## 과거 PBLC V2 Base Sepolia smoke 재현 참고 — 실행 승인 아님
 
 PBLC V2는 이미 배포됐다. 신규 배포 없이 현재 주소로 로컬 ERC-3009 runtime과 smoke만 실행한다.
 
@@ -86,20 +107,20 @@ npm run smoke:erc3009:stack -- 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3
 npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3
 ```
 
-현재 Base Sepolia 배포:
+당시 기록된 Base Sepolia 배포:
 
 - PBLC: [`0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9`](https://base-sepolia.blockscout.com/address/0x9DFFfdDcF5d7E526Bda60728e4c8F79dBA50CeD9)
 - PBLC V2 ERC-3009: [`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`](https://base-sepolia.blockscout.com/address/0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3), [배포 tx](https://base-sepolia.blockscout.com/tx/0x5e5e6b1acde5d51e0d11f4c3784d64fc738fb6daa814f3bfe14afae1c8d4e83f)
 - EvidenceAnchor: [`0x31691806C02ca6921a9Bac7AF0972302F8CfA101`](https://base-sepolia.blockscout.com/address/0x31691806C02ca6921a9Bac7AF0972302F8CfA101)
 - buyer writer 등록: [`0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b`](https://base-sepolia.blockscout.com/tx/0x217ccb4ef2ec1f08019b4d73f5e8d195c67f798b027972b94ab8eb488ebabd1b)
 
-현재 ERC-8004 판매 에이전트 등록:
+당시 기록된 ERC-8004 판매 에이전트 등록:
 
 - Gemini agent ID `9154`: [등록](https://base-sepolia.blockscout.com/tx/0xf8838103943775b7890becbf8d4afb8ce44a33b6ddecec99b6fd53277b83186a), [agent wallet 연결](https://base-sepolia.blockscout.com/tx/0xbd51221ea1ff82ab8d690dcf63493f8bfa58dad7799601296b9aa03a55541362)
 - Nemotron agent ID `9155`: [등록](https://base-sepolia.blockscout.com/tx/0xc3d570a4cb87d9b854df8c3a875ec8bbcd3d59b101700dce1b290e879210e212), [agent wallet 연결](https://base-sepolia.blockscout.com/tx/0xdd5aeaa8e97f62295bb3be3f9d71dca40f88d36836f4d7799767eac41e26f1e8)
 - 두 identity NFT의 owner는 deployer이고 `getAgentWallet`은 각각의 seller signer와 일치한다. `npm run erc8004:status`가 registry version과 두 결속을 RPC에서 다시 검증한다.
 
-신규 구매는 PBLC V2, `assetTransferMethod=eip3009`, 랜덤 `bytes32` nonce만 사용한다. Facilitator 응답과 별개로 RPC receipt의 status, 정확한 `Transfer(from,to,amount)`, 동일 receipt의 `AuthorizationUsed(authorizer,nonce)`를 확인한 뒤 감사와 평판을 기록한다.
+당시 PBLC V2 구매는 `assetTransferMethod=eip3009`, 랜덤 `bytes32` nonce를 사용했다. 당시 구현은 Facilitator 응답과 별개로 RPC receipt의 status, 정확한 `Transfer(from,to,amount)`, 동일 receipt의 `AuthorizationUsed(authorizer,nonce)`를 확인한 뒤 감사와 평판을 기록했다. 이 독립 검증·평판 경로는 신규 AEGIS 실행에서는 제외한다. 아래 잔액은 당시 측정값이며 현재 잔액이 아니다.
 
 ### 2026-09-02 과거 Permit2 실거래 결과 — 감사 조회 전용
 
@@ -142,7 +163,7 @@ npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F49
 - 사전 두 시도는 온체인 Transfer 없이 `RECONCILIATION_REQUIRED`로 보존되며 V2 정책의 예약액 `0.2 PBLC`로 표시된다. 이는 삭제하지 않은 실패 증거이며 공개 데모 전에 운영자 검토가 필요하다.
 - 재현: 먼저 `npm run smoke:erc3009:stack -- 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, 그 다음 별도 터미널에서 `npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`를 실행한다. 정상 사용자 UI에서는 `/request`를 사용한다.
 
-## AWS 인계
+## 과거 AWS 준비 자료 — 실제 배포하지 않음
 
 `infra/aws/terraform/`은 ECS Fargate task, CloudWatch, 명시적 Secrets Manager ARN 계약을 정의한다. 기본 `enable_services=false`이므로 실제 서비스와 비용은 생성하지 않는다. ALB/HTTPS/WAF, VPC ingress, ECR 이미지, MongoDB Atlas 네트워크, CloudWatch alarm은 실제 배포 계정 정보가 정해진 뒤 추가한다.
 
@@ -150,7 +171,7 @@ npm run smoke:x402 -- --base-url http://127.0.0.1:8100 --token-address 0xDed7F49
 
 - 민감 prompt/response는 현재 MVP 정책 B에 따라 자동 삭제하지 않는다. **공개 AWS 배포 전에 TTL 또는 수동 삭제 정책과 시연 증거 보존 범위를 다시 결정해야 한다.**
 - Base Sepolia x402 payment, ERC-8004 feedback, EvidenceAnchor checkpoint 증거는 위 실거래 결과로 완료됐다. provider 응답은 아직 `PROVIDER_MODE=mock`이므로 실제 Gemini/Nemotron response ID 검증은 남아 있다.
-- 개인 비공개 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결되어 있다.
+- 개인 GitHub 저장소는 `codenameVien/ai-agent-payment-audit`로 연결되어 있다. 2026-09-09 조회 결과 공개 저장소이며, 비공개로 변경하지 않았다.
 - AWS 비용·외부 쓰기 권한 승인이 아직 없다.
-- 자동 브라우저 제어가 제공되지 않은 세션이라 실거래 상세 화면 캡처는 남아 있다. 대시보드 production build와 `/purchases/[purchaseId]` route 생성은 통과했다.
+- 과거 실거래 상세 캡처와 신규 Mock 브라우저 검증은 구분한다. 신규 브라우저 결과는 [AEGIS 검증 기록](AEGIS_VERIFICATION.md)에 별도로 기록한다.
 - Terraform CLI가 현재 로컬에 없어 `terraform validate`는 실행하지 못했다. 설치 후 `terraform fmt -check && terraform init -backend=false && terraform validate`를 실행한다.

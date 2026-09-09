@@ -1,0 +1,44 @@
+{
+  "tier": "free",
+  "intelligence_index_version": 3,
+  "pagination": {
+    "page": 1,
+    "page_size": 2,
+    "total_pages": 2,
+    "has_more": true
+  },
+  "data": [
+    {
+      "id": "fixture-aa-openai-alpha",
+      "name": "Fixture OpenAI Alpha",
+      "slug": "fixture-aa-openai-alpha",
+      "model_creator": { "id": "fixture-openai", "name": "Fixture OpenAI", "slug": "fixture-openai" },
+      "pricing": {
+        "price_1m_input_tokens": 0.15,
+        "price_1m_output_tokens": 0.6
+      },
+      "performance": {
+        "median_end_to_end_response_time_seconds": 8.4
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 41.5
+      }
+    },
+    {
+      "id": "fixture-aa-anthropic-beta",
+      "name": "Fixture Anthropic Beta",
+      "slug": "fixture-aa-anthropic-beta",
+      "model_creator": { "id": "fixture-anthropic", "name": "Fixture Anthropic", "slug": "fixture-anthropic" },
+      "pricing": {
+        "price_1m_input_tokens": 0.8,
+        "price_1m_output_tokens": 4
+      },
+      "performance": {
+        "median_end_to_end_response_time_seconds": 12.5
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 55.2
+      }
+    }
+  ]
+}

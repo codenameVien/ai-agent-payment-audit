@@ -1,0 +1,38 @@
+{
+  "catalog_version": "aegis-runtime-2026-09-09",
+  "entries": [
+    {
+      "provider_id": "openai",
+      "provider_model_id": "gpt-4.1-2025-04-14",
+      "model_version": "2025-04-14",
+      "aa_model_id": "fixture-aa-openai-alpha",
+      "aa_slug": "fixture-aa-openai-alpha",
+      "display_name": "OpenAI GPT-4.1 (Mock Provider, synthetic AA fixture)",
+      "recipient": "0x000000000000000000000000000000000000a001",
+      "capabilities": ["korean", "reasoning"],
+      "mapping_provenance": "fixture"
+    },
+    {
+      "provider_id": "anthropic",
+      "provider_model_id": "claude-sonnet-5",
+      "model_version": "claude-sonnet-5",
+      "aa_model_id": "fixture-aa-anthropic-beta",
+      "aa_slug": "fixture-aa-anthropic-beta",
+      "display_name": "Anthropic Claude Sonnet 5 (Mock Provider, synthetic AA fixture)",
+      "recipient": "0x000000000000000000000000000000000000a002",
+      "capabilities": ["korean", "reasoning", "vision"],
+      "mapping_provenance": "fixture"
+    },
+    {
+      "provider_id": "google",
+      "provider_model_id": "gemini-2.5-flash",
+      "model_version": "gemini-2.5-flash",
+      "aa_model_id": "fixture-aa-google-gamma",
+      "aa_slug": "fixture-aa-google-gamma",
+      "display_name": "Google Gemini 2.5 Flash (Mock Provider, synthetic AA fixture)",
+      "recipient": "0x000000000000000000000000000000000000a003",
+      "capabilities": ["korean"],
+      "mapping_provenance": "fixture"
+    }
+  ]
+}

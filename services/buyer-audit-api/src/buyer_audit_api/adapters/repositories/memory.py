@@ -4,24 +4,51 @@ import asyncio
 from copy import deepcopy
 from dataclasses import replace
 from datetime import datetime
-from typing import Literal
 
+from buyer_audit_api.core.documents import verify_immutable_document
 from buyer_audit_api.core.errors import (
+    EvidenceImmutabilityError,
     EvidenceIntegrityError,
     EvidenceTransitionError,
     PaymentConflictError,
+    PaymentEvidenceError,
     PaymentPolicyError,
 )
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
+    TERMINAL_PAYMENT_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceHead,
+    ImmutableDocument,
     JsonObject,
     SensitivePayload,
+    TransactionRef,
     WalletBinding,
 )
-from buyer_audit_api.core.payment import PaymentIntent, PaymentIntentState, WalletPolicy
+from buyer_audit_api.core.payment import (
+    ConfirmedOutflow,
+    PaymentIntent,
+    PaymentIntentState,
+    ReservationAction,
+    WalletPolicy,
+)
+from buyer_audit_api.core.reputation import (
+    ConfirmedFeedbackProof,
+    OutboxConflictReason,
+    OutboxStatus,
+    PublishIdentity,
+    ReputationDecision,
+    ReputationPublishJob,
+    ReputationSnapshot,
+    assert_prepared_commitment,
+    assert_proof_matches_job,
+    conflict_is_identical,
+    outbox_conflict,
+    publication_conflict_payload,
+    reputation_recorded_payload,
+    submission_identity,
+)
 from buyer_audit_api.core.seller_execution import SellerExecution, SellerExecutionState
 
 
@@ -60,6 +87,13 @@ class InMemoryEvidenceRepository:
         self._wallet_policies: dict[tuple[str, str, str], WalletPolicy] = {}
         self._payment_intents: dict[str, PaymentIntent] = {}
         self._seller_executions: dict[str, SellerExecution] = {}
+        self._confirmed_outflows: list[ConfirmedOutflow] = []
+        self._outbox: dict[str, ReputationPublishJob] = {}
+        self._outbox_by_identity: dict[str, str] = {}
+        self._outbox_transactions: dict[str, str] = {}
+        self._documents: dict[str, ImmutableDocument] = {}
+        self._snapshots: dict[str, ReputationSnapshot] = {}
+        self._snapshot_fingerprints: dict[tuple[str, int], str] = {}
         self._lock = asyncio.Lock()
 
     async def ensure_indexes(self) -> None:
@@ -208,6 +242,8 @@ class InMemoryEvidenceRepository:
             EventType.PAYMENT_RECONCILIATION_REQUIRED,
             EventType.PAYMENT_SETTLED,
             EventType.PAYMENT_FAILED,
+            EventType.PAYMENT_MISMATCH_CONFIRMED,
+            EventType.PAYMENT_RECONCILED_NO_TRANSFER,
             EventType.EVIDENCE_ANCHORED,
             EventType.REPUTATION_RECORDED,
             EventType.DELIVERED,
@@ -215,6 +251,27 @@ class InMemoryEvidenceRepository:
         }
         if event_type in singleton_types and any(event.type == event_type for event in current):
             raise EvidenceTransitionError(f"duplicate singleton event: {event_type.value}")
+        # unique_phase6_terminal_outcome: one terminal outcome per purchase, any terminal type.
+        outcome_key = payload.get("terminalOutcomeKey")
+        if outcome_key is not None and any(
+            event.payload.get("terminalOutcomeKey") == outcome_key
+            for event in current
+            if event.type in TERMINAL_PAYMENT_EVENT_TYPES
+        ):
+            raise EvidenceTransitionError("duplicate terminal outcome key")
+        # unique_phase6_reconciliation_attempt and unique_phase6_rejected_attempt.
+        for attempt_key, attempt_type in (
+            ("attemptNumber", EventType.PAYMENT_RECONCILIATION_CHECKED),
+            ("attemptId", EventType.PAYMENT_ATTEMPT_REJECTED),
+        ):
+            if event_type is not attempt_type:
+                continue
+            attempt_value = payload.get(attempt_key)
+            if attempt_value is not None and any(
+                event.type == attempt_type and event.payload.get(attempt_key) == attempt_value
+                for event in current
+            ):
+                raise EvidenceTransitionError(f"duplicate {attempt_type.value} {attempt_key}")
         previous_hash = current[-1].event_hash if current else None
         event = create_event(
             purchase_id=purchase_id,
@@ -413,7 +470,8 @@ class InMemoryEvidenceRepository:
         evidence_refs: tuple[str, ...],
         expected_event_count: int,
         expected_head_event_hash: str,
-        reservation_action: Literal["hold", "settle", "release"],
+        reservation_action: ReservationAction,
+        confirmed_outflow: ConfirmedOutflow | None = None,
     ) -> PaymentIntent:
         async with self._lock:
             existing = self._payment_intents.get(next_intent.purchase_id)
@@ -429,7 +487,16 @@ class InMemoryEvidenceRepository:
                 and existing.transaction_hash is None
                 and next_intent.transaction_hash is not None
             )
-            if existing.state == next_intent.state and not same_state_submission_binding:
+            same_state_reconciliation_check = (
+                event_type == EventType.PAYMENT_RECONCILIATION_CHECKED
+                and existing.state == PaymentIntentState.RECONCILIATION_REQUIRED
+                and next_intent.state == PaymentIntentState.RECONCILIATION_REQUIRED
+                and next_intent.reconciliation_attempt_count
+                == existing.reconciliation_attempt_count + 1
+            )
+            if existing.state == next_intent.state and not (
+                same_state_submission_binding or same_state_reconciliation_check
+            ):
                 matching = [event for event in current if event.type == event_type]
                 if existing == next_intent and len(matching) == 1:
                     return deepcopy(existing)
@@ -470,31 +537,61 @@ class InMemoryEvidenceRepository:
             policy = self._wallet_policies.get(key)
             if policy is None:
                 raise PaymentPolicyError("wallet policy is missing during transition")
-            if reservation_action in ("settle", "release"):
+            if reservation_action in ("settle", "release", "replace_with_actual"):
                 if policy.reserved_units < existing.amount_units:
                     raise PaymentConflictError("reserved budget is insufficient")
+                actual_spend = 0
+                if reservation_action == "settle":
+                    actual_spend = existing.amount_units
+                elif reservation_action == "replace_with_actual":
+                    if confirmed_outflow is None or confirmed_outflow.token != policy.token:
+                        raise PaymentConflictError(
+                            "replace_with_actual requires a same-token confirmed outflow"
+                        )
+                    actual_spend = confirmed_outflow.amount_units
                 policy = replace(
                     policy,
                     reserved_units=policy.reserved_units - existing.amount_units,
-                    spent_units=(
-                        policy.spent_units + existing.amount_units
-                        if reservation_action == "settle"
-                        else policy.spent_units
-                    ),
+                    spent_units=policy.spent_units + actual_spend,
                 )
+            if confirmed_outflow is not None:
+                if any(
+                    item.transaction_ref == confirmed_outflow.transaction_ref
+                    and item.purchase_id != confirmed_outflow.purchase_id
+                    for item in self._confirmed_outflows
+                ):
+                    raise PaymentConflictError(
+                        "confirmed outflow transaction is already recorded"
+                    )
+                if any(
+                    item.terminal_outcome_key == confirmed_outflow.terminal_outcome_key
+                    or item.transaction_ref == confirmed_outflow.transaction_ref
+                    for item in self._confirmed_outflows
+                ):
+                    raise PaymentConflictError("confirmed outflow is already recorded")
             if event_type == EventType.PAYMENT_SETTLED:
                 transaction_hash = payload.get("transactionHash")
-                if any(
+                if isinstance(transaction_hash, str) and any(
                     prior.payload.get("transactionHash") == transaction_hash
                     for events in self._events.values()
                     for prior in events
                     if prior.type == EventType.PAYMENT_SETTLED
                 ):
                     raise PaymentConflictError("transaction hash is already settled")
+            if confirmed_outflow is not None:
+                self._confirmed_outflows.append(confirmed_outflow)
             self._wallet_policies[key] = policy
             self._payment_intents[next_intent.purchase_id] = next_intent
             self._commit_event_locked(event, current, heads)
             return deepcopy(next_intent)
+
+    async def list_confirmed_outflows(self, purchase_id: str) -> list[ConfirmedOutflow]:
+        async with self._lock:
+            return [
+                deepcopy(item)
+                for item in self._confirmed_outflows
+                if item.purchase_id == purchase_id
+            ]
 
     async def list_events(self, purchase_id: str) -> list[EvidenceEvent]:
         async with self._lock:
@@ -561,3 +658,519 @@ class InMemoryEvidenceRepository:
         async with self._lock:
             execution = self._seller_executions.get(purchase_id)
             return deepcopy(execution) if execution is not None else None
+
+    # ---- Reputation outbox -------------------------------------------------------
+    #
+    # These reproduce the Mongo semantics exactly: unique publish identity, unique
+    # transaction reference across jobs, lease-owner CAS and immutable fingerprint. The
+    # only difference is the storage.
+
+    def _transaction_key(self, reference: TransactionRef) -> str:
+        return (
+            f"EVM:{reference.hash}"
+            if reference.kind == "EVM"
+            else f"LOCAL:{reference.run_id}:{reference.id}"
+        )
+
+    def _bind_transaction_locked(self, job_id: str, reference: TransactionRef) -> None:
+        key = self._transaction_key(reference)
+        owner = self._outbox_transactions.get(key)
+        if owner is not None and owner != job_id:
+            raise outbox_conflict(
+                OutboxConflictReason.TRANSACTION_ALREADY_BOUND,
+                "reputation transaction reference is already recorded",
+            )
+        self._outbox_transactions[key] = job_id
+
+    def _guard_transition_locked(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        now: datetime,
+        allowed: frozenset[OutboxStatus],
+    ) -> ReputationPublishJob:
+        job = self._outbox.get(job_id)
+        if job is None:
+            raise PaymentEvidenceError("reputation job not found")
+        if job.payload_fingerprint != payload_fingerprint:
+            raise outbox_conflict(
+                OutboxConflictReason.PAYLOAD_FINGERPRINT_MISMATCH,
+                "reputation job has a different payload fingerprint",
+            )
+        if job.status not in allowed:
+            raise outbox_conflict(
+                OutboxConflictReason.STALE_STATUS,
+                f"reputation job cannot move from {job.status.value}",
+            )
+        if job.worker_id != worker_id or not job.lease_held_at(now):
+            raise outbox_conflict(
+                OutboxConflictReason.LEASE_MOVED,
+                "reputation job lease is not held by this worker",
+            )
+        return job
+
+    async def get_job(self, job_id: str) -> ReputationPublishJob | None:
+        async with self._lock:
+            job = self._outbox.get(job_id)
+            return deepcopy(job) if job is not None else None
+
+    async def get_by_identity(self, identity_hash: str) -> ReputationPublishJob | None:
+        async with self._lock:
+            job_id = self._outbox_by_identity.get(identity_hash)
+            if job_id is None:
+                return None
+            job = self._outbox.get(job_id)
+            return deepcopy(job) if job is not None else None
+
+    async def claim_job(
+        self, *, worker_id: str, lease_until: datetime, now: datetime
+    ) -> ReputationPublishJob | None:
+        async with self._lock:
+            claimable = sorted(
+                (
+                    job
+                    for job in self._outbox.values()
+                    if not job.is_terminal and not job.lease_held_at(now)
+                ),
+                key=lambda item: (item.created_at, item.job_id),
+            )
+            if not claimable:
+                return None
+            job = claimable[0]
+            leased = replace(
+                job,
+                status=OutboxStatus.LEASED if job.status is OutboxStatus.PENDING else job.status,
+                worker_id=worker_id,
+                lease_expires_at=lease_until,
+                attempt_count=job.attempt_count + 1,
+                updated_at=now,
+            )
+            self._outbox[job.job_id] = leased
+            return deepcopy(leased)
+
+    def _bind_once_locked(
+        self, job: ReputationPublishJob, reference: TransactionRef | None
+    ) -> TransactionRef | None:
+        """A job's submission reference is set at most once and then frozen.
+
+        `PREPARED` records the intent before an EVM hash exists, so the reference may
+        still be `None`. The first caller that knows it binds it; any later caller must
+        restate exactly that reference. Cross-job reuse is rejected by the unique index.
+        """
+        if reference is None:
+            return job.transaction_ref
+        if job.transaction_ref is None:
+            self._bind_transaction_locked(job.job_id, reference)
+            return reference
+        if submission_identity(job.transaction_ref) != submission_identity(reference):
+            raise outbox_conflict(
+                OutboxConflictReason.TRANSACTION_ALREADY_BOUND,
+                "reputation job is already bound to another submitted transaction",
+            )
+        return job.transaction_ref
+
+    async def mark_prepared(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef | None,
+        feedback_hash: str,
+        client_address: str,
+        feedback_uri: str,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        async with self._lock:
+            job = self._guard_transition_locked(
+                job_id=job_id,
+                worker_id=worker_id,
+                payload_fingerprint=payload_fingerprint,
+                now=now,
+                allowed=frozenset({OutboxStatus.LEASED, OutboxStatus.PREPARED}),
+            )
+            assert_prepared_commitment(
+                job=job,
+                feedback_hash=feedback_hash,
+                client_address=client_address,
+                feedback_uri=feedback_uri,
+            )
+            bound = self._bind_once_locked(job, transaction_ref)
+            prepared = replace(
+                job,
+                status=OutboxStatus.PREPARED,
+                transaction_ref=bound,
+                feedback_hash=feedback_hash,
+                client_address=client_address,
+                feedback_uri=feedback_uri,
+                updated_at=now,
+            )
+            self._outbox[job_id] = prepared
+            return deepcopy(prepared)
+
+    async def mark_submitted_unknown(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        transaction_ref: TransactionRef | None,
+        reason: str,
+        now: datetime,
+    ) -> ReputationPublishJob:
+        async with self._lock:
+            job = self._guard_transition_locked(
+                job_id=job_id,
+                worker_id=worker_id,
+                payload_fingerprint=payload_fingerprint,
+                now=now,
+                allowed=frozenset(
+                    {OutboxStatus.PREPARED, OutboxStatus.SUBMITTED_UNKNOWN}
+                ),
+            )
+            if job.feedback_hash is None:
+                raise PaymentEvidenceError(
+                    "an unknown submission requires a prepared feedback hash"
+                )
+            bound = self._bind_once_locked(job, transaction_ref)
+            unknown = replace(
+                job,
+                status=OutboxStatus.SUBMITTED_UNKNOWN,
+                transaction_ref=bound,
+                updated_at=now,
+            )
+            self._outbox[job_id] = unknown
+            return deepcopy(unknown)
+
+    async def mark_confirmed(
+        self,
+        *,
+        job_id: str,
+        worker_id: str,
+        payload_fingerprint: str,
+        proof: ConfirmedFeedbackProof,
+        now: datetime,
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """One atomic unit: append-only `REPUTATION_RECORDED` plus the `CONFIRMED` job."""
+        async with self._lock:
+            job = self._outbox.get(job_id)
+            if job is None:
+                raise PaymentEvidenceError("reputation job not found")
+            if job.payload_fingerprint != payload_fingerprint:
+                raise outbox_conflict(
+                    OutboxConflictReason.PAYLOAD_FINGERPRINT_MISMATCH,
+                    "reputation job has a different payload fingerprint",
+                )
+            if job.status is OutboxStatus.CONFIRMED:
+                # Retrying the *same* proof is idempotent; anything else is a conflict,
+                # never a mutation of a recorded external effect.
+                stored = job.confirmed_proof
+                if stored is not None and stored.proof_hash == proof.proof_hash:
+                    return self._recorded_event_locked(job), deepcopy(job)
+                raise outbox_conflict(
+                    OutboxConflictReason.DIFFERENT_CONFIRMATION,
+                    "reputation job has a different confirmation",
+                )
+            if job.is_terminal:
+                raise outbox_conflict(
+                    OutboxConflictReason.ALREADY_TERMINAL,
+                    f"reputation job is already {job.status.value}",
+                )
+            if job.worker_id != worker_id or not job.lease_held_at(now):
+                raise outbox_conflict(
+                    OutboxConflictReason.LEASE_MOVED,
+                    "reputation job lease is not held by this worker",
+                )
+            assert_proof_matches_job(job=job, proof=proof)
+            purchase_id = job.identity.purchase_id
+            event, current, heads = self._create_event_locked(
+                purchase_id=purchase_id,
+                event_type=EventType.REPUTATION_RECORDED,
+                occurred_at=now,
+                actor={"id": "erc8004-reputation-writer", "type": "service"},
+                payload=reputation_recorded_payload(job=job, proof=proof),
+                evidence_refs=(
+                    job.decision.audit_bundle_hash,
+                    job.identity_hash,
+                    proof.receipt_proof_ref,
+                ),
+                # The publisher never sees the purchase head; the append is serialized
+                # with the status change, so the head it extends is the one it read.
+                expected_event_count=None,
+                expected_head_event_hash=None,
+            )
+            self._bind_transaction_locked(job_id, proof.transaction_ref)
+            confirmed = replace(
+                job,
+                status=OutboxStatus.CONFIRMED,
+                transaction_ref=proof.transaction_ref,
+                receipt_proof_ref=proof.receipt_proof_ref,
+                feedback_hash=proof.feedback_hash,
+                client_address=proof.client_address,
+                feedback_uri=proof.feedback_uri,
+                block_number=proof.block_number,
+                log_index=proof.log_index,
+                evidence_source=proof.transaction_ref.evidence_source,
+                confirmed_proof=proof,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            self._commit_event_locked(event, current, heads)
+            self._outbox[job_id] = confirmed
+            return deepcopy(event), deepcopy(confirmed)
+
+    def _recorded_event_locked(self, job: ReputationPublishJob) -> EvidenceEvent:
+        """The already-appended record of this job's publication."""
+        events = self._events.get(job.identity.purchase_id, [])
+        recorded = [
+            event
+            for event in events
+            if event.type == EventType.REPUTATION_RECORDED
+            and event.payload.get("publishIdentityHash") == job.identity_hash
+        ]
+        if not recorded:
+            raise EvidenceIntegrityError(
+                "a confirmed job has no append-only reputation record"
+            )
+        return deepcopy(recorded[-1])
+
+    async def record_conflict(
+        self,
+        *,
+        identity_hash: str,
+        requested_fingerprint: str,
+        reason_code: str,
+        now: datetime,
+    ) -> tuple[EvidenceEvent, ReputationPublishJob]:
+        """One atomic unit: `CONFLICT` plus its append-only conflict finding.
+
+        Only a *different* immutable payload fingerprint is a conflict. A restated
+        fingerprint - an ordinary lease loss, or an idempotent retry of the same payload -
+        is refused before anything is written, so a job another worker is still driving is
+        never terminalized by a race.
+        """
+        async with self._lock:
+            job_id = self._outbox_by_identity.get(identity_hash)
+            if job_id is None:
+                raise PaymentEvidenceError("reputation job not found")
+            job = self._outbox[job_id]
+            if job.status is OutboxStatus.CONFIRMED:
+                raise outbox_conflict(
+                    OutboxConflictReason.ALREADY_TERMINAL,
+                    "a confirmed publication cannot be turned into a conflict",
+                )
+            # Raises `SAME_FINGERPRINT_NOT_A_CONFLICT` with no state change and no event.
+            payload = publication_conflict_payload(
+                identity_hash=identity_hash,
+                existing_fingerprint=job.payload_fingerprint,
+                requested_fingerprint=requested_fingerprint,
+                reason_code=reason_code,
+            )
+            purchase_id = job.identity.purchase_id
+            existing = [
+                event
+                for event in self._events.get(purchase_id, [])
+                if event.type == EventType.REPUTATION_PUBLICATION_CONFLICT
+                and conflict_is_identical(event.payload, payload)
+            ]
+            if existing:
+                # The same conflict recorded twice is one conflict. A *different* one
+                # appends its own finding and neither erases the other.
+                return deepcopy(existing[-1]), deepcopy(job)
+            event, current, heads = self._create_event_locked(
+                purchase_id=purchase_id,
+                event_type=EventType.REPUTATION_PUBLICATION_CONFLICT,
+                occurred_at=now,
+                actor={"id": "reputation-outbox", "type": "service"},
+                payload=payload,
+                evidence_refs=(identity_hash, job.decision.audit_bundle_hash),
+                expected_event_count=None,
+                expected_head_event_hash=None,
+            )
+            conflicted = replace(
+                job,
+                status=OutboxStatus.CONFLICT,
+                lease_expires_at=None,
+                updated_at=now,
+            )
+            self._commit_event_locked(event, current, heads)
+            self._outbox[job_id] = conflicted
+            return deepcopy(event), deepcopy(conflicted)
+
+    async def list_recoverable_jobs(
+        self, *, now: datetime
+    ) -> list[ReputationPublishJob]:
+        async with self._lock:
+            return [
+                deepcopy(job)
+                for job in sorted(
+                    self._outbox.values(), key=lambda item: (item.created_at, item.job_id)
+                )
+                if not job.is_terminal and not job.lease_held_at(now)
+            ]
+
+    # ---- Immutable side documents --------------------------------------------------
+
+    async def put_document(self, document: ImmutableDocument) -> ImmutableDocument:
+        verify_immutable_document(document)
+        async with self._lock:
+            existing = self._documents.get(document.document_id)
+            if existing is not None:
+                if existing.content_hash != document.content_hash:
+                    raise EvidenceImmutabilityError(
+                        "an immutable document cannot be rewritten once stored"
+                    )
+                return deepcopy(existing)
+            self._documents[document.document_id] = document
+            return deepcopy(document)
+
+    async def get_document(self, document_id: str) -> ImmutableDocument | None:
+        async with self._lock:
+            document = self._documents.get(document_id)
+            return deepcopy(document) if document is not None else None
+
+    # ---- Reputation snapshots ----------------------------------------------------
+
+    async def put_snapshot(self, snapshot: ReputationSnapshot) -> ReputationSnapshot:
+        async with self._lock:
+            existing = self._snapshots.get(snapshot.snapshot_id)
+            if existing is not None:
+                if existing.snapshot_hash != snapshot.snapshot_hash:
+                    raise PaymentConflictError(
+                        "a reputation snapshot is immutable once stored"
+                    )
+                return deepcopy(existing)
+            fingerprint_key = (
+                snapshot.scope.query_fingerprint,
+                snapshot.scope.to_block,
+            )
+            owner = self._snapshot_fingerprints.get(fingerprint_key)
+            if owner is not None and owner != snapshot.snapshot_id:
+                stored = self._snapshots[owner]
+                if stored.snapshot_hash != snapshot.snapshot_hash:
+                    raise PaymentConflictError(
+                        "another snapshot already answers this query at this block"
+                    )
+                return deepcopy(stored)
+            self._snapshots[snapshot.snapshot_id] = snapshot
+            self._snapshot_fingerprints[fingerprint_key] = snapshot.snapshot_id
+            return deepcopy(snapshot)
+
+    async def get_snapshot(self, snapshot_id: str) -> ReputationSnapshot | None:
+        async with self._lock:
+            snapshot = self._snapshots.get(snapshot_id)
+            return deepcopy(snapshot) if snapshot is not None else None
+
+    async def latest_snapshot(
+        self, *, seller_agent_id: str, query_fingerprint: str
+    ) -> ReputationSnapshot | None:
+        async with self._lock:
+            matching = [
+                snapshot
+                for snapshot in self._snapshots.values()
+                if snapshot.seller_agent_id == seller_agent_id
+                and snapshot.scope.query_fingerprint == query_fingerprint
+            ]
+            if not matching:
+                return None
+            matching.sort(key=lambda item: (item.queried_at, item.snapshot_id))
+            return deepcopy(matching[-1])
+
+    # ---- Atomic terminal finalize ------------------------------------------------
+
+    async def finalize_atomic(
+        self,
+        *,
+        purchase_id: str,
+        audit_payload: JsonObject | None,
+        audit_evidence_refs: tuple[str, ...],
+        decision_payload: JsonObject,
+        decision_evidence_refs: tuple[str, ...],
+        occurred_at: datetime,
+        expected_event_count: int,
+        expected_head_event_hash: str,
+        identity: PublishIdentity,
+        identity_hash: str,
+        payload_fingerprint: str,
+        decision: ReputationDecision,
+        status: OutboxStatus,
+    ) -> tuple[EvidenceEvent | None, EvidenceEvent, ReputationPublishJob]:
+        """`AUDITED`, `REPUTATION_DECIDED` and the job appear together or not at all.
+
+        `audit_payload=None` covers the recovery case where a terminal audit is already
+        persisted and current: only the decision and the job are created, still atomically
+        and still under the caller's head compare-and-set.
+        """
+        async with self._lock:
+            actor = {"id": "terminal-audit-coordinator", "type": "service"}
+            current = self._events.setdefault(purchase_id, [])
+            if any(
+                event.type == EventType.REPUTATION_DECIDED for event in current
+            ):
+                raise PaymentConflictError("purchase already has a reputation decision")
+            if audit_payload is not None and any(
+                event.type == EventType.AUDITED for event in current
+            ):
+                raise PaymentConflictError("purchase already has a terminal audit")
+            if audit_payload is None and not any(
+                event.type == EventType.AUDITED for event in current
+            ):
+                raise PaymentEvidenceError(
+                    "a decision-only finalize requires a persisted terminal audit"
+                )
+            existing_job_id = self._outbox_by_identity.get(identity_hash)
+            if existing_job_id is not None:
+                existing = self._outbox[existing_job_id]
+                if existing.payload_fingerprint != payload_fingerprint:
+                    raise PaymentConflictError(
+                        "publish identity already has a different fingerprint"
+                    )
+                raise PaymentConflictError("publish identity already has a job")
+            audit_event: EvidenceEvent | None = None
+            next_count = expected_event_count
+            next_head = expected_head_event_hash
+            if audit_payload is not None:
+                audit_event, current, heads = self._create_event_locked(
+                    purchase_id=purchase_id,
+                    event_type=EventType.AUDITED,
+                    occurred_at=occurred_at,
+                    actor=actor,
+                    payload=audit_payload,
+                    evidence_refs=audit_evidence_refs,
+                    expected_event_count=expected_event_count,
+                    expected_head_event_hash=expected_head_event_hash,
+                )
+                self._commit_event_locked(audit_event, current, heads)
+                next_count = len(current)
+                next_head = audit_event.event_hash
+            decision_event, current, heads = self._create_event_locked(
+                purchase_id=purchase_id,
+                event_type=EventType.REPUTATION_DECIDED,
+                occurred_at=occurred_at,
+                actor=actor,
+                payload=decision_payload,
+                evidence_refs=decision_evidence_refs,
+                expected_event_count=next_count,
+                expected_head_event_hash=next_head,
+            )
+            self._commit_event_locked(decision_event, current, heads)
+            job_id = f"repjob:{identity_hash.split(':')[-1][:32]}"
+            job = ReputationPublishJob(
+                job_id=job_id,
+                identity=identity,
+                identity_hash=identity_hash,
+                payload_fingerprint=payload_fingerprint,
+                decision=decision,
+                status=status,
+                created_at=occurred_at,
+                updated_at=occurred_at,
+            )
+            self._outbox[job_id] = job
+            self._outbox_by_identity[identity_hash] = job_id
+            return (
+                None if audit_event is None else deepcopy(audit_event),
+                deepcopy(decision_event),
+                deepcopy(job),
+            )

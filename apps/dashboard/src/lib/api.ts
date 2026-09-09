@@ -24,10 +24,14 @@ export function short(value: string | null | undefined, size = 7): string {
     : value;
 }
 
-export function credits(value: number | null): string {
+export function tokenAmount(value: number | null, decimals = 6): string {
   return value === null
     ? "—"
-    : new Intl.NumberFormat("ko-KR", { maximumFractionDigits: 6 }).format(
-        value / 1_000_000,
+    : new Intl.NumberFormat("ko-KR", { maximumFractionDigits: decimals }).format(
+        value / 10 ** decimals,
       );
+}
+
+export function credits(value: number | null): string {
+  return tokenAmount(value, 6);
 }

@@ -1,125 +1,111 @@
 [한국어](README.md) | [English](README.en.md)
 
-# AI Agent M2M Payment Audit
-
-An audit system that connects a buyer agent's selection evidence to its actual blockchain payment so the user can verify both.
+# AEGIS — AI Model Purchasing and Audit
 
 ## Why
 
-A successful payment does not prove that an AI agent selected a service that matched the user's request, budget, and policy. The system links request, candidates, quotes, decision, payment, delivery, and audit evidence under one `purchaseId`, then cross-checks the actual Base Sepolia transaction.
+A system connecting a buyer agent's model selection, fixed-price payment request, and result through one `purchaseId`. Core verification of the presentation single-user local demo is complete. This is not completion of live APIs, on-chain payments, or a public service. See the [verification record](docs/AEGIS_VERIFICATION.md) for measured completion and remaining work.
 
 ## Features
 
-Implemented locally:
-
-- SIWE challenge and signature verification with atomic nonce consumption and replay/domain/URI/chain/expiry rejection
-- Unique binding between the user's MetaMask address and a programmatic buyer wallet
-- RFC 8785 append-only event hash chains with mutation detection
-- Separate sensitive-payload storage using AES-256-GCM envelope encryption
-- Owner-authorized raw-payload access with an appended access-audit event
-- A reusable core that cannot import AI-inference implementations, proven with a fake domain
-- Real MongoDB atomicity and concurrency integration tests using PyMongo Async
-- Deterministic manual benchmark normalization, hard filters, and four scoring presets
-- One provider-level seller engine shared by Gemini and Nemotron mock/HTTP adapters
-- Recoverable EIP-712 seller quotes with Buyer-side signer and tamper verification
-- At most one idempotent in-provider counteroffer per request ID
-- Protocol-neutral payment quote schema separated from the AI-inference extension
-- `/health`, `/internal/quotes`, and x402-gated `/v1/inference` transport shell
-- Authenticated `/purchases/{id}/run` orchestration across decision, payment, delivery, and audit
-- Durable seller `CLAIMED → SUBMITTED → SETTLED → PROVIDER_SUBMITTED → DELIVERED` journal with restart recovery and at-most-once provider attempts
-- A single PBLC V2 x402 v2 `exact + eip3009` path for new payments, with read-only compatibility for historical Permit2 evidence
-- Delivery integrity checks that bind seller/provider/model/version to the selected signed quote
-- Independent Base Sepolia receipt and exact ERC-20 `Transfer` verification
-- Objective ERC-8004 reputation and confirmed external evidence anchors
-- Read-only Next.js dashboard for wallet balance, transactions, selection rationale, reputation, and audit warnings
-- A separate `/request` purchase surface and read-only `/`/`/dashboard`; legacy `/experiments` redirects without mutating records
-- MongoDB/API/dashboard/two sellers/Gateway Compose plus a cost-disabled AWS Terraform handoff
-- Hidden local handoff scripts for seller-wallet and external provider keys
-
-Live Base Sepolia x402 payment, ERC-8004 feedback, and EvidenceAnchor evidence is complete. Remaining real-provider, AWS, and dashboard-capture gates plus transaction links are tracked in the [handoff](docs/HANDOFF.md).
+Model comparison, fixed-price payment requests, result delivery, and selection audits share one purchase record. Use `/request` to purchase and `/dashboard` to inspect evidence.
 
 ## Architecture
 
 ```mermaid
 flowchart LR
   U[User] --> R[Purchase request /request]
-  U --> D[Read-only audit dashboard]
-  R --> B[Buyer Agent]
-  B --> BW[Buyer SDK Wrapper]
-  BW --> P[Payment Executor - isolated process]
-  BW --> S[Seller Agent]
-  S --> SW[Seller SDK Wrapper]
-  BW --> E[Audit Evidence API]
+  R --> B[Buyer agent]
+  B --> P[Payment execution module · isolated key]
+  P --> G[Three Mock Provider Gateways]
+  G --> F[Mock Facilitator]
+  G -->|Result| B
+  B -->|Result| R
+  B --> E[Audit Evidence API]
   P --> E
-  S --> E
+  G --> E
   E --> M[(MongoDB)]
-  P --> F[x402 Facilitator]
-  F --> C[Base Sepolia PBLC V2 ERC-3009]
-  P -. independent RPC .-> C
+  U --> D[Read-only dashboard]
   D --> E
 ```
 
-`core/` cannot import `domains/ai_inference/`, Gemini, or Nemotron. A future purchase domain connects through domain ports, schemas, a seller adapter, and a UI renderer without changing the core.
+OpenAI, Anthropic Claude, and Google Gemini Gateways are ordinary code modules. The buyer analyzes the request, reads AA data, calculates prices, filters candidates, and selects a model. An isolated payment execution module signs x402 v2 exact + ERC-3009 authorizations; the Gateway releases the result after Facilitator verify/settle confirmation.
+
+Providers and the Facilitator are currently **Mock**, and AA values are **synthetic fixtures**. Real model identifiers do not make fixture values real benchmarks for those models. The local stack makes no real Provider, AA, blockchain, or AWS calls. See the [architecture](docs/AEGIS_ARCHITECTURE.md).
 
 ## Getting Started
 
+Prerequisites: Node.js 20+, installed npm dependencies, Python 3.12 with uv, and local `mongod` and `mongosh`. From the repository root:
+
 ```bash
-cd /Users/vien/MyProjects/PBL
 npm run setup:python
-npm run lint
-npm test
-npm run test:mongo:local
+npm run aegis:stack
 ```
 
-To run the API, generate local internal keys in a separate terminal. Never paste them into chat.
+The runner owns a temporary MongoDB replica set, evidence API, three Gateways, Mock Facilitator, and payment execution module. It generates temporary test credentials instead of loading existing environment files or databases. **Ctrl-C removes this run's temporary database and records.** Existing PBLC transactions and user MongoDB records are not accessed.
 
-After sign-in, `/` and `/dashboard` only read evidence. Start a purchase from
-`/request` after acknowledging the Base Sepolia payment; `/experiments` redirects there. With the default
-`PROVIDER_MODE=mock`, payment, chain verification, and audit evidence are real while the AI
-response body comes from the mock provider.
+Copy the printed `evidence API` URL. In another terminal, replace the placeholder below with that exact URL:
 
 ```bash
-cd /Users/vien/MyProjects/PBL
-python3 scripts/setup_keys.py
-npm run api
+API_ORIGIN="http://127.0.0.1:PRINTED_PORT" npm run dev --workspace @pbl/dashboard -- --hostname 127.0.0.1 --port 3000
 ```
 
-Variable names are documented in `.env.example`; real values are excluded from Git.
-
-The default `PROVIDER_MODE=mock` needs no Gemini/NVIDIA keys. Only when validating real provider calls, enter them invisibly in a separate terminal and switch to `PROVIDER_MODE=real`.
-
-```bash
-cd /Users/vien/MyProjects/PBL
-python3 scripts/input_provider_keys.py
-```
+Open `http://localhost:3000/request` for the request, budget, optional priority, and execution consent. `/dashboard` is a read-focused audit view. The new flow requires no SIWE login. This local single-user scope is not completed public multi-user authentication; internal API protection and encrypted sensitive payloads remain.
 
 ## Usage
 
-Evidence from the current build:
+With actual temporary MongoDB and local HTTP services, a request restricted to `allowed_providers: ["openai"]` passed AA-fixture selection → Mock payment → result → `AUDITED` evidence. Claude and Gemini each passed the same flow. Actual focused E2E output on 2026-09-10:
 
 ```text
-74 passed, 1 skipped  # Python; native Mongo is isolated by default
-30 passed             # Seller Service
-35 passed             # Payment Executor (internal package: commerce-gateway)
-11 passed             # Solidity Foundry
-3 passed              # Dashboard request/read-only boundary
-1 passed              # Native MongoDB replica-set integration
-Success: no issues found in 43 source files  # strict mypy
+ok 1 - openai is selected, paid once and delivered
+ok 2 - anthropic is selected, paid once and delivered
+ok 3 - google is selected, paid once and delivered
+ok 4 - a budget below every candidate leaves no eligible model and no payment
+ok 5 - two concurrent runs of one purchase settle exactly once
+# tests 5
+# pass 5
+# fail 0
 ```
 
-After SIWE authentication, a fake-domain purchase stores only normalized data and a raw-content hash in public evidence. The raw request is encrypted and can be retrieved only through the owner-authorized endpoint.
+Each Provider flow restricts eligibility through an allowlist. These are integration checks, not actual model benchmark experiments or blockchain transactions.
 
-## Technology Choices
+Fixed `aa-three-factor-v1` weights:
 
-- FastAPI exposes the existing Python buyer/audit logic behind an HTTP boundary.
-- PyMongo Async replaces the deprecated Motor path with MongoDB's official async driver.
-- RFC 8785 plus SHA-256 provides deterministic JSON evidence hashes.
-- AES-256-GCM envelope encryption provides per-payload data keys and an AWS KMS seam.
-- SIWE separates user ownership via MetaMask from the autonomous buyer wallet.
-- PBLC V2 plus ERC-3009 is the only executable path for new payments; historical Permit2 evidence remains readable but cannot be executed or reconciled.
-- ERC-8004 provides provider-level seller-agent identity and objective payment reputation.
-- Next.js separates the reusable audit shell from domain-specific renderers.
+| priority | Price | Completion time | Intelligence |
+|---|---:|---:|---:|
+| default | 40% | 30% | 30% |
+| price | 60% | 20% | 20% |
+| speed | 20% | 60% | 20% |
+| intelligence | 20% | 20% | 60% |
+
+Explicit priority wins; otherwise request wording selects the preset. Budget, capabilities, maximum allowed time, and allowed Providers are hard filters applied before scoring. Reputation, freshness, and manual quality scores are excluded from new selection.
+
+`quoteAEGIS = (estimated input tokens × input price + maximum output tokens × output price) / 1,000,000`
+
+There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 AEGIS = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
+
+The data contract comes from [Artificial Analysis](https://artificialanalysis.ai/data-api/docs). Completion time is a benchmark reference, normally based on 500 answer tokens, not a completion guarantee. Invalid snapshots, missing required values, or failed exact mapping stop purchasing before payment.
+
+## Audit and checks
+
+The evidence API owns MongoDB access and connects requests, snapshots, all candidates, decisions, payments, and results with ordered hash-chained events. Gateways and the payment execution module do not access MongoDB directly. New payment status relies on Facilitator responses; it does not claim independent RPC Transfer verification or an on-chain Anchor guarantee. Mock duration and unqueried balances are not represented as real measurements.
+
+```bash
+npm run build --workspace @pbl/commerce-gateway
+node --test --require ./scripts/aegis_outbound_guard.cjs --test-name-pattern='(openai is selected|anthropic is selected|google is selected|budget below every candidate|two concurrent runs)' scripts/aegis_phase6_scenarios.test.mjs
+node --test --test-name-pattern='tampered 402|gateway refuses a payment payload' services/commerce-gateway/dist/tests/aegis-runtime.test.js
+npm run lint
+npm run build --workspace @pbl/dashboard
+```
+
+Five focused E2Es, two 402-mismatch checks, dashboard build, and basic lint passed. Full Python outbound instrumentation, broad historical zero-write regression, Mongo failure-cleanup stress, repeated full suites, and additional security/performance hardening remain follow-up work. This demo does not claim those checks or production security are complete.
 
 ## Roadmap
 
-[docs/ROADMAP.md](docs/ROADMAP.md)
+The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION.md) track remaining implementation and validation.
+
+### History and external gates
+
+Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
+
+AEGIS is prepared locally, not deployed. Deployment, asset movement, and real testnet payment require separate approval after wallets, method, predicted address, gas estimate, and test amount are presented. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.

@@ -18,6 +18,18 @@ class EvidenceTransitionError(RuntimeError):
     """An append lost its expected-head race or violates a singleton transition."""
 
 
+class EvidenceImmutabilityError(RuntimeError):
+    """A stored immutable document already holds different content under this identity."""
+
+
+class ExternalEvidenceError(RuntimeError):
+    """Captured external evidence is absent, inconsistent, or not exactly mappable."""
+
+
+class SelectionAbortedError(RuntimeError):
+    """Deterministic policy refuses to select a model, so no payment may be prepared."""
+
+
 class PaymentEvidenceError(RuntimeError):
     """Stored purchase evidence cannot authorize a payment transition."""
 

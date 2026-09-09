@@ -1,272 +1,80 @@
-# Requirements — AI Agent M2M Payment Audit
+# AEGIS AA 모델 구매 전환 요구사항
 
-Status: Revised and Approved
-Approved: 2026-09-02
-Revised: 2026-09-04 — request/dashboard boundary, Buyer ownership, Audit Evidence API, SDK Wrappers, and parallel ERC-3009 migration
+Status: 사용자 확정 요청 2026-09-09에 따른 구현 기준. 기존 요구와 충돌하면 본 문서가 신규 흐름에 우선한다. 과거 거래·원본 문서 이력은 보존한다.
 
-## 1. Scope Contract
+## 범위와 운영 모델
 
-- **product-quality:** high
-- **engineering-assurance baseline:** standard
-- **scoped override:** high-assurance for SIWE authentication, autonomous wallet policy, payment authorization/submission, audit-evidence integrity, and encrypted sensitive payloads
-- **security-sensitive:** yes
-- **has-ui:** yes
-- **operating model:** one demo user on Base Sepolia, with provider APIs and blockchain infrastructure treated as external and potentially unavailable
-- **primary threat model:** prevent unauthorized, duplicated, replayed, substituted, or evidence-detached payments; prevent disclosure or silent modification of sensitive decision evidence
+- product-quality: high; engineering-assurance baseline: standard; security-sensitive: yes; has-ui: yes.
+- 단일 사용자 로컬 데모. 지갑 서명·내부 API·감사 무결성·민감 원문 경계는 기존 scoped high-assurance를 유지한다.
+- 사용자 → `/request` → 구매 에이전트 → Provider Gateway → 결과 반환. OpenAI, Anthropic Claude, Google Gemini 세 Gateway는 선택된 정확한 모델 ID/version을 실행하는 일반 코드이며 AI 판단을 하지 않는다.
+- Mock Provider/Facilitator로 로컬 검증한다. 실제 Provider 키 연결, 토큰 배포/이동/실제 테스트넷 결제, AWS 실제 배포는 실행하지 않는다. AA 키가 있으면 별도의 실제 API 계약 검증은 가능하나 키는 서버 환경변수로만 사용한다.
+- 신규 실행에서 판매자 견적 협상/counteroffer, SIWE, ERC-8004, 평판 점수, Evidence Anchor, 애플리케이션 독립 RPC 결제 검증을 제외한다. 과거 조회 기능과 거래·MongoDB 증거·평판 구현 커밋은 보존한다.
 
-## 2. Confirmed Product Intent
+## 사용자 이야기와 수용 기준
 
-### Problem and user
+### AEGIS-US-01 요청과 우선순위
 
-The primary user is a person delegating an AI-inference purchase to a buyer agent. A successful blockchain payment does not prove that the agent selected an appropriate model or followed the user's budget and policy.
+사용자로서 요청·예산·선택적 우선순위를 제출하고 하나의 구매를 재개할 수 있다.
 
-### Why now
+- GIVEN `/request` WHEN 실행 동의 후 제출 THEN 고유 purchaseId로 요청을 저장하고 분석·AA·선택·결제·응답·감사를 연결한다. tx hash는 별도 필드다.
+- GIVEN 명시적 priority WHEN 처리 THEN default/price/speed/intelligence를 최우선 적용한다. 미지정이면 “싸게/비용 최소화”→price, “빨리/즉시/실시간”→speed, “정확하게/복잡한 추론/성능 중요”→intelligence, 무매치/서로 다른 조건 매치→default로 분류한다. 이유와 매치 근거를 저장한다.
+- GIVEN priority WHEN 점수 계산 THEN 가격/완료시간/성능 가중치는 default=(.4,.3,.3), price=(.6,.2,.2), speed=(.2,.6,.2), intelligence=(.2,.2,.6)다. LLM 제안은 숫자를 변경하지 않는다. 추가 가중치 승인 단계는 없다.
+- GIVEN 과거 balanced/quality/performance WHEN 읽기 THEN 저장된 당시 정책·숫자를 그대로 표시한다. 신규 API는 구 명칭을 명시적 오류로 거부하고 네 명칭을 안내한다. 과거 값을 신규 정책으로 자동 재해석하지 않는다.
 
-x402 enables autonomous agent payments, while ERC-8004 provides an emerging identity and reputation layer. The graduation project must demonstrate how those mechanisms can be combined with off-chain decision evidence rather than treating payment success as sufficient accountability.
+### AEGIS-US-02 검증 가능한 AA 증거
 
-### Observable success
+구매 에이전트로서 AA 원본 출처와 정확한 모델 mapping을 고정하여 같은 근거로 비교한다.
 
-In one reproducible demonstration, the user can submit an AI request, see the buyer compare eligible Gemini and Nemotron offers, observe exactly one custom-token payment on Base Sepolia, receive the purchased response, and inspect a linked audit report that explains the choice and detects a deliberately introduced rule violation or evidence mismatch.
+- GIVEN 서버 adapter WHEN 조회 THEN `GET https://artificialanalysis.ai/api/v2/language/models/free`, `x-api-key` 서버 헤더, 공식 page/page_size pagination을 사용한다. 모든 페이지를 수집하고 page,total_pages,has_more 일관성과 반복 페이지를 검사한다.
+- GIVEN 응답 WHEN snapshot 생성 THEN root intelligence_index_version을 snapshot에 보존하며 모델별 필드로 가정하지 않는다. id/name/slug/model_creator, input/output price, median end-to-end seconds, AA Intelligence Index를 보존한다.
+- GIVEN snapshot WHEN 기록 THEN 감사 증거 API를 통해 MongoDB에 purchaseId, fetchedAt, 원본 응답 hash, 페이지 원본 또는 검증 가능한 원본 참조, 각 모델 id/slug, index version, 출처 및 fixture/live 구분을 저장한다.
+- GIVEN 필수 값 누락/null, 정확한 mapping 실패, 중복 ID, 혼합 index version, 비정상 수치 WHEN 발견 THEN 결제 전 중단한다. 임의 점수나 fuzzy matching을 쓰지 않는다.
+- GIVEN AA 키 없음 WHEN 검증 THEN fixture 계약 테스트를 수행하고 실제 AA API 검증은 미완료 외부 게이트로 표시한다. `.env.example`에는 빈 키 변수만 추가한다.
 
-### Binding constraints
+### AEGIS-US-03 가격과 세 요인 선택
 
-- Use a project-issued ERC-20 token rather than repeatedly acquiring faucet USDC.
-- Target Base Sepolia x402 v2 `exact` with PBLC V2 ERC-3009. New purchases have no Permit2/EIP-2612 fallback; historical Permit2 evidence remains immutable and readable.
-- Place the internal Audit Evidence API between every agent/payment service and MongoDB; Seller Service and Payment Executor never access MongoDB directly.
-- Preserve provider/model portability through adapters.
-- Prove the complete path locally before AWS deployment.
+사용자로서 모델별 확정 선결제 금액과 정책 계산 근거를 확인한다.
 
-### Out of scope for MVP
+- GIVEN 요청 WHEN 후보 가격 산정 THEN estimatedInputTokens와 maxOutputTokens를 먼저 확정하고 산정 알고리즘·입력 hash·버전을 기록한다. `quoteAEGIS=(inputTokens*inputPrice+maxOutputTokens*outputPrice)/1e6`, markup=0, `amountUnits=ceil(quoteAEGIS*1e6)`를 십진 정밀 연산으로 계산한다.
+- GIVEN AEGIS 가격 WHEN 표시 THEN 1 AEGIS=1 USD는 명목 환산이며 담보·상환 가치가 아니다. 최대 출력 토큰 기준 사전 고정 결제액이며 사용량 사후 정산이 아니다.
+- GIVEN AA seconds WHEN 변환 THEN estimatedCompletionMs=seconds*1000이며 벤치마크 조건 참고 추정치로 표시한다. 실제 완료시간을 보장하지 않는다.
+- GIVEN 전체 후보 WHEN 비교 THEN 예산/필수 기능/최대 허용시간/판매자 허용 목록 hard filter를 먼저 적용하고 모든 탈락 이유를 보존한다. 기능 정보는 명시적 모델 설정 출처이며 AA 측정값이 아니다.
+- GIVEN 통과 후보 WHEN 점수 계산 THEN priceScore=min(amount)/amount*100, completionTimeScore=min(time)/time*100, performanceScore=index/max(index)*100 및 고정 비율 가중합을 적용한다.
+- GIVEN 동점 WHEN 선택 THEN 낮은 금액→짧은 시간→providerId→modelId의 결정적 순서를 사용한다. 신규 거래에 scoringPolicyVersion=`aa-three-factor-v1`을 저장한다.
+- GIVEN 0 금액/0 이하 시간/0 이하 성능/음수·NaN·Infinity 또는 통과 후보 없음 WHEN 평가 THEN 명시적 사유로 구매 중단한다. 0 단가 자체는 허용하되 총 amountUnits가 0이면 이 정책에서는 결제 불가다. 은밀한 기본 점수는 없다.
 
-- Production money, mainnet settlement, or a real token economy
-- Multi-user tenancy, organization administration, or public marketplace onboarding
-- Seller integrations beyond Gemini and Nemotron
-- Automatic refunds, automatic repurchase after failed delivery, or dispute arbitration
-- On-chain publication of semantic/LLM-only reputation judgments
-- A model-specific seller agent for every model
-- Production SLA, global scaling, or cross-chain operation
+### AEGIS-US-04 결제 결속과 중복 방지
 
-## 3. Actors and System Boundaries
+사용자로서 선택한 모델·금액만 최대 한 번 결제되기를 원한다.
 
-- **User:** owns a MetaMask wallet, states the request/budget/policy, and reviews results.
-- **Purchase request page:** `/request`; collects request, optional budget, and priority, then starts the buyer agent. It is not part of the audit dashboard.
-- **Buyer agent:** owns request analysis, quote comparison, seller selection, purchase approval, payment-execution request, delivery, and final result return.
-- **Seller agent:** represents one provider, advertises multiple models, returns signed/traceable quotes, and delivers one inference result after settlement.
-- **Payment Executor:** the renamed Commerce Gateway implementation used by the buyer agent. It validates policy/quote bindings, isolates the programmatic buyer key, signs x402 payloads, and is the only blockchain writer. It may remain a separate process/container.
-- **Audit Evidence API:** a MongoDB record/query module, not an agent. It joins request, quote, decision, payment, response, and audit evidence by `purchaseId` and enforces validation, event order, hash-chain integrity, and internal access control.
-- **Audit engine:** applies deterministic rules and optional LLM semantic analysis.
-- **Audit dashboard:** `/` and `/dashboard`; read-only balance, decisions, transactions, seller reputation, and alerts. It contains no purchase form or experiment runner.
-- **Admin:** deploys/registers contracts and agents, mints demo credits, and funds the programmatic buyer wallet.
+- GIVEN buyer의 선택 모델/금액/purchaseId WHEN 결제 실행 모듈 호출 THEN 저장된 결정과 같은 snapshot/policy/token budget을 확인하고 예산·수신자·토큰·중복을 검사한 뒤 격리된 키로 ERC-3009 승인에 서명한다. 키는 브라우저/LLM/로그에 노출하지 않는다.
+- GIVEN Gateway 402 WHEN 발급 THEN Gateway는 신뢰 가능한 동일 snapshot과 정책으로 금액을 재계산하며 클라이언트 금액을 신뢰하지 않는다. buyer는 402 금액·토큰·수신자·모델·purchaseId·snapshot/decision binding을 대조한다.
+- GIVEN 서명 WHEN 전달 THEN x402 v2 exact verify/settle은 Facilitator가 수행하고 결제 확인 이후에만 결과를 제공한다. Facilitator 자체 블록체인 처리는 유지한다.
+- GIVEN 재시도/경합/timeout WHEN 발생 THEN 한 purchaseId에서 최대 한 번 성공 결제한다. 동일 intent/nonce를 재사용하고 불명확 상태에서는 새 결제를 만들지 않는다.
+- GIVEN 결제 상태 WHEN 감사/표시 THEN 근거는 Facilitator 응답이며 독립 receipt/Transfer/AuthorizationUsed 검증 완료로 표현하지 않는다. 잔액 미조회는 실제 온체인 잔액으로 표현하지 않는다.
 
-## 4. Functional Requirements
+### AEGIS-US-05 토큰과 과거 증거
 
-### US-01 — Authenticate and bind the user's wallets
+- GIVEN 기존 PBLC V2 소스 WHEN 검사 THEN non-upgradeable 및 constant name/symbol이므로 rename 불가능하다는 근거를 기록한다. 신규 AEGIS 이름/심볼·6 decimals·ERC-3009 계약/fixture/설정/배포 계획을 준비한다.
+- GIVEN 실제 배포/자산 이동/테스트넷 결제 직전 THEN 사용 지갑·배포 방식·예상 주소·가스 추정·테스트 금액을 제시하고 사용자 승인까지 멈춘다.
+- GIVEN 기존 PBLC 또는 Permit2 거래 WHEN 조회 THEN 당시 토큰명·계약 주소·점수·평판·anchor·결제 증거를 그대로 표시한다. 읽기가 저장 데이터/이벤트를 변경하지 않는다.
+- GIVEN 새 코드 WHEN 통합 THEN 기존 history/dirty worktree를 보존한다. reset/rebase/amend/squash, 거래 삭제·덮어쓰기는 금지한다.
 
-As a user, I want to sign in with MetaMask so that the dashboard can show records belonging to my owner wallet and its bound buyer-agent wallet.
+### AEGIS-US-06 감사와 사용자 화면
 
-- **AC-01.1:** GIVEN a valid SIWE challenge WHEN the user signs it with MetaMask THEN the system creates an authenticated session bound to that wallet address.
-- **AC-01.2:** GIVEN an invalid, expired, wrong-domain, wrong-chain, or replayed SIWE message WHEN authentication is attempted THEN access is denied and the nonce cannot be reused.
-- **AC-01.3:** GIVEN an authenticated owner wallet WHEN the dashboard loads THEN it shows the bound programmatic wallet address and demo-token balance without exposing its private key.
+- GIVEN 신규 구매 WHEN 감사 THEN priority 타당성, 고정 가중치, AA 산식/amountUnits, 동일 snapshot+전체 후보 재계산, 402/Facilitator 대조, 예상/관측 시간 차이, 중복 방지/기록 일치를 검사한다.
+- GIVEN 감사 기록 WHEN 저장 THEN 필수 필드·순서·hash chain과 민감 원문 분리 암호화를 유지한다. Gateway/결제 실행 모듈은 MongoDB에 직접 접근하지 않는다.
+- GIVEN UI WHEN 신규 상세 조회 THEN 세 점수·최종합·priority·가중치·AA 출처·fixture/live·모의 실행시간을 표시한다. 과거 거래는 과거 정책 배지와 원래 증거를 표시한다.
+- GIVEN 신규 UI WHEN 실행 THEN SIWE/ERC-8004/Anchor/RPC 독립검증을 요구하지 않는다. 내부 API 보호와 키 격리는 유지한다.
 
-### US-02 — Submit one purchasable AI request
+## Interaction contract
 
-As a user, I want to submit a prompt with optional budget and priority so that the buyer agent can purchase one appropriate inference.
+`/request`: prompt, budget, optional priority, 실행 동의, 실행/동일 purchaseId 재개. 상태는 초기/검증 실패/분석 중/데이터 불충분 중단/필터 전체 탈락/결제 pending 또는 불명확/결제 성공 및 전달 실패/성공이다. 결제 후 전달 실패는 재결제 버튼을 제공하지 않는다.
 
-- **AC-02.1:** GIVEN an authenticated user WHEN a non-empty prompt is submitted THEN the system creates one unique `purchaseId` and one request timeline.
-- **AC-02.2:** GIVEN no explicit budget WHEN the request is submitted THEN the configured system limit applies.
-- **AC-02.3:** GIVEN an explicit user budget lower than a system limit WHEN policy is evaluated THEN the lower limit is enforced.
-- **AC-02.4:** GIVEN the priority preset balanced, quality, price, or speed WHEN candidates are scored THEN the documented preset weights are used and stored with the decision.
-- **AC-02.5:** GIVEN `/request` WHEN the user submits a request THEN the page collects request, optional PBLC budget, and one priority preset, requires explicit testnet-payment acknowledgement, and retains the pending `purchaseId` across same-origin tabs so a retry does not silently create another purchase.
-- **AC-02.6:** GIVEN `/experiments` WHEN it is opened THEN it redirects to `/request`; no existing purchase, payment intent, or evidence event is deleted or rewritten.
+`/dashboard`, `/`, `/purchases`, 상세, alerts: 읽기 중심. 구매 폼·실험 실행기 없음. 빈 목록, 로딩, 조회 실패/재조회, 과거 증거 일부 누락, 신규 mock 상세를 구분한다. `/experiments`는 `/request`로 무변경 redirect를 유지한다. 기본 화면 keyboard/label/responsive 회귀를 유지한다.
 
-### US-03 — Discover eligible models and obtain live quotes
+## 검증과 외부 게이트
 
-As a buyer agent, I want benchmark evidence and seller quotes so that candidate comparison is reproducible.
+필수 완료: AA pagination/snapshot/mapping/missing 계약, 수치/올림/분류/filter/점수/tie, 402 결속/중복/race, 과거 schema/평판/증거 읽기, 세 Gateway HTTP E2E, 개정 Phase 6 비정상 시나리오 E2E, 전체 tests/typecheck/lint/dashboard build, README/설계/구조도/project log/handoff 갱신.
 
-- **AC-03.1:** GIVEN a request WHEN discovery runs THEN only enabled Gemini and Nemotron seller integrations are purchasable in MVP.
-- **AC-03.2:** GIVEN benchmark data no older than 24 hours WHEN discovery runs THEN the cached snapshot may be used and its source timestamp is recorded.
-- **AC-03.3:** GIVEN missing required benchmark evidence WHEN no valid snapshot can be obtained THEN payment does not proceed and the user sees a recoverable failure.
-- **AC-03.4:** GIVEN eligible candidates WHEN quoting runs THEN up to the top three purchasable candidates receive quote requests.
-- **AC-03.5:** GIVEN a seller quote WHEN it is accepted as evidence THEN it includes provider/model/version, price, expected latency, input/output limits, availability, ERC-8004 identity, recipient, token, expiry, and optional counteroffer/reason.
-- **AC-03.6:** GIVEN one provider-level seller agent WHEN its preferred model cannot satisfy the request THEN it may make at most one counteroffer using another model from the same provider.
-
-### US-04 — Select and explain the winning offer
-
-As a user, I want the buyer's choice and reasoning to be visible so that I can judge whether it followed my intent.
-
-- **AC-04.1:** GIVEN candidate offers WHEN selection starts THEN hard filters reject candidates violating budget, availability, allowed-seller policy, or ERC-8004 identity requirements before scoring.
-- **AC-04.2:** GIVEN remaining candidates WHEN scored THEN the system applies exactly one stored preset:
-  - balanced: quality 40, price 25, speed 20, reputation 10, freshness 5
-  - quality: quality 60, price 10, speed 15, reputation 10, freshness 5
-  - price: price 50, quality 25, speed 10, reputation 10, freshness 5
-  - speed: speed 50, quality 25, price 10, reputation 10, freshness 5
-- **AC-04.3:** GIVEN the highest eligible score WHEN the buyer decides THEN it stores candidates, filters, weights, component scores, winner, rejected alternatives, benchmark snapshot ID, quote ID, and explanation.
-- **AC-04.4:** GIVEN an LLM-generated explanation that conflicts with deterministic evidence WHEN audited THEN deterministic rules remain authoritative and the discrepancy is flagged.
-
-### US-05 — Execute exactly one policy-compliant payment
-
-As a user, I want the buyer agent to pay autonomously within strict limits so that the demonstration is useful without allowing uncontrolled spending.
-
-- **AC-05.1:** GIVEN a selected unexpired quote WHEN payment is requested THEN the buyer agent asks the Payment Executor to verify `purchaseId`, amount, token, recipient, quote expiry, seller identity, user budget, transaction limit, and rolling daily limit before signing.
-- **AC-05.2:** GIVEN PBLC V2 is configured for payment WHEN payment is constructed THEN the Seller advertises x402 v2 `exact` with `extra.assetTransferMethod: eip3009`, and the Payment Executor signs an exact `TransferWithAuthorization` payload whose amount, recipient, token, validity window, and random `bytes32` nonce match the selected quote.
-- **AC-05.2a (완료된 전환 게이트):** GIVEN ERC-3009 had not yet passed the approved real-settlement gate WHEN the migration was being verified THEN Permit2/EIP-2612 stayed available without modifying historic evidence. This temporary migration condition ended after the approved ERC-3009 settlement succeeded.
-- **AC-05.2b:** GIVEN the approved ERC-3009 settlement has succeeded WHEN any new payment or reconciliation is requested THEN only ERC-3009 may execute, while a legacy Permit2 intent is returned for audit display but rejected before contacting a seller or signer.
-- **AC-05.3:** GIVEN any retry for a `purchaseId` that already has a successful settlement WHEN the Payment Executor receives it THEN no second payment is submitted and the existing result is returned or reported.
-- **AC-05.4:** GIVEN an amount above 1 demo token per transaction or a rolling total above 20 demo tokens per day WHEN payment is requested THEN the Gateway rejects it before signing.
-- **AC-05.5:** GIVEN a settled payment followed by service-delivery failure WHEN the workflow handles the failure THEN it creates an alert and does not automatically repurchase or refund.
-
-### US-06 — Deliver and prove the purchased response
-
-As a user, I want the actual model response connected to the payment so that payment and delivery can be audited together.
-
-- **AC-06.1:** GIVEN a confirmed settlement WHEN the chosen seller serves the inference THEN the result records provider, model version, latency, status, and response hash.
-- **AC-06.2:** GIVEN a raw prompt or response WHEN persisted THEN it is encrypted in the separate `sensitivePayloads` store; the general event log stores references and hashes only.
-- **AC-06.3:** GIVEN MVP retention policy B WHEN records are stored THEN the system does not automatically delete sensitive payloads.
-- **AC-06.4:** GIVEN preparation for public AWS deployment WHEN the release gate is evaluated THEN deployment is blocked until TTL or manual-deletion policy and demonstration-evidence preservation are explicitly reconsidered.
-
-### US-07 — Audit decision, payment, and delivery evidence
-
-As a user, I want rule-based and semantic audit results so that objective violations and uncertain concerns are distinguishable.
-
-- **AC-07.1:** GIVEN a completed or failed purchase WHEN audit runs THEN deterministic checks cover: request priority versus stored weights; hard-filter reasons versus request/budget/policy; whether a higher-scoring eligible candidate was unfairly rejected or bypassed; winner versus score ordering; generated explanation versus preset/winner/score; quote versus payment amount-token-recipient; duplicate settlement per `purchaseId`; seller ERC-8004 identity; and independent Base Sepolia `Transfer` evidence.
-- **AC-07.2:** GIVEN prompt, decision explanation, and structured evidence WHEN semantic audit runs THEN the LLM may flag request-versus-rationale concerns but cannot clear a deterministic violation.
-- **AC-07.3:** GIVEN findings WHEN severity is assigned THEN results use normal, caution, or risk; objective violations are risk and semantic uncertainty or missing context is caution unless supported by objective evidence.
-- **AC-07.4:** GIVEN an audit report WHEN displayed THEN each finding names the applicable rule, evidence reference, human-readable reason, and recommended inspection action.
-
-### US-08 — Preserve tamper-evident evidence
-
-As an auditor, I want every stage connected by identifiers and hashes so that missing or altered evidence can be detected.
-
-- **AC-08.1:** GIVEN any purchase transition WHEN it is stored THEN an append-only event records `purchaseId`, event type, timestamp, actor, previous-event hash, payload hash, and evidence references.
-- **AC-08.2:** GIVEN a pre-payment decision WHEN the Gateway authorizes it THEN the Gateway signs the decision/evidence hash before settlement.
-- **AC-08.3:** GIVEN objective ERC-8004 feedback WHEN published THEN success maps to 100, confirmed failure maps to 0, and the detailed off-chain evidence is referenced through `feedbackHash`.
-- **AC-08.4:** GIVEN semantic-only warnings WHEN reputation is updated THEN they remain off-chain and do not reduce the objective on-chain score.
-- **AC-08.5:** GIVEN Seller Service or Payment Executor needs to record/read evidence WHEN it accesses persistence THEN it uses authenticated Audit Evidence API endpoints and cannot connect directly to MongoDB.
-
-### US-09 — Inspect the system through a dashboard
-
-As a user, I want one place to inspect balances, transactions, choices, reputation, and warnings.
-
-- **AC-09.1:** GIVEN an authenticated user WHEN the overview loads THEN it shows owner/agent wallet addresses, token balance, recent purchases, and unresolved risk/caution counts.
-- **AC-09.2:** GIVEN a purchase WHEN its detail is opened THEN the user sees the request summary, candidate comparison, winning rationale, quote, status timeline, transaction link, response proof, and audit findings.
-- **AC-09.3:** GIVEN a seller identity WHEN its reputation view opens THEN the dashboard shows ERC-8004 registration and objective feedback with links to supporting purchase evidence.
-- **AC-09.4:** GIVEN a material state change WHEN the dashboard is open THEN the UI receives an SSE update or clearly indicates degraded/stale data and allows refresh.
-- **AC-09.5:** GIVEN MVP alerting WHEN a caution or risk is created THEN it appears in the dashboard; email, SMS, and push notifications are not required.
-- **AC-09.6:** GIVEN any audit-dashboard route WHEN it renders THEN it contains no request form, purchase-submit action, scenario runner, or experiment trigger.
-
-### US-10 — Bootstrap the demonstration environment
-
-As an admin, I want a repeatable setup so that the team can reproduce the graduation demonstration.
-
-- **AC-10.1:** GIVEN a fresh Base Sepolia setup WHEN deployment scripts run THEN they deploy or configure the 6-decimal project ERC-20 whose unit represents one USD-equivalent demo credit.
-- **AC-10.2:** GIVEN the admin wallet WHEN demo funding is performed THEN only the admin can mint credits and transfer them to the bound buyer-agent wallet; no public faucet is required.
-- **AC-10.2a:** GIVEN a buyer-agent wallet with project credits but no native ETH WHEN its first x402 Permit2 payment is authorized THEN an EIP-2612 permit lets the Facilitator sponsor the approval and settlement gas without a buyer-funded approval transaction.
-- **AC-10.2b:** GIVEN the ERC-3009 migration WHEN PBLC V2 is built THEN it is a separately deployed, non-upgrade proxy-free ERC-20 with `transferWithAuthorization`, `authorizationState`, random `bytes32` nonce replay protection, `validAfter`/`validBefore`, EIP-712 verification, and `AuthorizationUsed`.
-- **AC-10.2c:** GIVEN PBLC V2 has not been deployed WHEN the deployment step is reached THEN the operator reports the deployment account, buyer/seller addresses, predicted contract address if available, estimated gas/cost, mint amount, and `0.1 PBLC` test amount and waits for explicit user approval.
-- **AC-10.3:** GIVEN buyer and seller agents WHEN registration runs THEN each has an ERC-8004 identity and the application stores the resulting chain identifiers.
-- **AC-10.4:** GIVEN missing credentials or private keys WHEN local or AWS services start THEN they fail safely with actionable configuration errors and never print secret values.
-
-## 5. Interaction Surfaces
-
-| Surface | User stories | Responsibility | User outcome |
-|---|---|---|---|
-| Sign-in | US-01 | SIWE challenge and wallet binding | User enters only records associated with the signed wallet |
-| Purchase request (`/request`) | US-02–US-05 | Request, optional PBLC budget, priority, acknowledgement, buyer-agent start, and safe retry | User delegates one autonomous purchase outside the audit dashboard |
-| Audit overview (`/`, `/dashboard`) | US-01, US-09 | Read-only balance, payment, audit, and alert summary | User immediately sees account and evidence health without purchase or experiment controls |
-| Transaction list | US-09 | Filterable request/payment/audit summaries | User finds a prior decision quickly |
-| Transaction detail | US-03–US-09 | Evidence comparison and end-to-end timeline | User understands what was chosen, why, paid, delivered, and flagged |
-| Seller reputation | US-03, US-08, US-09 | ERC-8004 identities and objective feedback | User compares seller trust evidence |
-| Audit alerts | US-07, US-09 | Risk/caution queue and evidence links | User can inspect unresolved concerns |
-
-## 6. Key Flows
-
-### Main flow
-
-1. User signs in with MetaMask.
-2. User submits prompt, optional budget, and priority.
-3. Buyer parses constraints, loads a benchmark snapshot, and requests live seller quotes.
-4. Buyer hard-filters, scores, selects, and records the decision.
-5. Buyer agent asks its separately deployed Payment Executor to validate and submit one x402 exact payment.
-6. Selected seller returns one model inference.
-7. Audit engine cross-checks decision, quote, chain settlement, delivery, and evidence hashes.
-8. Dashboard receives status updates and exposes the complete trace.
-
-### Alternate and recovery flows
-
-- Missing/expired benchmark: refresh once; if evidence remains unavailable, stop before payment.
-- Expired or invalid quote: return to quoting without paying.
-- Insufficient balance or policy limit: stop before signing and show the exact limit.
-- Facilitator or chain unavailable: keep the purchase recoverable at payment-pending/failed without creating a duplicate settlement.
-- Payment settled but inference failed: retain settlement proof, create a risk alert, and require manual follow-up.
-- Seller model unavailable: accept at most one in-provider counteroffer, then re-score.
-- SSE disconnected: mark data as potentially stale and support manual refresh.
-- Tampered or missing evidence: show a risk finding and preserve the last verifiable hash-chain point.
-
-## 7. Applicable UI States
-
-- **Sign-in:** initial, wallet unavailable, signature pending, authenticated, rejected/expired challenge.
-- **Purchase request:** ready, acknowledgement required, request creation, discovery/quote/decision/payment in progress, completed, limit exceeded, and recoverable external failure with the created `purchaseId` retained.
-- **Audit overview:** loading, empty, populated, stale/degraded, and failed with refresh; it has no mutation control except authentication/session actions.
-- **Transaction list:** loading, empty, populated, stale/degraded, failed with retry.
-- **Transaction detail:** requested, discovered, quoted, decided, payment pending, settled, delivered, audited, and explicit failure states at each boundary.
-- **Seller reputation:** loading, registered with feedback, registered without feedback, identity mismatch, chain unavailable.
-- **Audit alerts:** empty/normal, caution, risk, acknowledged locally, stale/degraded.
-
-## 8. Data and Audit Constraints
-
-- The canonical workflow identity is `purchaseId`; transaction hash, quote ID, benchmark snapshot ID, event IDs, audit report ID, ERC-8004 agent ID, and feedback hash attach to it.
-- Existing successful Permit2 settlements, failed/incomplete purchases, payment intents, seller journals, encrypted payloads, and evidence heads are immutable migration inputs and must not be deleted, overwritten, or backfilled with fabricated ERC-3009 fields.
-- General structured evidence and sensitive raw payloads must be separable by access policy and storage encryption.
-- General purchase events are append-only and hash-linked.
-- Corrections are new events; existing audit evidence is never silently overwritten.
-- The initial MongoDB model must cover users, agents, providers, model catalog, benchmark snapshots, purchase events, audit reports, wallet policies, and separate sensitive payloads.
-- Timestamps are stored in UTC and displayed in the user's locale.
-
-## 9. Non-Functional Requirements
-
-### Security
-
-- **NFR-SEC-01:** Private keys and API credentials never enter source control, application logs, dashboard payloads, or chat-based setup.
-- **NFR-SEC-02:** Deployed secrets are retrieved from AWS Secrets Manager with least-privilege task roles.
-- **NFR-SEC-03:** Sensitive payload encryption uses an authenticated encryption scheme and stores key material separately from MongoDB.
-- **NFR-SEC-04:** Payment authorization is idempotent and rejects replay, mismatched quote bindings, expired quotes, and chain-ID mismatch.
-- **NFR-SEC-05:** Authentication cookies/tokens are secure, short-lived, and bound to verified SIWE sessions.
-- **NFR-SEC-06:** FastAPI never receives or stores the buyer private key; key use remains isolated in the separately deployed Payment Executor.
-
-### Reliability and integrity
-
-- **NFR-REL-01:** A process restart or retry cannot create a second successful payment for the same `purchaseId`.
-- **NFR-REL-02:** External timeout/failure states remain inspectable and retryable only at safe pre-payment boundaries.
-- **NFR-REL-03:** Audit hash-chain verification identifies the first missing or modified event.
-
-### Performance
-
-- **NFR-PERF-01:** Excluding external model, facilitator, and chain latency, dashboard/API operations should respond within 2 seconds at demo load.
-- **NFR-PERF-02:** Progress updates should appear within 2 seconds of the backend recording a new state under normal demo conditions.
-
-### Usability and accessibility
-
-- **NFR-UX-01:** Every risk/caution message explains what happened, which evidence supports it, and what the user can inspect next.
-- **NFR-UX-02:** Primary dashboard paths are keyboard accessible and meet WCAG 2.1 AA color-contrast expectations.
-- **NFR-UX-03:** The dashboard remains usable at desktop and tablet widths; mobile optimization beyond readable inspection is not required.
-
-### Observability
-
-- **NFR-OBS-01:** Services emit structured logs with `purchaseId` and correlation IDs but exclude prompt/response bodies and secrets.
-- **NFR-OBS-02:** AWS deployment exposes service health, payment failures, audit failures, and unhandled exceptions through CloudWatch.
-
-## 10. External Dependencies and Proof Obligations
-
-- Official x402 v2 and Coinbase documentation plus live `/supported` evidence must be captured for Base Sepolia `exact`; custom PBLC V2 EIP-3009 compatibility remains unproven until `/verify`, `/settle`, `AuthorizationUsed`, and exact `Transfer` are observed in an explicitly approved real transaction.
-- The former PBLC/Permit2 transaction remains historical evidence only. ERC-3009 failure records the Facilitator response and cause without enabling a Permit2 fallback.
-- Gemini and Nemotron integrations must be proven with actual provider responses before final demonstration; mocks are acceptable for local development tests only.
-- ERC-8004 registration and feedback must be confirmed with transaction hashes and readable on-chain state.
-- MongoDB persistence claims require a stored record query, not only a connection message.
-- AWS deployment happens only after the local end-to-end path passes.
-
-## 11. Requirements Approval Gate
-
-- **Decision:** Approve and Continue
-- **Approved on:** 2026-09-02; revision explicitly directed by the user on 2026-09-04.
-- This revision supersedes conflicting Permit2-only, Commerce-Gateway-as-owner, `/experiments`, and Evidence-Repository-as-component wording while preserving historic evidence.
-- Next external checkpoints: real Gemini/Nemotron provider proof, AWS deployment approval, and public retention-policy decision.
+외부 게이트를 로컬 완료와 분리한다: AA 실제 계약(키 없으면 미완료), 실제 Provider(이번 범위 제외), AEGIS 배포·이동·실결제(승인 대기), 공개 다중 사용자 인증·접근 제어/원문 보존 정책(AWS 전 결정), AWS 실제 배포(항상 정지).

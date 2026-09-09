@@ -19,7 +19,10 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
           <Link href="/">감사 대시보드로 돌아가기 →</Link>
         </header>
         {children}
-        <footer>구매 요청 전용 화면 · 감사 대시보드와 실행 책임을 분리했습니다.</footer>
+        <footer>
+          구매 요청 전용 화면 · 감사 대시보드와 실행 책임을 분리했습니다 · Mock Provider ·
+          Mock Facilitator
+        </footer>
       </>
     );
   }
@@ -28,7 +31,10 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
     <>
       <Nav />
       {children}
-      <footer>Agent Audit · Base Sepolia test environment · 민감 원문과 개인키는 표시하지 않습니다.</footer>
+      <footer>
+        Agent Audit · 로컬 단일 사용자 데모 · 신규 거래는 Mock Provider·Facilitator 기록이며
+        민감 원문과 개인키는 표시하지 않습니다.
+      </footer>
     </>
   );
 }

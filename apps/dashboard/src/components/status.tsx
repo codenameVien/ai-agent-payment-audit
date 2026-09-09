@@ -1,5 +1,11 @@
 import { credits } from "@/lib/api";
 
+/**
+ * `aegis` purchases settle against a Mock Facilitator answer and never carry an EVM
+ * transaction hash, so they must not reuse the historical on-chain wording.
+ */
+export type PurchasePolicy = "legacy" | "aegis";
+
 const purchaseStatusLabels: Record<string, string> = {
   REQUESTED: "요청 접수",
   QUOTED: "견적 수집",
@@ -50,12 +56,32 @@ export function PaymentAmount({
   amountUnits,
   transactionHash,
   status,
+  policy = "legacy",
+  paymentStatus,
 }: {
   amountUnits: number | null;
   transactionHash: string | null;
   status: string;
+  policy?: PurchasePolicy;
+  paymentStatus?: string;
 }) {
   if (amountUnits === null) return <span className="muted">—</span>;
+  if (policy === "aegis") {
+    const settled = (paymentStatus ?? status) === "PAYMENT_SETTLED";
+    return (
+      <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
+        <strong>
+          {settled ? "" : "예정 "}
+          {credits(amountUnits)} AEGIS
+        </strong>
+        <small>
+          {settled
+            ? "Facilitator 응답 기준 정산 · 모의 결제"
+            : "정산 미확정 · 모의 결제"}
+        </small>
+      </span>
+    );
+  }
   const confirmed =
     transactionHash !== null &&
     ["PAYMENT_SETTLED", "DELIVERY_STAGED", "DELIVERED", "AUDITED", "REPUTATION_RECORDED"].includes(

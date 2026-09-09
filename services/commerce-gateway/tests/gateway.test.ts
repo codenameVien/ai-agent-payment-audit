@@ -562,3 +562,21 @@ test("crash after settlement resumes staged provider delivery without a second p
   assert.equal(evidence.calls.filter((item) => item === "stage-delivery").length, 1);
   assert.equal(evidence.calls.filter((item) => item === "delivery").length, 2);
 });
+
+test("without the terminal Evidence API no terminal outcome is ever invented", async () => {
+  const { receipt } = fixtures();
+  receipt.transfers[0]!.amount = 200_000n;
+  const { gateway, evidence } = harness({ receipt });
+
+  const result = await gateway.execute("purchase-1");
+
+  assert.equal(result.state, "RECONCILIATION_REQUIRED");
+  assert.equal(result.actual_transfer, undefined);
+  assert.equal(result.terminal_proof_ref, undefined);
+  assert.ok(!evidence.calls.includes("settle"));
+  assert.ok(!evidence.calls.some((item) => item.startsWith("check:")));
+  assert.match(
+    evidence.calls.at(-1) ?? "",
+    /^reconciliation:independent receipt lacks one exact ERC-20 Transfer$/,
+  );
+});

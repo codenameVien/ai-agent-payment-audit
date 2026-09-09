@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://pbl.local/schemas/domains/ai_inference/aa-decision.schema.json",
+  "title": "aa-three-factor-v1 purchase decision",
+  "description": "The fixed decision a 402 challenge, a signature and an audit are all checked against. Scores are decimal text; ranking is exact rational comparison.",
+  "type": "object",
+  "required": [
+    "scoringPolicyVersion", "purchaseId", "snapshotId", "snapshotHash",
+    "catalogVersion", "priority", "weights", "tokens", "candidates", "rejected",
+    "eligible", "scoreReferences", "winner", "amountUnits", "token",
+    "termsBindingHash", "explanation"
+  ],
+  "properties": {
+    "scoringPolicyVersion": { "type": "string", "const": "aa-three-factor-v1" },
+    "purchaseId": { "type": "string", "minLength": 1 },
+    "snapshotId": { "type": "string", "pattern": "^aaSnapshot:[0-9a-f]{32}$" },
+    "snapshotHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "termsBindingHash": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+    "catalogVersion": { "type": "string", "minLength": 1 },
+    "amountUnits": { "type": "integer", "minimum": 1 },
+    "explanation": { "type": "string", "minLength": 1 },
+    "priority": {
+      "type": "object",
+      "required": [
+        "effectivePriority", "originalPriority", "reason", "matchedKeywords",
+        "matchedPriorities", "classificationMethod", "weights"
+      ],
+      "properties": {
+        "effectivePriority": {
+          "type": "string",
+          "enum": ["default", "price", "speed", "intelligence"]
+        },
+        "originalPriority": {
+          "type": ["string", "null"],
+          "enum": ["default", "price", "speed", "intelligence", null]
+        },
+        "reason": {
+          "type": "string",
+          "enum": [
+            "explicit_priority",
+            "keyword_match",
+            "no_keyword_match",
+            "conflicting_keyword_match"
+          ]
+        },
+        "classificationMethod": { "type": "string", "const": "keyword-single-match-v1" },
+        "matchedKeywords": { "type": "array", "items": { "type": "string" } },
+        "matchedPriorities": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "weights": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["price", "completionTime", "intelligence"],
+      "properties": {
+        "price": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "completionTime": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "intelligence": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "tokens": {
+      "type": "object",
+      "required": [
+        "estimatedInputTokens", "maxOutputTokens", "estimationMethod",
+        "inputByteLength", "isEstimate"
+      ],
+      "properties": {
+        "estimatedInputTokens": { "type": "integer", "minimum": 1 },
+        "maxOutputTokens": { "type": "integer", "minimum": 1 },
+        "inputByteLength": { "type": "integer", "minimum": 1 },
+        "estimationMethod": { "type": "string", "const": "utf8-bytes-div4-v1" },
+        "isEstimate": { "type": "boolean", "const": true }
+      }
+    },
+    "candidates": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/candidate" }
+    },
+    "rejected": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["candidateKey", "providerId", "providerModelId", "modelVersion", "reasons"],
+        "properties": {
+          "reasons": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "enum": [
+                "over_budget",
+                "missing_capability",
+                "completion_time_limit",
+                "provider_not_allowed"
+              ]
+            }
+          }
+        }
+      }
+    },
+    "eligible": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/scored" }
+    },
+    "scoreReferences": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["minAmountUnits", "minEstimatedCompletionMs", "maxIntelligenceIndex"],
+      "properties": {
+        "minAmountUnits": { "type": "integer", "minimum": 1 },
+        "minEstimatedCompletionMs": { "type": "string" },
+        "maxIntelligenceIndex": { "type": "string" }
+      }
+    },
+    "winner": { "$ref": "#/$defs/scored" },
+    "token": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "symbol", "decimals", "address", "chainId", "status"],
+      "properties": {
+        "name": { "type": "string", "const": "AEGIS" },
+        "symbol": { "type": "string", "const": "AEGIS" },
+        "decimals": { "type": "integer", "const": 6 },
+        "address": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+        "chainId": { "type": "integer", "minimum": 1 },
+        "status": { "type": "string", "enum": ["prepared", "deployed"] }
+      }
+    }
+  },
+  "$defs": {
+    "candidate": {
+      "type": "object",
+      "required": [
+        "candidateKey", "providerId", "providerModelId", "modelVersion",
+        "amountUnits", "estimatedCompletionMs", "capabilities",
+        "capabilitiesSource", "mappingProvenance", "recipient", "source"
+      ],
+      "properties": {
+        "amountUnits": { "type": "integer", "minimum": 0 },
+        "capabilitiesSource": { "type": "string", "const": "catalog" },
+        "mappingProvenance": { "type": "string", "enum": ["fixture", "configured"] },
+        "recipient": { "type": "string", "pattern": "^0x[0-9a-f]{40}$" },
+        "source": {
+          "type": "object",
+          "required": [
+            "aaModelId", "inputPricePerMillion", "outputPricePerMillion",
+            "medianEndToEndSeconds", "intelligenceIndex"
+          ]
+        }
+      }
+    },
+    "scored": {
+      "type": "object",
+      "required": [
+        "candidateKey", "providerId", "providerModelId", "modelVersion",
+        "amountUnits", "estimatedCompletionMs", "intelligenceIndex", "rank", "scores"
+      ],
+      "properties": {
+        "rank": { "type": "integer", "minimum": 1 },
+        "scores": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["price", "completionTime", "intelligence", "total"],
+          "properties": {
+            "price": { "type": "string" },
+            "completionTime": { "type": "string" },
+            "intelligence": { "type": "string" },
+            "total": { "type": "string" }
+          }
+        }
+      }
+    }
+  }
+}

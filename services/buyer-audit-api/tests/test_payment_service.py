@@ -7,6 +7,7 @@ import pytest
 
 from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.audit import (
+    AuditAuthority,
     AuditFinding,
     AuditService,
     AuditSeverity,
@@ -450,6 +451,9 @@ async def test_authorize_reconcile_and_settle_is_exactly_once(clock) -> None:
         EventType.PAYMENT_RECONCILIATION_REQUIRED,
         EventType.PAYMENT_SETTLED,
     ]
+    assert events[-1].payload["terminalOutcomeKey"] == "terminal:purchase-payment"
+    assert settled[0].terminal_outcome_key == "terminal:purchase-payment"
+    assert settled[0].reconciliation_attempt_count == 0
 
 
 @pytest.mark.asyncio
@@ -754,7 +758,7 @@ async def test_semantic_advisor_can_only_add_non_authoritative_warning(clock) ->
                     "invalid",
                     "semantic analysis cannot assert normal authority",
                     (),
-                    authority="semantic",
+                    authority=AuditAuthority.SEMANTIC_ADVISORY,
                 ),
             )
 
@@ -768,3 +772,432 @@ async def test_semantic_advisor_can_only_add_non_authoritative_warning(clock) ->
         event.type != EventType.AUDITED
         for event in await repository.list_events("purchase-payment")
     )
+
+
+# --------------------------------------------------------------------------------------
+# Post-payment tail ordering: `REPUTATION_DECIDED`, conflicts and the payment view
+# --------------------------------------------------------------------------------------
+
+
+async def settled_purchase(clock) -> tuple[InMemoryEvidenceRepository, PaymentService]:
+    """A settled, delivered, audited purchase - the shape a finalize starts from."""
+    repository = InMemoryEvidenceRepository()
+    await seed_payment_ready(repository, clock)
+    await configure_policy(repository, clock)
+    payment = PaymentService(repository=repository, clock=clock)
+    await payment.claim("purchase-payment")
+    await payment.authorize(
+        purchase_id="purchase-payment",
+        authorization_hash="0xauthorization",
+        signature="0xsecret-signature",
+    )
+    await payment.require_reconciliation(
+        purchase_id="purchase-payment",
+        reason="submitted; receipt pending",
+        transaction_hash="0x" + "ab" * 32,
+    )
+    await payment.settle(
+        purchase_id="purchase-payment",
+        transaction_hash="0x" + "ab" * 32,
+        block_number=42,
+        transfer_log_index=3,
+        receipt_status=1,
+        token=TOKEN,
+        from_address=BUYER,
+        to_address=SELLER,
+        amount_units=100_000,
+    )
+    await repository.append_event(
+        purchase_id="purchase-payment",
+        event_type=EventType.DELIVERED,
+        occurred_at=clock.now(),
+        actor={"id": "seller-agent-1", "type": "agent"},
+        payload={
+            "sellerAgentId": "seller-agent-1",
+            "providerId": "gemini",
+            "modelId": "model-a",
+            "modelVersion": "v1",
+            "responseHash": "sha256:response",
+            "responseId": "response-1",
+        },
+    )
+    await AuditService(repository=repository, clock=clock).audit("purchase-payment")
+    return repository, payment
+
+
+IDENTITY_HASH = "sha256:" + "aa" * 32
+OTHER_IDENTITY_HASH = "sha256:" + "bb" * 32
+FINGERPRINT = "sha256:" + "cc" * 32
+
+
+def decided_reputation_payload(
+    *, identity_hash: str = IDENTITY_HASH, fingerprint: str = FINGERPRINT
+) -> dict[str, object]:
+    return {"publishIdentityHash": identity_hash, "payloadFingerprint": fingerprint}
+
+
+def recorded_reputation_payload(
+    *, identity_hash: str = IDENTITY_HASH
+) -> dict[str, object]:
+    return {"publishIdentityHash": identity_hash, "objectiveValue": 100}
+
+
+def conflict_reputation_payload(
+    *,
+    identity_hash: str = IDENTITY_HASH,
+    existing_fingerprint: str = FINGERPRINT,
+    requested_fingerprint: str = "sha256:" + "dd" * 32,
+    reason_code: str = "OUTBOX_TRANSITION_CONFLICT",
+) -> dict[str, object]:
+    return {
+        "conflictKey": "sha256:" + "ee" * 32,
+        "existingFingerprint": existing_fingerprint,
+        "publishIdentityHash": identity_hash,
+        "reasonCode": reason_code,
+        "requestedFingerprint": requested_fingerprint,
+    }
+
+
+async def append_reputation(
+    repository: InMemoryEvidenceRepository,
+    clock,
+    event_type: EventType,
+    *,
+    payload: dict[str, object] | None = None,
+) -> None:
+    defaults = {
+        EventType.REPUTATION_DECIDED: decided_reputation_payload,
+        EventType.REPUTATION_RECORDED: recorded_reputation_payload,
+        EventType.REPUTATION_PUBLICATION_CONFLICT: conflict_reputation_payload,
+    }
+    if payload is None:
+        factory = defaults.get(event_type)
+        payload = {} if factory is None else factory()
+    await repository.append_event(
+        purchase_id="purchase-payment",
+        event_type=event_type,
+        occurred_at=clock.now(),
+        actor={"id": "terminal-audit-coordinator", "type": "service"},
+        payload=payload,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_payment_view_survives_a_decision_and_a_publication(clock) -> None:
+    """Amended AC: view and existing-intent claim work at each post-payment stage.
+
+    (a) right after the finalize appends `REPUTATION_DECIDED`, (b) after the confirmed
+    `REPUTATION_RECORDED`, and neither adds a claim, a reservation, spend or an event.
+    """
+    repository, payment = await settled_purchase(clock)
+    baseline = await payment.load_payment_view("purchase-payment")
+    before_events = len(await repository.list_events("purchase-payment"))
+    policy_before = await repository.get_latest_wallet_policy(BUYER)
+    assert policy_before is not None
+
+    # (a) finalize appended the decision.
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    decided_view = await payment.load_payment_view("purchase-payment")
+    assert decided_view.purchase_id == baseline.purchase_id
+    assert decided_view.quote.amount_units == baseline.quote.amount_units
+    assert (await payment.claim("purchase-payment")).state is PaymentIntentState.SETTLED
+
+    # (b) the confirmed publication is recorded.
+    await append_reputation(repository, clock, EventType.REPUTATION_RECORDED)
+    view = await payment.load_payment_view("purchase-payment")
+    assert view.purchase_id == "purchase-payment"
+    resumed = await payment.claim("purchase-payment")
+    assert resumed.state is PaymentIntentState.SETTLED
+    assert resumed.transaction_hash == "0x" + "ab" * 32
+
+    # Reading never wrote: only the two reputation events were appended, and the wallet
+    # policy counters are untouched.
+    events = await repository.list_events("purchase-payment")
+    assert len(events) == before_events + 2
+    assert [event.type for event in events].count(EventType.PAYMENT_INTENT_CLAIMED) == 1
+    policy_after = await repository.get_latest_wallet_policy(BUYER)
+    assert policy_after is not None
+    assert policy_after.spent_units == policy_before.spent_units
+    assert policy_after.reserved_units == policy_before.reserved_units
+
+
+@pytest.mark.asyncio
+async def test_the_payment_view_survives_one_and_many_conflicts(clock) -> None:
+    """A publication conflict is an append-only finding, so it may repeat."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        repository,
+        clock,
+        EventType.REPUTATION_PUBLICATION_CONFLICT,
+        payload=conflict_reputation_payload(),
+    )
+
+    assert (await payment.load_payment_view("purchase-payment")) is not None
+    assert (await payment.claim("purchase-payment")).state is PaymentIntentState.SETTLED
+
+    for index in range(3):
+        await append_reputation(
+            repository,
+            clock,
+            EventType.REPUTATION_PUBLICATION_CONFLICT,
+            payload=conflict_reputation_payload(
+                requested_fingerprint="sha256:" + f"{index:02x}" * 32,
+                reason_code=f"CONFLICT_{index}",
+            ),
+        )
+
+    assert (await payment.load_payment_view("purchase-payment")) is not None
+    assert (await payment.claim("purchase-payment")).state is PaymentIntentState.SETTLED
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_before_any_decision_fails_closed(clock) -> None:
+    """There is nothing to conflict with before a decision exists."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(
+        repository,
+        clock,
+        EventType.REPUTATION_PUBLICATION_CONFLICT,
+        payload=conflict_reputation_payload(),
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_decision_before_the_audit_fails_closed(clock) -> None:
+    """`REPUTATION_DECIDED` is only meaningful after a persisted terminal audit."""
+    repository = InMemoryEvidenceRepository()
+    await seed_payment_ready(repository, clock)
+    await configure_policy(repository, clock)
+    payment = PaymentService(repository=repository, clock=clock)
+    await payment.claim("purchase-payment")
+    await payment.authorize(
+        purchase_id="purchase-payment",
+        authorization_hash="0xauthorization",
+        signature="0xsecret-signature",
+    )
+    await payment.require_reconciliation(
+        purchase_id="purchase-payment",
+        reason="submitted; receipt pending",
+        transaction_hash="0x" + "ab" * 32,
+    )
+    await payment.settle(
+        purchase_id="purchase-payment",
+        transaction_hash="0x" + "ab" * 32,
+        block_number=42,
+        transfer_log_index=3,
+        receipt_status=1,
+        token=TOKEN,
+        from_address=BUYER,
+        to_address=SELLER,
+        amount_units=100_000,
+    )
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_reputation_event_before_the_payment_terminal_fails_closed(clock) -> None:
+    """Reputation evidence can never precede the payment outcome it describes."""
+    for event_type in (
+        EventType.REPUTATION_DECIDED,
+        EventType.REPUTATION_RECORDED,
+        EventType.REPUTATION_PUBLICATION_CONFLICT,
+    ):
+        repository = InMemoryEvidenceRepository()
+        await seed_payment_ready(repository, clock)
+        await configure_policy(repository, clock)
+        payment = PaymentService(repository=repository, clock=clock)
+        await payment.claim("purchase-payment")
+        await append_reputation(repository, clock, event_type)
+
+        with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+            await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_recorded_publication_must_follow_its_own_decision(clock) -> None:
+    """When both exist the decision comes first; legacy history has no decision at all."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_RECORDED)
+
+    # A Phase 5 chain that only ever had `REPUTATION_RECORDED` still loads.
+    assert (await payment.load_payment_view("purchase-payment")) is not None
+
+    # Appending the decision afterwards is the illegal ordering, and it fails closed.
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_second_decision_fails_closed(clock) -> None:
+    """The decision is a per-purchase singleton in the chain as well as in the index."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+# --------------------------------------------------------------------------------------
+# R2-H1: the tail is bound to the decision's publish identity, not just to event types
+# --------------------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_a_publication_of_another_identity_is_not_this_purchases_history(
+    clock,
+) -> None:
+    """Reviewer probe: decision identity A followed by recorded identity B was accepted."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        repository,
+        clock,
+        EventType.REPUTATION_RECORDED,
+        payload=recorded_reputation_payload(identity_hash=OTHER_IDENTITY_HASH),
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_of_another_identity_is_not_this_purchases_history(
+    clock,
+) -> None:
+    """Reviewer probe: decision identity A followed by conflict identity B was accepted."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        repository,
+        clock,
+        EventType.REPUTATION_PUBLICATION_CONFLICT,
+        payload=conflict_reputation_payload(identity_hash=OTHER_IDENTITY_HASH),
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_a_conflict_must_restate_the_decisions_fingerprint(clock) -> None:
+    """The conflict has to name the immutable payload it conflicts with."""
+    repository, payment = await settled_purchase(clock)
+    await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        repository,
+        clock,
+        EventType.REPUTATION_PUBLICATION_CONFLICT,
+        payload=conflict_reputation_payload(
+            existing_fingerprint="sha256:" + "99" * 32
+        ),
+    )
+
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_missing_identity_or_fingerprint_values_fail_closed(clock) -> None:
+    """An absent binding is not a weaker binding; it fails closed."""
+    decisions: tuple[dict[str, object], ...] = (
+        {"payloadFingerprint": FINGERPRINT},
+        {"publishIdentityHash": IDENTITY_HASH},
+        {"publishIdentityHash": "   ", "payloadFingerprint": FINGERPRINT},
+    )
+    for payload in decisions:
+        repository, payment = await settled_purchase(clock)
+        await append_reputation(
+            repository, clock, EventType.REPUTATION_DECIDED, payload=payload
+        )
+        with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+            await payment.load_payment_view("purchase-payment")
+
+    followers: tuple[tuple[EventType, dict[str, object]], ...] = (
+        (EventType.REPUTATION_RECORDED, {"objectiveValue": 100}),
+        (
+            EventType.REPUTATION_PUBLICATION_CONFLICT,
+            {"publishIdentityHash": IDENTITY_HASH, "reasonCode": "X"},
+        ),
+    )
+    for event_type, payload in followers:
+        repository, payment = await settled_purchase(clock)
+        await append_reputation(repository, clock, EventType.REPUTATION_DECIDED)
+        await append_reputation(repository, clock, event_type, payload=payload)
+        with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+            await payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_the_conflict_and_publication_branches_are_exclusive(clock) -> None:
+    """A terminal conflict chain never becomes a publication, and never the reverse."""
+    conflicted, conflicted_payment = await settled_purchase(clock)
+    await append_reputation(conflicted, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        conflicted, clock, EventType.REPUTATION_PUBLICATION_CONFLICT
+    )
+    assert (await conflicted_payment.load_payment_view("purchase-payment")) is not None
+    await append_reputation(conflicted, clock, EventType.REPUTATION_RECORDED)
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await conflicted_payment.load_payment_view("purchase-payment")
+
+    published, published_payment = await settled_purchase(clock)
+    await append_reputation(published, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(published, clock, EventType.REPUTATION_RECORDED)
+    assert (await published_payment.load_payment_view("purchase-payment")) is not None
+    await append_reputation(
+        published, clock, EventType.REPUTATION_PUBLICATION_CONFLICT
+    )
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await published_payment.load_payment_view("purchase-payment")
+
+
+@pytest.mark.asyncio
+async def test_the_legacy_branch_is_isolated_from_identity_binding(clock) -> None:
+    """A Phase 5 chain has no decision to bind to, so it is read exactly as written.
+
+    This is the explicit legacy branch: `REPUTATION_RECORDED` with **no**
+    `REPUTATION_DECIDED` anywhere in the tail keeps loading whatever its payload says,
+    including a payload with no publish identity at all. It is never backfilled, and the
+    isolation does not leak into a chain that does have a decision.
+    """
+    legacy, legacy_payment = await settled_purchase(clock)
+    await append_reputation(
+        legacy,
+        clock,
+        EventType.REPUTATION_RECORDED,
+        payload={
+            "chainId": 84532,
+            "erc8004AgentId": "1",
+            "feedbackHash": "0x" + "ee" * 32,
+            "objectiveValue": 100,
+            "registryAddress": "0x8004b663056a597dffe9eccc1965a193b7388713",
+            "transactionHash": "0x" + "cd" * 32,
+        },
+    )
+
+    view = await legacy_payment.load_payment_view("purchase-payment")
+    assert view.purchase_id == "purchase-payment"
+    assert (
+        await legacy_payment.claim("purchase-payment")
+    ).state is PaymentIntentState.SETTLED
+
+    # The same payload after a decision is a mismatch, so the isolation is not a loophole.
+    bound, bound_payment = await settled_purchase(clock)
+    await append_reputation(bound, clock, EventType.REPUTATION_DECIDED)
+    await append_reputation(
+        bound,
+        clock,
+        EventType.REPUTATION_RECORDED,
+        payload={"objectiveValue": 100},
+    )
+    with pytest.raises(PaymentEvidenceError, match="lifecycle is malformed"):
+        await bound_payment.load_payment_view("purchase-payment")

@@ -4,6 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { api, credits, short } from "@/lib/api";
+import { AEGIS_PRIORITY_LABELS, isAegisRequest } from "@/lib/aegis";
 import type { AuditFinding, PurchaseSummary, WalletView } from "@/lib/types";
 import {
   Empty,
@@ -12,19 +13,34 @@ import {
   SeverityBadge,
 } from "./status";
 
-const priorityLabel: Record<string, string> = {
+const legacyPriorityLabel: Record<string, string> = {
   balanced: "균형 우선",
   quality: "품질 우선",
   price: "가격 우선",
   speed: "속도 우선",
 };
 
+const balanceStatusLabel: Record<string, string> = {
+  base_sepolia_verified: "온체인 잔액 조회 완료",
+  rpc_not_configured: "잔액 조회 안 함 · RPC 미구성",
+  rpc_unavailable: "잔액 조회 실패 · RPC 응답 없음",
+};
+
 function requestLabel(item: PurchaseSummary): string {
+  if (isAegisRequest(item.request_summary)) {
+    const effective = item.request_summary.effective_priority;
+    const original = item.request_summary.original_priority;
+    const label =
+      typeof effective === "string"
+        ? AEGIS_PRIORITY_LABELS[effective] ?? effective
+        : "우선순위 미기록";
+    return `AI 모델 선택 · ${label}${original === null ? " (자동 분류)" : ""}`;
+  }
   const priority = item.request_summary.priority;
   const capabilities = item.request_summary.required_capabilities;
   const suffix =
     typeof priority === "string"
-      ? priorityLabel[priority] ?? priority
+      ? legacyPriorityLabel[priority] ?? priority
       : "정책 확인";
   if (Array.isArray(capabilities) && capabilities.length > 0) {
     return `${capabilities.slice(0, 2).join(" · ")} · ${suffix}`;
@@ -65,7 +81,8 @@ export function Overview() {
     return (
       <main>
         <Empty>
-          로그인이 필요합니다. <Link href="/login">MetaMask로 로그인</Link>
+          로컬 감사 API에 접근하지 못했습니다(401). API 서버 실행과 로컬 소유자 설정을
+          확인해 주세요. 이 화면은 공개 다중 사용자 인증을 구현하지 않습니다.
         </Empty>
       </main>
     );
@@ -73,13 +90,14 @@ export function Overview() {
 
   const risk = alerts.filter((item) => item.severity === "RISK").length;
   const caution = alerts.filter((item) => item.severity === "CAUTION").length;
-  const settled = purchases.filter((item) => item.transaction_hash !== null);
+  const settled = purchases.filter((item) => item.payment_status === "PAYMENT_SETTLED");
+  const aegisSettled = settled.filter((item) => isAegisRequest(item.request_summary));
   const audited = purchases.filter((item) => item.audit_severity !== null);
-  const totalPaid = settled.reduce(
-    (sum, item) => sum + (item.amount_units ?? 0),
-    0,
-  );
   const chainReady = wallet?.balance_status === "base_sepolia_verified";
+  const balanceLabel =
+    wallet === null
+      ? "조회 중"
+      : balanceStatusLabel[wallet.balance_status] ?? wallet.balance_status;
 
   return (
     <main className="auditMain">
@@ -88,15 +106,16 @@ export function Overview() {
           <p className="eyebrow">AUDIT OVERVIEW</p>
           <h1>AI 에이전트 결제 감사</h1>
           <p>
-            현재 로그인 계정의 판단 증거, PBLC 결제, 온체인 결과와 경고를
-            읽기 전용으로 확인합니다.
+            로컬 소유자 계정의 모델 선택 증거, 고정 선결제, 감사 경고를 읽기 전용으로
+            확인합니다. 신규 거래는 aa-three-factor-v1 정책과 Mock Provider·Facilitator
+            기록이며, 과거 PBLC 거래는 그때의 정책과 증거로 그대로 남습니다.
           </p>
         </div>
         <div className="scopePill">
           <i className={chainReady ? "ok" : "warn"} />
           <span>
-            <strong>{chainReady ? "BASE SEPOLIA LIVE" : "RPC 확인 필요"}</strong>
-            <small>계정 범위 데이터 · 구매 실행 없음</small>
+            <strong>{chainReady ? "잔액 조회됨" : "잔액 미조회"}</strong>
+            <small>{balanceLabel} · 이 화면에서는 구매를 실행하지 않습니다</small>
           </span>
         </div>
       </section>
@@ -110,20 +129,21 @@ export function Overview() {
 
       <section className="auditMetrics" aria-label="감사 요약">
         <article>
-          <span>구매 에이전트 PBLC</span>
+          <span>구매 에이전트 토큰 잔액</span>
           <strong>
             {wallet?.token_balance_units == null
               ? "—"
               : credits(wallet.token_balance_units)}
           </strong>
-          <small>
-            {chainReady ? "온체인 잔액" : "RPC 연결 후 확인"} · PBLC
-          </small>
+          <small>{balanceLabel}</small>
         </article>
         <article>
-          <span>검증된 결제</span>
+          <span>정산 완료 거래</span>
           <strong>{settled.length}</strong>
-          <small>합계 {credits(totalPaid)} PBLC</small>
+          <small>
+            AEGIS 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
+            {settled.length - aegisSettled.length}건
+          </small>
         </article>
         <article>
           <span>감사 완료</span>
@@ -165,11 +185,13 @@ export function Overview() {
                       <th>처리 상태</th>
                       <th>결제 금액</th>
                       <th>감사 결과</th>
-                      <th>온체인</th>
+                      <th>정산 기준</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {purchases.slice(0, 6).map((item) => (
+                    {purchases.slice(0, 6).map((item) => {
+                      const aegis = isAegisRequest(item.request_summary);
+                      return (
                       <tr key={item.purchase_id}>
                         <td>
                           <Link href={`/purchases/${item.purchase_id}`}>
@@ -188,6 +210,8 @@ export function Overview() {
                             amountUnits={item.amount_units}
                             transactionHash={item.transaction_hash}
                             status={item.status}
+                            policy={aegis ? "aegis" : "legacy"}
+                            paymentStatus={item.payment_status}
                           />
                         </td>
                         <td>
@@ -203,12 +227,15 @@ export function Overview() {
                             >
                               {short(item.transaction_hash, 5)} ↗
                             </a>
+                          ) : aegis ? (
+                            <span className="muted">Facilitator 응답 기준</span>
                           ) : (
                             <span className="muted">거래 해시 없음</span>
                           )}
                         </td>
                       </tr>
-                    ))}
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -221,11 +248,10 @@ export function Overview() {
                 <p className="eyebrow">ACCOUNT SCOPE</p>
                 <h2>감사 대상 지갑</h2>
               </div>
-              <Link href="/login">계정 변경</Link>
             </div>
             <dl className="walletList">
               <div>
-                <dt>로그인 사용자</dt>
+                <dt>로컬 소유자</dt>
                 <dd title={wallet?.owner_address ?? undefined}>
                   {short(wallet?.owner_address, 9)}
                 </dd>
@@ -237,7 +263,7 @@ export function Overview() {
                 </dd>
               </div>
               <div>
-                <dt>PBLC 토큰</dt>
+                <dt>결제 토큰</dt>
                 <dd title={wallet?.token ?? undefined}>
                   {short(wallet?.token, 9)}
                 </dd>
@@ -246,13 +272,14 @@ export function Overview() {
                 <dt>일일 사용 / 한도</dt>
                 <dd>
                   {credits(wallet?.spent_units ?? 0)} /{" "}
-                  {credits(wallet?.daily_limit_units ?? null)} PBLC
+                  {credits(wallet?.daily_limit_units ?? null)}
                 </dd>
               </div>
             </dl>
             <p className="panelNote">
-              MetaMask는 로그인 소유자를 확인하고, 구매 에이전트 지갑은 승인된
-              정책 안에서만 x402 결제를 수행합니다.
+              로컬 단일 사용자 데모입니다. 공개 다중 사용자 인증은 구현하지 않았고, 서명 키는
+              결제 실행 모듈에만 격리되어 브라우저로 오지 않습니다. 구매 에이전트는 승인된 한도
+              안에서만 x402 결제를 요청합니다.
             </p>
           </article>
         </div>
@@ -296,19 +323,20 @@ export function Overview() {
               <li>
                 <i className={chainReady ? "ok" : "warn"} />
                 <span>
-                  <strong>PBLC 잔액 RPC</strong>
+                  <strong>토큰 잔액 RPC</strong>
                   <small>
-                    {chainReady
-                      ? "온체인 조회 완료"
-                      : wallet?.balance_status ?? "조회 중"}
+                    {balanceLabel}
                   </small>
                 </span>
               </li>
               <li>
                 <i className={settled.length > 0 ? "ok" : "idle"} />
                 <span>
-                  <strong>Base Sepolia 결제 해시</strong>
-                  <small>{settled.length}건 연결됨</small>
+                  <strong>정산 기록</strong>
+                  <small>
+                    {settled.length}건 · 신규 {aegisSettled.length}건은 Mock Facilitator
+                    응답 기준
+                  </small>
                 </span>
               </li>
               <li>
@@ -329,8 +357,8 @@ export function Overview() {
             <div>
               <strong>이 화면은 모니터 전용입니다</strong>
               <p>
-                정상·비정상 거래 생성 도구는 감사 기록과 분리된 시연 화면으로
-                추가할 예정입니다.
+                구매 요청과 실행은 /request 화면에만 있습니다. 여기서는 기록된 증거만
+                읽습니다.
               </p>
             </div>
           </article>

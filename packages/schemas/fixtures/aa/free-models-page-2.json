@@ -1,0 +1,44 @@
+{
+  "tier": "free",
+  "intelligence_index_version": 3,
+  "pagination": {
+    "page": 2,
+    "page_size": 2,
+    "total_pages": 2,
+    "has_more": false
+  },
+  "data": [
+    {
+      "id": "fixture-aa-google-gamma",
+      "name": "Fixture Google Gamma",
+      "slug": "fixture-aa-google-gamma",
+      "model_creator": { "id": "fixture-google", "name": "Fixture Google", "slug": "fixture-google" },
+      "pricing": {
+        "price_1m_input_tokens": 0.3,
+        "price_1m_output_tokens": 2.5
+      },
+      "performance": {
+        "median_end_to_end_response_time_seconds": 4.75
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 48
+      }
+    },
+    {
+      "id": "fixture-aa-unmapped-delta",
+      "name": "Fixture Unmapped Delta",
+      "slug": "fixture-aa-unmapped-delta",
+      "model_creator": { "id": "fixture-other", "name": "Fixture Other", "slug": "fixture-other" },
+      "pricing": {
+        "price_1m_input_tokens": 0.05,
+        "price_1m_output_tokens": 0.1
+      },
+      "performance": {
+        "median_end_to_end_response_time_seconds": 2.5
+      },
+      "evaluations": {
+        "artificial_analysis_intelligence_index": 12.5
+      }
+    }
+  ]
+}
