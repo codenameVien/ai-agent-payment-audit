@@ -1,6 +1,6 @@
 # AEGIS presentation-demo verification — Terra
 
-Date: 2026-09-10 (Asia/Seoul)  
+Date: 2026-09-10 (Asia/Seoul)
 Branch/HEAD inspected: `feature/aegis-aa-v1` / `9f6e23f`
 
 ## Result
