@@ -29,7 +29,14 @@ Coder 기록: `../.agent/outbox/aegis-demo-terra-result.md`. 오케스트레이�
 - 전체 광범위 테스트 반복·추가 보안/성능 강화: 수행 대상에서 제외. Terra의 최초 옵션 위치 실수로 기존14건 하니스가 한 번 실행되어 통과했으나, 이 결과로 유예한 보증 범위를 확대하지 않는다. 추가 반복은 하지 않았다.
 - 최종 브라우저 재캡처는 이번 축소 검증에서 생략했다. 아래 UI35건·브라우저 결과는 당시 검증이며 새 검증처럼 재표기하지 않는다.
 
-실제 AA API·Provider API 호출, AEGIS 배포, 자산 이동, 실제 테스트넷 결제 및 AWS 배포는 모두 미실행이다. 공개 다중 사용자 인증·운영 보안 검증도 완료가 아니다.
+실제 AA API·Provider API 호출, 자산 이동, 실제 테스트넷 결제 및 AWS 배포는 모두 미실행이다. 2026-09-10부터 신규 실행의 결제 조건은 배포된 PBLC V2를 재사용하도록 전환했지만, Facilitator는 Mock이므로 실제 전송 증거가 아니다. 공개 다중 사용자 인증·운영 보안 검증도 완료가 아니다.
+
+## PBLC V2 재사용·AA 실조회 준비 — 2026-09-10
+
+- 신규 결제 조건: PBLC V2 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, ERC-3009, 6 decimals. 기존 PBLC 실거래·감사 기록은 수정하지 않았다.
+- `AA_API_KEY`와 `AA_MODEL_CATALOG_PATH`가 모두 있어야 live AA adapter를 선택한다. fixture catalog·누락 metric·정확한 mapping 실패는 결제 전 중단한다.
+- 이번 변경 검증: root lint, Commerce Gateway build, dashboard build, Python AA workflow/schema 29건, PBLC V2 조건의 Mock Facilitator/runtime 19건, 임시 MongoDB를 사용하는 로컬 E2E 14건 통과.
+- 실제 AA 키를 아직 설정하지 않았으므로 인증 API 결과·live snapshot 저장은 미검증 외부 게이트다. Provider와 Facilitator Mock 범위는 유지한다.
 
 ## 변경 전 기준선 — 2026-09-09
 

@@ -1,6 +1,6 @@
 # AEGIS 단일 구매 구조
 
-2026-09-09 확정 설계, 2026-09-10 발표용 로컬 데모 핵심 검증 완료. 아래 신규 흐름은 세 Provider별 Mock 응답·AA synthetic fixture·Mock Facilitator로 검증했다. Gateway·결제 실행 코드와 임시 키 서명, HTTP 통신·임시 MongoDB 저장은 실제 실행했다. 실제 모델 호출이나 온체인 결제를 뜻하지 않는다. 측정된 범위와 유예 검증은 [검증 기록](AEGIS_VERIFICATION.md)을 기준으로 한다.
+2026-09-09 확정 설계, 2026-09-10 발표용 로컬 데모 핵심 검증 완료. 신규 흐름은 세 Provider별 Mock 응답·AA fixture·Mock Facilitator로 검증했다. `AA_API_KEY`와 정확한 catalog가 서버에 설정되면 AA snapshot만 실조회할 수 있고, Provider·Facilitator는 여전히 Mock이다. Gateway·결제 실행 코드와 임시 키 서명, HTTP 통신·임시 MongoDB 저장은 실제 실행했다. 실제 모델 호출이나 온체인 결제를 뜻하지 않는다. 측정된 범위와 유예 검증은 [검증 기록](AEGIS_VERIFICATION.md)을 기준으로 한다.
 
 ## 실행 경로와 조회 경로
 
@@ -96,10 +96,10 @@ flowchart TD
 | 모델 응답 | 세 Provider 모두 Mock | 당시 기록 그대로 |
 | AA 데이터 | synthetic fixture 표시, 실제 인증 API 검증은 외부 게이트 | 당시 정책/점수 그대로 |
 | 결제 상태 근거 | Facilitator 응답, Mock 여부 명시 | 당시 결제 방식과 증거 그대로 |
-| 토큰 | AEGIS 계약 준비, 실제 배포 전 | PBLC 및 당시 계약 주소 유지 |
+| 토큰 | 배포된 PBLC V2 ERC-3009 조건 사용; Mock Facilitator라 실제 전송 없음 | PBLC 및 당시 계약 주소 유지 |
 | 평판·Anchor·독립 RPC 결제 검증 | 실행·점수에서 제외 | 저장된 상세 증거 읽기 유지 |
 | 인증 | 단일 사용자 loopback 데모, 내부 API 보호 유지 | 신규 SIWE 로그인 요구 없음 |
 
-실제 모드에서는 Facilitator가 블록체인 전송을 제출한다. 현재 로컬 검증은 실제 AEGIS 전송이 아니다. 잔액을 조회하지 않았다면 실제 온체인 잔액처럼 표시하지 않는다. 1 AEGIS = 1 USD는 명목 산정 규칙이며 달러 담보·상환 가치를 뜻하지 않는다.
+실제 모드에서는 Facilitator가 블록체인 전송을 제출한다. 현재 로컬 검증은 실제 PBLC 전송이 아니다. 잔액을 조회하지 않았다면 실제 온체인 잔액처럼 표시하지 않는다. 1 PBLC = 1 USD는 명목 산정 규칙이며 달러 담보·상환 가치를 뜻하지 않는다.
 
 사용자가 AWS 배포는 아직 이르다고 명시했다. AWS 실제 배포는 진행하지 않는다. 토큰 배포·자산 이동·실제 테스트넷 결제는 지갑·방식·예상 주소·가스·금액을 먼저 제시하고 별도 승인을 받는 경계로 남는다.

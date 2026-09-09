@@ -228,7 +228,7 @@ test("a gateway refuses a payment payload that is not the decided terms", async 
           asset: "0x0000000000000000000000000000000000000000",
           payTo: TEST_MODELS.openai!.recipient,
           maxTimeoutSeconds: 60,
-          extra: { assetTransferMethod: "eip3009", name: "AEGIS", version: "1" },
+          extra: { assetTransferMethod: "eip3009", name: "PBL Agent Credit", version: "2" },
         },
         payload: {
           signature: `0x${"ab".repeat(65)}`,

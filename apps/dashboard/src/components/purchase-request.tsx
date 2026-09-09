@@ -18,8 +18,8 @@ import { api, credits, short } from "@/lib/api";
 import type { PurchaseDetail } from "@/lib/types";
 
 const DEFAULT_PROMPT = "사용자 요구에 가장 적합한 AI 모델을 선택해 한 문장으로 응답해줘.";
-/** AEGIS is a 6-decimal token, so one unit is 1e-6 nominal USD. */
-const AEGIS_UNITS_PER_TOKEN = 1_000_000;
+/** PBLC V2 is a 6-decimal token, so one unit is 1e-6 nominal USD. */
+const PBLC_UNITS_PER_TOKEN = 1_000_000;
 
 type Phase = "ready" | "invalid" | "creating" | "running";
 
@@ -28,10 +28,10 @@ function toBudgetUnits(value: FormDataEntryValue | null): number | null {
   if (text === "") return null;
   const amount = Number(text);
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1) {
-    throw new Error("예산은 0보다 크고 1 AEGIS 이하여야 합니다.");
+    throw new Error("예산은 0보다 크고 1 PBLC 이하여야 합니다.");
   }
-  const units = Math.round(amount * AEGIS_UNITS_PER_TOKEN);
-  if (units <= 0) throw new Error("예산은 최소 0.000001 AEGIS입니다.");
+  const units = Math.round(amount * PBLC_UNITS_PER_TOKEN);
+  if (units <= 0) throw new Error("예산은 최소 0.000001 PBLC입니다.");
   return units;
 }
 
@@ -165,7 +165,7 @@ export function PurchaseRequest() {
             <p className="eyebrow">PURCHASE REQUEST</p>
             <h2>AI 구매 요청</h2>
           </div>
-          <span className="badge caution">Mock 실행 · 준비 토큰</span>
+          <span className="badge caution">Mock 실행 · PBLC V2 조건</span>
         </div>
 
         <form className="experimentForm" onSubmit={run}>
@@ -175,10 +175,10 @@ export function PurchaseRequest() {
           </label>
 
           <label>
-            <span>예산(AEGIS, 선택)</span>
+            <span>예산(PBLC, 선택)</span>
             <input name="budget" type="number" min="0.000001" max="1" step="0.000001" placeholder="비워두면 지갑의 1회 한도 적용" />
             <small>
-              AEGIS는 소수점 6자리이고 1 AEGIS는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
+              PBLC V2는 소수점 6자리이고 1 PBLC는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
               화폐 가치가 아닙니다.
             </small>
           </label>
@@ -201,7 +201,7 @@ export function PurchaseRequest() {
 
           <div className="experimentTerms" aria-label="구매 실행 조건">
             <div><span>구매 주체</span><strong>구매 에이전트</strong></div>
-            <div><span>결제 자산</span><strong>AEGIS · 발행 준비 상태</strong></div>
+            <div><span>결제 자산</span><strong>PBLC V2 · Base Sepolia 배포됨</strong></div>
             <div><span>실행·정산</span><strong>Mock Provider · Mock Facilitator</strong></div>
             <div><span>감사 범위</span><strong>선택 · 결제 · 전달</strong></div>
           </div>
@@ -227,7 +227,7 @@ export function PurchaseRequest() {
 
           {blocked && (
             <div className="notice risk" role="alert">
-              저장된 AEGIS purchaseId {short(pending?.purchaseId, 10)}를 조회하지 못해 재개
+              저장된 신규 정책 purchaseId {short(pending?.purchaseId, 10)}를 조회하지 못해 재개
               여부를 확인할 수 없습니다. 확인 전에는 실행하지 않습니다.{" "}
               <button type="button" onClick={() => void resolvePending()}>다시 확인</button>
             </div>
@@ -235,12 +235,12 @@ export function PurchaseRequest() {
 
           {resumable && (
             <div className="notice">
-              진행 중인 AEGIS 구매 {short(resumable.purchaseId, 10)}가 있습니다. 저장된 요청과
+              진행 중인 PBLC V2 조건 구매 {short(resumable.purchaseId, 10)}가 있습니다. 저장된 요청과
               같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다.
               <small>
                 저장된 요청: 프롬프트 해시 {short(resumable.promptHash, 10)} · priority{" "}
                 {resumable.originalPriority ?? "미지정(자동 분류)"} · 예산{" "}
-                {credits(resumable.budgetUnits)} AEGIS
+                {credits(resumable.budgetUnits)} PBLC
               </small>
             </div>
           )}
@@ -268,7 +268,7 @@ export function PurchaseRequest() {
           {pending?.historical.map((item) => (
             <div className="notice" key={item.key}>
               과거 PBLC 정책으로 남은 purchaseId {short(item.purchaseId, 10)}({item.key})가
-              있습니다. 이 기록은 새 AEGIS 요청으로 다시 실행하지 않고 그대로 보존합니다.{" "}
+              있습니다. 이 기록은 새 정책 요청으로 다시 실행하지 않고 그대로 보존합니다.{" "}
               <Link href={`/purchases/${encodeURIComponent(item.purchaseId)}`}>
                 과거 거래 상세 보기 →
               </Link>

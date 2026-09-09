@@ -44,7 +44,7 @@ export function AegisPurchaseDecision({ events }: { events: EvidenceEvent[] }) {
     <section className="panel">
       <div className="sectionHead">
         <div>
-          <p className="eyebrow">AEGIS 선택 증거</p>
+          <p className="eyebrow">구매 에이전트 선택 증거</p>
           <h2>가격 · 완료시간 · AA 성능 3요소 비교</h2>
         </div>
         <div className="detailMeta">

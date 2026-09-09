@@ -141,7 +141,7 @@ export function Overview() {
           <span>정산 완료 거래</span>
           <strong>{settled.length}</strong>
           <small>
-            AEGIS 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
+            PBLC V2 조건 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
             {settled.length - aegisSettled.length}건
           </small>
         </article>

@@ -16,7 +16,7 @@ This graduation PBL audits whether an AI buyer's model choice obeyed the request
 - New scoringPolicyVersion is aa-three-factor-v1. Fixed price/time/intelligence ratios: default .4/.3/.3, price .6/.2/.2, speed .2/.6/.2, intelligence .2/.2/.6. Explicit priority wins. No reputation/freshness/manual scores in new selection.
 - Apply hard filters before normalization; store all candidates/rejections, same snapshot, policy, exact amount, and priority reason.
 - One purchaseId permits at most one successful payment. It is not the blockchain transaction hash.
-- New token preparation: name/symbol AEGIS, 6 decimals, ERC-3009. Existing PBLC contracts/history keep original names and addresses. No reset/rebase/amend/squash or data rewrites.
+- New execution uses the already deployed PBLC V2 ERC-3009 token (6 decimals) as payment terms. Existing PBLC contracts/history keep their original names and addresses. No reset/rebase/amend/squash or data rewrites.
 - Use x402 v2 exact + ERC-3009 only. Payment execution module (user-facing Korean: 결제 실행 모듈) isolates keys and signs approval; Facilitator submits transfers. Gateway independently verifies price using the same trusted snapshot/policy and releases result only after settlement confirmation.
 - New runtime excludes seller negotiation/counteroffer, SIWE, ERC-8004, Evidence Anchor, and application independent receipt/Transfer/AuthorizationUsed cross-checks. Preserve historical readers and evidence.
 - Local single-user demo does not implement public multi-user authentication. Keep internal API protection, key isolation, and encrypted sensitive payload separation.

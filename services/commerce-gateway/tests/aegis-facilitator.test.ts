@@ -23,7 +23,7 @@ function requirements(amount = "619"): AegisPaymentRequirements {
     asset: TEST_TOKEN.address,
     payTo: PAY_TO,
     maxTimeoutSeconds: 60,
-    extra: { assetTransferMethod: "eip3009", name: "AEGIS", version: "1" },
+    extra: { assetTransferMethod: "eip3009", name: "PBL Agent Credit", version: "2" },
   };
 }
 
@@ -47,8 +47,8 @@ async function context(options: {
   };
   const signed = await signer.sign({
     token: TEST_TOKEN.address as `0x${string}`,
-    tokenName: "AEGIS",
-    tokenVersion: "1",
+    tokenName: "PBL Agent Credit",
+    tokenVersion: "2",
     authorization,
   });
   return {

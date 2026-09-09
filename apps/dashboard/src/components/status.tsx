@@ -72,7 +72,7 @@ export function PaymentAmount({
       <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
         <strong>
           {settled ? "" : "예정 "}
-          {credits(amountUnits)} AEGIS
+          {credits(amountUnits)} PBLC
         </strong>
         <small>
           {settled

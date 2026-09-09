@@ -1,0 +1,16 @@
+{
+  "catalog_version": "replace-with-aa-response-date",
+  "entries": [
+    {
+      "provider_id": "openai",
+      "provider_model_id": "replace-with-exact-provider-model-id",
+      "model_version": "replace-with-exact-version",
+      "aa_model_id": "replace-with-exact-AA-id",
+      "aa_slug": "replace-with-exact-AA-slug",
+      "display_name": "replace-with-display-name",
+      "recipient": "0x000000000000000000000000000000000000a001",
+      "capabilities": ["korean"],
+      "mapping_provenance": "configured"
+    }
+  ]
+}

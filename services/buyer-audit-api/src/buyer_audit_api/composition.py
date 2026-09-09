@@ -145,7 +145,7 @@ def build_aa_capture_source(
     if catalog.provenance != {MappingProvenance.CONFIGURED}:
         raise ConfigurationError(
             "AA_API_KEY is set but the model catalog is not an explicitly configured "
-            "live mapping; set AEGIS_MODEL_CATALOG_PATH or unset the key"
+            "live mapping; set AA_MODEL_CATALOG_PATH or unset the key"
         )
     return HttpArtificialAnalysisSource(
         api_key=api_key,
@@ -280,8 +280,8 @@ def build_container(settings: Settings) -> AppContainer:
     )
     workflow = None if local_owner else build_legacy_workflow(settings, repository, clock)
     catalog = (
-        load_model_catalog(Path(settings.aegis_model_catalog_path))
-        if settings.aegis_model_catalog_path
+        load_model_catalog(Path(settings.aa_model_catalog_path))
+        if settings.aa_model_catalog_path
         else load_model_catalog(RUNTIME_CATALOG_PATH if local_owner else FIXTURE_CATALOG_PATH)
     )
     aegis_workflow = AegisDecisionWorkflow(
@@ -290,12 +290,12 @@ def build_container(settings: Settings) -> AppContainer:
         catalog=catalog,
         source=build_aa_capture_source(settings, catalog),
         token=TokenIdentity(
-            name="AEGIS",
-            symbol="AEGIS",
+            name="PBL Agent Credit",
+            symbol="PBLC",
             decimals=6,
-            address=settings.aegis_token_address.lower(),
+            address=settings.pblc_token_address.lower(),
             chain_id=settings.siwe_chain_id,
-            status=settings.aegis_token_status,
+            status=settings.pblc_token_status,
         ),
     )
     return AppContainer(

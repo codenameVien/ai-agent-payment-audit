@@ -34,13 +34,16 @@ class Settings(BaseSettings):
     # abnormal-evidence scenarios can be exercised against the real service. Empty means
     # the shipped pages. It has no effect once AA_API_KEY selects the live adapter.
     aa_fixture_pages_json: str = ""
-    aegis_model_catalog_path: str | None = None
+    # Exact provider-model -> AA id/slug mappings. A live AA key is rejected unless this
+    # catalog is explicitly configured; no fuzzy matching is permitted.
+    aa_model_catalog_path: str | None = None
     aegis_max_output_tokens: int = 1024
     aegis_system_prompt: str = ""
-    # AEGIS is prepared, not deployed. The zero address means "no deployment yet" and is
-    # recorded as such in evidence; it is never presented as a live token address.
-    aegis_token_address: str = "0x0000000000000000000000000000000000000000"
-    aegis_token_status: str = "prepared"
+    # PBLC V2 is the already deployed six-decimal ERC-3009 test token. The local
+    # composition still uses a Mock Facilitator, so this address is payment terms only
+    # until a separately approved real settlement is performed.
+    pblc_token_address: str = "0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3"
+    pblc_token_status: str = "deployed-base-sepolia"
     # Single-user local demo identity. This is server configuration, not a login: the
     # browser can never choose it. Clearing it restores the historical SIWE composition
     # for reading PBLC history, and that legacy mode is manual only.
