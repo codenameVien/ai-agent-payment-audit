@@ -39,3 +39,11 @@
 - 이 테스트는 명령 스텁과 임시 loopback 리스너를 사용한다. 실제 MongoDB 저장 검증과 구분하며 사용자 DB에 접속하지 않았다.
 - 테스트가 생성한 임시 파일과 프로세스는 정리됐다. 기존 P6-03 파일 25개 해시도 다시 동일함을 확인했다.
 - 실제 Mongo 통합 검증은 AA/런타임 구현 안정화 뒤 실행한다.
+
+## AA 정책·증거 기록 — `e67e0b0`
+
+- Coder 실행 로그 확인: Python non-Mongo **432 passed**, 실제 격리 Mongo **11 passed**, ruff·mypy(57 source files) 통과, schema 및 Python/JS 가격 교차 사례8 통과.
+- 독립 Reviewer 직접 실행: audit/policy/snapshot **94 passed**, 수정 재검토 approve.
+- snapshot 원본·전체 catalog 기반 재계산, 후보 누락/원가 변조, 우선순위 근거 불일치, 고정밀 Decimal 손실, 공식 시간 경로/페이지 요청 계약 회귀를 확인했다.
+- 키워드 분류는 원문 재도출이 없는 경우 CAUTION으로 남는다. 구조화 근거 검사를 원문 재검증 완료로 과장하지 않는다.
+- 결제·Gateway·UI 전체 흐름은 이 검증 범위에 포함되지 않는다. 실제 AA 인증 API도 미검증이다.
