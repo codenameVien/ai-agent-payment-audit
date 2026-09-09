@@ -31,6 +31,12 @@ Coder 기록: `../.agent/outbox/aegis-demo-terra-result.md`. 오케스트레이�
 
 실제 AA API·Provider API 호출, 자산 이동, 실제 테스트넷 결제 및 AWS 배포는 모두 미실행이다. 2026-09-10부터 신규 실행의 결제 조건은 배포된 PBLC V2를 재사용하도록 전환했지만, Facilitator는 Mock이므로 실제 전송 증거가 아니다. 공개 다중 사용자 인증·운영 보안 검증도 완료가 아니다.
 
+## 지갑 결제 사전점검 준비 — 2026-09-10
+
+- `npm run pblc:payment:preflight`은 전용 테스트 지갑의 공개 주소·ETH/PBLC 잔액, PBLC V2 메타데이터, Facilitator `/supported`만 읽는 준비 명령이다.
+- 이 명령은 공개 `AEGIS_LIVE_PAYER_ADDRESS`만 읽으며, 서명·Facilitator `/verify`·`/settle`·트랜잭션 전송을 전혀 수행하지 않는다. 개인키는 실제 결제가 별도 승인될 때까지 요구하지 않는다.
+- 실제 PBLC custom-token `verify/settle` 수락과 자산 이동은 별도 승인 전까지 미검증·미실행이다.
+
 ## PBLC V2 재사용·AA 실조회 준비 — 2026-09-10
 
 - 신규 결제 조건: PBLC V2 `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, ERC-3009, 6 decimals. 기존 PBLC 실거래·감사 기록은 수정하지 않았다.

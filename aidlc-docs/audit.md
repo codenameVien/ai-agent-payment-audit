@@ -329,3 +329,8 @@
 - 새 탭에서 생성된 두 번째 구매 `378beb23-e352-49f0-b450-87da88791292`는 결제 tx `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`로 완료됐다. block `46341684`, Transfer log index `117`, buyer → Gemini seller, `100000` raw units를 공개 RPC에서 독립 확인했다.
 - 성공 구매는 `REQUESTED`부터 `AUDITED`까지 10개 hash-linked event를 가지며 head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다. buyer 잔액은 `999999700000` raw units, permit nonce는 `3`, Permit2 allowance는 `0`이다.
 - 탭별 `sessionStorage`가 새 탭의 중복 purchase 생성을 막지 못한 실증 결과에 따라 보류 `purchaseId` 저장소를 동일 출처 탭이 공유하는 `localStorage`로 변경했다.
+
+## 2026-09-10 — PBLC V2 지갑 결제 사전점검 준비
+
+- 사용자 요청에 따라 실제 전송 전 준비 경로를 추가했다. `npm run pblc:payment:preflight`은 공개 `AEGIS_LIVE_PAYER_ADDRESS`를 사용해 ETH/PBLC 잔액·PBLC V2 메타데이터·Facilitator `/supported`만 읽는다. 개인키는 이 단계에서 저장하거나 읽지 않는다.
+- 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.

@@ -109,3 +109,14 @@ The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION
 Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
 
 The new execution path reuses deployed PBLC V2 ERC-3009 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` on Base Sepolia (6 decimals) as its payment terms. The Facilitator remains Mock, so it does not move real assets. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping; run `bash scripts/set_aa_api_key.sh` locally rather than sharing a key in chat. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
+
+### Wallet payment preflight (read-only)
+
+To check readiness for a future real transfer, use a **dedicated Base Sepolia test wallet**, not a personal MetaMask account. Put its public address in `.env.local`; this step does not ask for a private key.
+
+```bash
+AEGIS_LIVE_PAYER_ADDRESS=0x...  # set in .env.local
+npm run pblc:payment:preflight
+```
+
+The preflight reads only the wallet public address, ETH/PBLC balances, PBLC V2 name/symbol/decimals, and Facilitator support for `exact + Base Sepolia`. It never signs, calls `/verify` or `/settle`, or broadcasts a transaction. A separate approval is required before verifying that the Facilitator accepts the custom PBLC token.
