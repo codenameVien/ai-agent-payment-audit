@@ -1,5 +1,7 @@
 # Coder AEGIS-02 — integrate ordinary Mock Gateways and isolated payment module
 
+Also read `.agent/outbox/aegis-provider-catalog-note.md`: runnable Mock catalog must use the verified exact provider identifiers/version labels, while synthetic AA fixtures remain explicitly non-measurement data. This is part of the existing model mapping requirement.
+
 Read AGENTS.md, approved aidlc-docs/inception specs, docs/AEGIS_IMPACT.md and .agent/outbox/aegis-01-result.md. Implement packet AEGIS-02 using the committed AA core. Opus only; no subagents/model changes. Use apply_patch. Work exclusively in this AEGIS worktree, preserve historical code/schema/data. Do not read/copy .env.local or any keys. Do not perform real AA/provider/chain/Atlas/AWS requests or deployments. Never reset/rebase/amend/squash. Commit exact owned source/test/config files only, not other untracked work.
 
 Contract preparation is handled separately by another Opus. Do NOT modify infra/contracts or scripts/aegis_token_plan.mjs or docs/AEGIS_TOKEN_PREPARATION.md. Read metadata if needed. Do not change planning specs. Report concrete issues rather than adding approval gates.

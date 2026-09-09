@@ -6,7 +6,7 @@
 - review-boundaries: AA/선택 증거, 결제/역사 보존, UI/최종 E2E 세 경계 focused independent review.
 - broad-suite-count: 최종 1회; 이후 변경이 관련 증거를 무효화할 때만 이유를 기록해 재실행.
 - baseline: Standard. scoped high-assurance: 결제 키·중복·조건 결속과 API/감사 무결성. exit: 해당 negative/concurrency/history 검증 통과.
-- checkpoint: milestone active 90분 또는 관측 가능한 300k tokens에서 재계획 점검. 기존 정책의 active 3시간/750k continue-past 경계는 orchestration에서 관리한다. 같은 문제 두 fix cycle 이후 재분해한다.
+- checkpoint: milestone active 90분 또는 관측 가능한 300k tokens에서 재계획 점검. 기존 정책의 active 3시간/750k continue-past 경계는 orchestration에서 관리한다. 같은 문제 두 fix cycle 이후 재분해한다. 2026-09-09 사용자가 예산 연장 질문에 승인하여 남은 로컬 Mock 결제 연결·UI·전체 E2E 완료까지 연장했다. AWS 실제 배포는 아직 원하지 않는다고 재확인했으며, 토큰 배포·자산 이동·실제 결제는 별도 승인 경계다.
 - 순서: 설계 문서 수정 → 영향 범위 확정 → 아래 구현 → 검증 → 구조도·기록 갱신. 문서별 추가 승인 단계 없음.
 
 ## AEGIS-01 — AA snapshot과 가격/선택/감사 계약

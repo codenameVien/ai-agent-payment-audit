@@ -3,6 +3,7 @@
 Updated: 2026-09-09 KST — AEGIS / AA scope supersedes prior active Phase 6 direction.
 
 ## Active owners
+- 2026-09-09 user approved extending execution through remaining local Mock runtime, UI and full E2E after the budget checkpoint. AWS actual deployment is explicitly not wanted yet; token deployment/assets/real payments remain separately gated. No expansion beyond the approved local scope.
 - Orchestrator: local implementation and verification owner; no actual AWS deployment.
 - Planner/Reviewer: Astra Light (`gpt-6-astra`, low); approved current plan and contract review.
 - Coder: OMP `anthropic/claude-opus-5`, xhigh. AEGIS-01 implementation in progress.
