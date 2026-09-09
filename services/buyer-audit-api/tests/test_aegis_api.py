@@ -172,11 +172,12 @@ def test_internal_decision_evidence_is_protected_and_complete(
         assert evidence.status_code == 200, evidence.text
         body = evidence.json()
         assert body["decision"]["scoringPolicyVersion"] == "aa-three-factor-v1"
-        assert body["decision"]["amountUnits"] == 619
+        # Default weights select the faster/high-intelligence Google fixture.
+        assert body["decision"]["amountUnits"] == 2_568
         assert body["decision"]["snapshotHash"] == body["snapshot_hash"]
         assert body["snapshot"]["mode"] == "fixture"
         # The gateway can recompute the amount from the preserved AA source values.
-        assert body["snapshot"]["models"][0]["inputPricePerMillion"] == "0.15"
+        assert body["snapshot"]["models"][0]["inputPricePerMillion"] == "0.4"
 
 
 def test_internal_decision_evidence_is_absent_before_a_decision(

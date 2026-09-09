@@ -92,14 +92,14 @@ export function createMockProvider(config: {
 export const AEGIS_MOCK_PROVIDERS: Readonly<Record<string, MockProvider>> = Object.freeze({
   openai: createMockProvider({
     providerId: "openai",
-    providerModelId: "gpt-4.1-2025-04-14",
+    providerModelId: "gpt-4.1-mini-2025-04-14",
     modelVersion: "2025-04-14",
     vendorLabel: "OpenAI",
   }),
   anthropic: createMockProvider({
     providerId: "anthropic",
-    providerModelId: "claude-sonnet-5",
-    modelVersion: "claude-sonnet-5",
+    providerModelId: "claude-haiku-4-5-20251001",
+    modelVersion: "2025-10-01",
     vendorLabel: "Anthropic Claude",
   }),
   google: createMockProvider({

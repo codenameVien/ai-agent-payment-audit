@@ -144,7 +144,7 @@ function unsignedInteger(value, flag) {
   return BigInt(value);
 }
 
-export function readTokenMetadata(source) {
+export function readTokenMetadata(source, { sourcePath = SOURCE_PATH } = {}) {
   const stringConstant = (field) =>
     new RegExp(`string public constant ${field}\\s*=\\s*"([^"]*)";`).exec(source)?.[1];
   const name = stringConstant("name");
@@ -153,7 +153,7 @@ export function readTokenMetadata(source) {
   const decimals = /uint8 public constant decimals\s*=\s*(\d+);/.exec(source)?.[1];
   for (const [field, value] of Object.entries({ name, symbol, eip712Version, decimals })) {
     if (value === undefined) {
-      fail(`could not read constant "${field}" from ${relative(REPO_ROOT, SOURCE_PATH)}`);
+      fail(`could not read constant "${field}" from ${relative(REPO_ROOT, sourcePath)}`);
     }
   }
   const mutabilityFindings = [
@@ -177,7 +177,9 @@ export function readTokenMetadata(source) {
             "name/symbol/version/decimals are compile-time constants with no setter",
             "no delegatecall, proxy initializer or upgrade hook in source",
           ],
-    source: relative(REPO_ROOT, SOURCE_PATH),
+    // The reusable planner also prepares the user-owned PBLC contract; retain the
+    // caller's exact source path instead of relabelling it as the AEGIS contract.
+    source: relative(REPO_ROOT, sourcePath),
   };
 }
 
@@ -202,8 +204,15 @@ export function intrinsicGas(calldata) {
   };
 }
 
-export function buildPlan({ artifact, source, options }) {
-  const token = readTokenMetadata(source);
+export function buildPlan({
+  artifact,
+  source,
+  options,
+  sourcePath = SOURCE_PATH,
+  artifactPath = ARTIFACT_PATH,
+  historicalAssetsNote = "Existing PBLC V1/V2 contracts, addresses and transactions are untouched; AEGIS is a separate deployment.",
+}) {
+  const token = readTokenMetadata(source, { sourcePath });
   const bytecode = artifact?.bytecode?.object;
   if (typeof bytecode !== "string" || !bytecode.startsWith("0x") || bytecode.length <= 2) {
     fail("artifact has no creation bytecode; run: forge build --root infra/contracts");
@@ -245,7 +254,7 @@ export function buildPlan({ artifact, source, options }) {
       standards: ["ERC-20", "ERC-3009 transferWithAuthorization (x402 v2 exact)"],
     },
     artifact: {
-      path: relative(REPO_ROOT, ARTIFACT_PATH),
+      path: relative(REPO_ROOT, artifactPath),
       compiler: artifact.metadata?.compiler?.version ?? UNKNOWN,
       constructorInputs,
       creationBytecodeBytes: (bytecode.length - 2) / 2,
@@ -297,20 +306,23 @@ export function buildPlan({ artifact, source, options }) {
       status: "SUGGESTION_ONLY_NOT_EXECUTED",
     },
     notes: [
-      "1 AEGIS = 1 USD is a nominal accounting conversion; it is not backing, collateral or a redemption promise.",
-      "Existing PBLC V1/V2 contracts, addresses and transactions are untouched; AEGIS is a separate deployment.",
+      `1 ${token.symbol} = 1 USD is a nominal accounting conversion; it is not backing, collateral or a redemption promise.`,
+      historicalAssetsNote,
       "No RPC query was performed: deployer balance, live nonce and live gas price are outside this planner.",
       "Wallets and nonces must be real approved values at send time; sample values are test-only.",
     ],
   };
 }
 
-export async function loadPlanInputs() {
+export async function loadPlanInputs({
+  sourcePath = SOURCE_PATH,
+  artifactPath = ARTIFACT_PATH,
+} = {}) {
   const [source, artifactText] = await Promise.all([
-    readFile(SOURCE_PATH, "utf8"),
-    readFile(ARTIFACT_PATH, "utf8").catch(() => {
+    readFile(sourcePath, "utf8"),
+    readFile(artifactPath, "utf8").catch(() => {
       fail(
-        `missing ${relative(REPO_ROOT, ARTIFACT_PATH)}; run: forge build --root infra/contracts`,
+        `missing ${relative(REPO_ROOT, artifactPath)}; run: forge build --root infra/contracts`,
       );
     }),
   ]);

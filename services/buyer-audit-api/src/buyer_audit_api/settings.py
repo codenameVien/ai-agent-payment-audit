@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     # Exact provider-model -> AA id/slug mappings. A live AA key is rejected unless this
     # catalog is explicitly configured; no fuzzy matching is permitted.
     aa_model_catalog_path: str | None = None
-    aegis_max_output_tokens: int = 1024
+    # standard-answer-v1: a fixed maximum output allocation used for the one-task quote.
+    aegis_max_output_tokens: int = 8_000
     aegis_system_prompt: str = ""
     # PBLC V2 is the already deployed six-decimal ERC-3009 test token. The local
     # composition still uses a Mock Facilitator, so this address is payment terms only

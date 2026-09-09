@@ -42,7 +42,7 @@ INTERNAL_HEADERS = {"Authorization": "Bearer test-internal-token"}
 ADMIN_HEADERS = {"Authorization": "Bearer test-admin-token"}
 PROMPT = "x" * 100
 #: The fixture OpenAI model at the shipped request size; see pricing-cases.json.
-OPENAI_AMOUNT_UNITS = 619
+OPENAI_AMOUNT_UNITS = 1_649
 
 
 @pytest.fixture
@@ -139,7 +139,7 @@ def test_a_reservation_is_derived_from_evidence_and_claimed_once(
         assert first.status_code == 200, first.text
         terms = first.json()["terms"]
         assert terms["amount_units"] == OPENAI_AMOUNT_UNITS
-        assert terms["provider_model_id"] == "gpt-4.1-2025-04-14"
+        assert terms["provider_model_id"] == "gpt-4.1-mini-2025-04-14"
         assert terms["model_version"] == "2025-04-14"
         intent = first.json()["intent"]
         assert intent["state"] == "CLAIMED"
@@ -387,7 +387,7 @@ def _wallet_policy(container: AppContainer) -> WalletPolicy:
             "facilitator settlement names a payer this module did not authorize",
         ),
         ({"network": "eip155:1"}, "facilitator settled on eip155:1"),
-        ({"amount": "1"}, "facilitator settled 1, not the decided 619"),
+        ({"amount": "1"}, "facilitator settled 1, not the decided 1649"),
     ],
 )
 def test_a_contradictory_success_is_parked_with_its_original_answer(
@@ -530,7 +530,7 @@ def test_delivery_requires_a_settled_payment_and_the_decided_model(
         purchase_id = _decided(client)
         delivery = {
             "provider_id": "openai",
-            "provider_model_id": "gpt-4.1-2025-04-14",
+            "provider_model_id": "gpt-4.1-mini-2025-04-14",
             "model_version": "2025-04-14",
             "response_id": "sha256:" + "1" * 64,
             "response_hash": "sha256:" + "2" * 64,

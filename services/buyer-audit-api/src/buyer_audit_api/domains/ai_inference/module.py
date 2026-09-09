@@ -14,7 +14,10 @@ from buyer_audit_api.domains.ai_inference.aa_request import (
 from buyer_audit_api.domains.ai_inference.models import NormalizedAiRequest
 
 #: Fixed server default for the prepayment ceiling when a request does not set one.
-DEFAULT_MAX_OUTPUT_TOKENS = 1024
+# `standard-answer-v1` reserves room for an 8,000-token answer.  It is a
+# prepayment ceiling, not an observed-usage bill: the selected model's price is fixed
+# before payment and recorded with the purchase evidence.
+DEFAULT_MAX_OUTPUT_TOKENS = 8_000
 
 
 class AiInferenceDomainModule:

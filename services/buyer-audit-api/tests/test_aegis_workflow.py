@@ -177,14 +177,14 @@ async def test_amounts_are_the_exact_ceiling_of_the_aa_prices(
     purchase_id = await _create(purchases, budget_units=5_000)
     decision = await workflow.decide(purchase_id=purchase_id)
     amounts = {item.key: item.amount_units for item in decision.candidates}
-    # 25*0.15 + 1024*0.60 = 618.15 -> 619
-    assert amounts[ALPHA] == 619
-    # 25*0.80 + 1024*4 = 4116 exactly
-    assert amounts[BETA] == 4_116
+    # 25*0.40 + 1024*1.60 = 1648.4 -> 1649
+    assert amounts[ALPHA] == 1_649
+    # 25*1 + 1024*5 = 5145 exactly
+    assert amounts[BETA] == 5_145
     # 25*0.30 + 1024*2.5 = 2567.5 -> 2568
     assert amounts[GAMMA] == 2_568
-    assert decision.amount_units == amounts[ALPHA]
-    assert decision.winner.candidate.entry.provider_id == "openai"
+    assert decision.amount_units == amounts[GAMMA]
+    assert decision.winner.candidate.entry.provider_id == "google"
 
 
 async def test_every_candidate_and_rejection_is_preserved(
@@ -196,9 +196,9 @@ async def test_every_candidate_and_rejection_is_preserved(
     assert {item.candidate_key: item.reasons for item in decision.rejected} == {
         BETA: ("over_budget",)
     }
-    assert [item.key for item in decision.eligible] == [ALPHA, GAMMA]
+    assert [item.key for item in decision.eligible] == [GAMMA, ALPHA]
     # Normalization uses only the survivors: the cheapest eligible sets the price scale.
-    assert decision.references.min_amount_units == 619
+    assert decision.references.min_amount_units == 1_649
 
 
 @pytest.mark.parametrize(
@@ -219,7 +219,9 @@ async def test_request_conditions_change_the_winner(
     expected_provider: str,
 ) -> None:
     purchase_id = await _create(
-        purchases, budget_units=5_000, request=dict(request_overrides)
+        purchases,
+        budget_units=6_000 if request_overrides.get("required_capabilities") else 5_000,
+        request=dict(request_overrides),
     )
     decision = await workflow.decide(purchase_id=purchase_id)
     assert decision.winner.candidate.entry.provider_id == expected_provider
@@ -306,7 +308,7 @@ async def test_evidence_reader_serves_the_fixed_decision_for_the_runtime(
     assert bundle["snapshotHash"] == decision.snapshot_hash
     assert bundle["snapshot"]["snapshotId"] == decision.snapshot_id
     # The gateway recomputes from the same preserved source values, never from a client.
-    assert bundle["snapshot"]["models"][0]["inputPricePerMillion"] == "0.15"
+    assert bundle["snapshot"]["models"][0]["inputPricePerMillion"] == "0.4"
 
 
 async def test_evidence_reader_refuses_a_purchase_without_a_new_policy_decision(

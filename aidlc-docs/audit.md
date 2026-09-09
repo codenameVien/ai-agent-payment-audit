@@ -333,6 +333,13 @@
 ## 2026-09-10 — PBLC V2 지갑 결제 사전점검 준비
 
 - 사용자 요청에 따라 실제 전송 전 준비 경로를 추가했다. `npm run pblc:payment:preflight`은 공개 `AEGIS_LIVE_PAYER_ADDRESS`를 사용해 ETH/PBLC 잔액·PBLC V2 메타데이터·Facilitator `/supported`만 읽는다. 개인키는 이 단계에서 저장하거나 읽지 않는다.
+
+## 2026-09-10 — 사용자 소유 PBLC 및 모델별 결제 조건 준비
+
+- 기존 PBLC V2의 owner는 사용자 MetaMask 계정이 아닌 주소임을 공개 읽기로 재확인했다. 기존 계약과 과거 거래는 그대로 보존하고, 사용자 지갑을 deployer/owner/initial holder로 하는 별도 PBLC ERC-3009 계약의 **오프라인 승인 패킷**만 준비했다.
+- 현재 pending nonce 기준 예상 CREATE 주소·가스·초기 공급량은 [PBLC 사용자 소유 토큰 준비](../docs/PBLC_USER_TOKEN_PREPARATION.md)에 기록했다. 이 패킷은 개인키·RPC·서명·브로드캐스트를 사용하지 않으며 실제 배포·민팅·전송은 하지 않았다.
+- OpenAI GPT-4.1 mini, Claude Haiku 4.5, Gemini 2.5 Flash의 정확한 model ID, seller 수신 지갑, 공개 1M-token 가격을 [모델별 표준 작업 결제 조건](../docs/MODEL_TASK_PRICING.md)에 기록했다. 현재는 Mock Gateway/Mock Facilitator 검증용 가격이며 실제 Provider 호출은 미구현이다.
+- 서버의 AA free endpoint를 읽기 전용으로 확인한 결과 세 고정 모델의 exact ID/slug mapping을 얻지 못했다. live AA 모드는 fail-closed로 남기고 fixture AA를 유지한다.
 - 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.
 
 ## 2026-09-10 — 로컬 Mock 판매자 수신 지갑 매핑

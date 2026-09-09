@@ -14,8 +14,8 @@
       "slug": "fixture-aa-openai-alpha",
       "model_creator": { "id": "fixture-openai", "name": "Fixture OpenAI", "slug": "fixture-openai" },
       "pricing": {
-        "price_1m_input_tokens": 0.15,
-        "price_1m_output_tokens": 0.6
+        "price_1m_input_tokens": 0.4,
+        "price_1m_output_tokens": 1.6
       },
       "performance": {
         "median_end_to_end_response_time_seconds": 8.4
@@ -30,8 +30,8 @@
       "slug": "fixture-aa-anthropic-beta",
       "model_creator": { "id": "fixture-anthropic", "name": "Fixture Anthropic", "slug": "fixture-anthropic" },
       "pricing": {
-        "price_1m_input_tokens": 0.8,
-        "price_1m_output_tokens": 4
+        "price_1m_input_tokens": 1,
+        "price_1m_output_tokens": 5
       },
       "performance": {
         "median_end_to_end_response_time_seconds": 12.5

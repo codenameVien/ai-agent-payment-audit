@@ -96,7 +96,7 @@ flowchart TD
 | 모델 응답 | 세 Provider 모두 Mock | 당시 기록 그대로 |
 | AA 데이터 | synthetic fixture 표시, 실제 인증 API 검증은 외부 게이트 | 당시 정책/점수 그대로 |
 | 결제 상태 근거 | Facilitator 응답, Mock 여부 명시 | 당시 결제 방식과 증거 그대로 |
-| 토큰 | 배포된 PBLC V2 ERC-3009 조건 사용; Mock Facilitator라 실제 전송 없음 | PBLC 및 당시 계약 주소 유지 |
+| 토큰 | 사용자 소유 PBLC 재배포 승인 패킷만 준비; Mock Facilitator라 실제 전송 없음 | PBLC 및 당시 계약 주소 유지 |
 | 평판·Anchor·독립 RPC 결제 검증 | 실행·점수에서 제외 | 저장된 상세 증거 읽기 유지 |
 | 인증 | 단일 사용자 loopback 데모, 내부 API 보호 유지 | 신규 SIWE 로그인 요구 없음 |
 

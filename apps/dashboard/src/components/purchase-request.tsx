@@ -201,7 +201,7 @@ export function PurchaseRequest() {
 
           <div className="experimentTerms" aria-label="구매 실행 조건">
             <div><span>구매 주체</span><strong>구매 에이전트</strong></div>
-            <div><span>결제 자산</span><strong>PBLC V2 · Base Sepolia 배포됨</strong></div>
+            <div><span>결제 자산</span><strong>PBLC · 표준 작업 최대 8,000 출력 토큰 기준</strong></div>
             <div><span>실행·정산</span><strong>Mock Provider · Mock Facilitator</strong></div>
             <div><span>감사 범위</span><strong>선택 · 결제 · 전달</strong></div>
           </div>
@@ -209,7 +209,7 @@ export function PurchaseRequest() {
           <label className="paymentConsent">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
             <span>
-              구매 에이전트가 aa-three-factor-v1 정책으로 고른 고정 선결제 금액을 x402 exact +
+              구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
               ERC-3009 승인으로 한 번만 요청하고, 판단·결제·감사 증거를 같은 purchaseId로
               기록하는 것을 확인했습니다. 제공자 호출과 정산은 모의 구성이며 실제 테스트넷 토큰
               전송은 실행하지 않습니다.

@@ -2,11 +2,11 @@
 
 > **최신 범위 축소:** 발표용 로컬 데모만 완료한다. 세 Mock Provider E2E, 예산 초과·402 불일치·중복 결제 방지, dashboard build·기본 lint만 재검증한다. Python 포함 완전한 outbound 계측, 과거 증거 광범위 zero-write 회귀, Mongo 실패 정리 추가 스트레스, 광범위 테스트 반복 및 추가 보안·성능 강화는 Known limitations/후속 과제다. 기존 리뷰 발견이 해결된 것은 아니다. 2026-09-10 사용자 승인으로 Coder를 Terra로 바꿔 재개했다. 실제 배포·결제·AWS는 실행하지 않는다. 작업 기준: `../.agent/DEMO_SCOPE.md`.
 
-> 2026-09-10: 이 문서의 아래 PBLC 구성·명령·실거래 결과는 **전환 전 역사 기록**이다. 현재 신규 흐름은 배포된 PBLC V2를 결제 조건으로 재사용한다. Provider/Facilitator는 Mock이며, 실제 AA snapshot은 서버 키와 정확한 catalog가 있을 때만 별도 확인한다. 실제 결제·AWS는 실행하지 않는다. 현재 상태는 [검증 기록](AEGIS_VERIFICATION.md), [구조도](AEGIS_ARCHITECTURE.md), `.agent/CURRENT_STATE.md`를 따른다.
+> 2026-09-10: 이 문서의 아래 PBLC 구성·명령·실거래 결과는 **전환 전 역사 기록**이다. 기존 PBLC V2는 타 지갑이 owner라 신규 지급 자산으로 재사용하지 않는다. 사용자 소유 PBLC 재배포는 [승인 패킷](PBLC_USER_TOKEN_PREPARATION.md)까지만 준비했으며, 실제 배포·민팅·결제·AWS는 실행하지 않는다. Provider/Facilitator는 Mock이고, 실 Provider 어댑터도 아직 연결하지 않았다. 현재 상태는 [검증 기록](AEGIS_VERIFICATION.md), [구조도](AEGIS_ARCHITECTURE.md), `.agent/CURRENT_STATE.md`를 따른다.
 
 ## 신규 AEGIS 로컬 인계 — 2026-09-09
 
-구매 요청은 `/request`, 감사 대시보드는 읽기 중심 `/`이다. 신규 실행은 기본적으로 AA fixture와 OpenAI·Claude·Gemini Mock Gateway, Mock Facilitator를 사용한다. `AA_API_KEY`와 정확한 catalog가 있으면 AA snapshot만 실제 API에서 읽을 수 있다. 결제 실행 모듈은 PBLC V2 조건으로 별도 프로세스의 임시 키를 사용해 ERC-3009 승인을 서명하지만 실제 블록체인 전송은 하지 않는다. 원문은 암호화해 분리 저장하고 내부 API 보호는 유지한다.
+구매 요청은 `/request`, 감사 대시보드는 읽기 중심 `/`이다. 신규 실행은 기본적으로 AA fixture와 OpenAI·Claude·Gemini Mock Gateway, Mock Facilitator를 사용한다. 현재 정확한 세 모델의 live AA mapping은 확인되지 않아 fixture를 유지한다. 결제 실행 모듈은 별도 프로세스의 임시 키로 ERC-3009 형식의 모의 승인을 서명하지만 실제 블록체인 전송은 하지 않는다. 원문은 암호화해 분리 저장하고 내부 API 보호는 유지한다.
 
 `npm run aegis:stack`은 별도의 임시 MongoDB와 로컬 서비스들을 시작한다. 출력된 Evidence API 주소를 대시보드의 `API_ORIGIN`으로 지정하고 대시보드는 허용 origin인 `127.0.0.1:3000`에서 실행한다. 이 runner가 소유한 임시 데이터는 정상 종료 때 정리된다. 기존 사용자 MongoDB에 연결하거나 그 기록을 수정하는 데 사용하지 않는다. 자세한 명령은 [README](../README.md)를 따른다.
 
@@ -16,9 +16,9 @@
 
 외부 게이트는 다음과 같이 분리한다.
 
-- 실제 AA 인증 API: `scripts/set_aa_api_key.sh`로 서버 키를 안전하게 설정하고 정확한 ID/slug catalog를 구성한 뒤에만 snapshot을 확인한다.
-- PBLC V2 실제 자산 이동·테스트넷 결제: 이미 배포된 계약을 재사용하되, 실제 전송은 별도 승인 전 수행하지 않는다.
-- 실제 Provider API: 이번 범위에서 연결하지 않는다.
+- 실제 AA 인증 API: 정확한 ID/slug mapping을 다시 확보한 뒤에만 snapshot을 확인한다. 현재 free endpoint에는 세 고정 모델의 exact mapping이 없다.
+- 사용자 소유 PBLC 배포·민팅·테스트넷 결제: [승인 패킷](PBLC_USER_TOKEN_PREPARATION.md)을 실행 직전 nonce·가스로 새로 산출하고 별도 승인 후에만 수행한다.
+- 실제 Provider API: 서버 전용 opt-in adapter와 호출 한도·오류 정책이 아직 구현되지 않았다.
 - AWS: 사용자가 아직 진행하지 않겠다고 명시했다. 배포하지 않는다. 공개 다중 사용자 접근 제어와 원문 보존 정책은 향후 별도 결정이다.
 
 ## 과거 PBLC 로컬 완료 범위 — 당시 구현 기록

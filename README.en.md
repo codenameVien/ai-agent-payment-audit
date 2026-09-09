@@ -84,6 +84,8 @@ Explicit priority wins; otherwise request wording selects the preset. Budget, ca
 
 There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 PBLC = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
 
+The current standard task reserves a maximum 8,000 output tokens before payment. Exact model IDs, seller recipients, rates, and short-request examples in the 0.01–0.04 PBLC range are documented in [model task pricing](docs/MODEL_TASK_PRICING.md).
+
 The data contract comes from [Artificial Analysis](https://artificialanalysis.ai/data-api/docs). Completion time is a benchmark reference, normally based on 500 answer tokens, not a completion guarantee. Invalid snapshots, missing required values, or failed exact mapping stop purchasing before payment.
 
 ## Audit and checks
@@ -108,7 +110,7 @@ The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION
 
 Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
 
-The new execution path reuses deployed PBLC V2 ERC-3009 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` on Base Sepolia (6 decimals) as its payment terms. The Facilitator remains Mock, so it does not move real assets. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping; run `bash scripts/set_aa_api_key.sh` locally rather than sharing a key in chat. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
+The Mock execution path uses deployed PBLC V2 ERC-3009 at `0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3` only as payment terms. Its owner is not a user wallet, so it is never used to mint. A user-owned PBLC contract needs the separate approval packet in [PBLC preparation](docs/PBLC_USER_TOKEN_PREPARATION.md) before deployment. The Facilitator remains Mock and moves no real assets. The AA free list does not currently contain exact mappings for the three selected Provider models, so AA evidence remains fixture data. **AWS deployment is not being performed.**
 
 The current local-run catalog maps recipients as OpenAI → seller1 `0xF00E…97a0`, Anthropic → seller2 `0xC774…26d8`, and Google → seller3 `0x5363…80E4`. The mapping is recorded in Mock payment terms, but the Mock Facilitator never transfers assets.
 

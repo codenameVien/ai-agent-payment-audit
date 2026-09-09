@@ -84,6 +84,8 @@ ok 5 - two concurrent runs of one purchase settle exactly once
 
 markup 없이 6-decimal 정수 단위로 올림합니다. 최대 출력량을 반영한 사전 고정 결제액이며 사용량 사후 정산이 아닙니다. **1 PBLC = 1 USD는 명목 환산이고 달러 담보·상환 약속이 아닙니다.**
 
+현재 표준 작업은 최대 출력 8,000 tokens를 결제 전에 고정합니다. 모델 ID·seller 수신 지갑·단가와 짧은 요청 기준 0.01~0.04 PBLC 예시는 [모델별 표준 작업 결제 조건](docs/MODEL_TASK_PRICING.md)을 참고하세요.
+
 데이터 계약 출처는 [Artificial Analysis](https://artificialanalysis.ai/data-api/docs)입니다. 완료시간은 기본 500 answer tokens 조건의 벤치마크 참고값이며 실제 완료 보장이 아닙니다. snapshot·정확한 mapping·필수 값 검증에 실패하면 결제 전 중단합니다.
 
 ## 감사와 검증
@@ -108,7 +110,7 @@ npm run build --workspace @pbl/dashboard
 
 과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다. [과거 증거와 인계](docs/HANDOFF.md)
 
-신규 실행은 이미 배포된 PBLC V2 ERC-3009 계약(`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 현재 Facilitator는 Mock이므로 실제 자산 이동·테스트넷 결제는 하지 않습니다. AA 실조회는 서버 키와 정확한 ID/slug mapping 검증이 필요한 외부 게이트입니다. Provider 실제 키는 연결하지 않습니다. **AWS 배포는 진행하지 않습니다.** 공개 접근 제어와 원문 보존 정책은 향후 배포 전에 별도로 결정합니다.
+신규 Mock 실행은 기존 PBLC V2 ERC-3009 계약(`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`, Base Sepolia, 6 decimals)을 결제 조건으로만 사용합니다. 기존 계약 owner는 사용자 지갑이 아니므로 민팅하지 않습니다. 실제 결제용 사용자 소유 PBLC 새 주소는 [준비 문서](docs/PBLC_USER_TOKEN_PREPARATION.md)의 별도 승인 패킷 뒤에만 배포할 수 있습니다. 현재 Facilitator는 Mock이므로 실제 자산 이동·테스트넷 결제는 하지 않습니다. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
 
 현재 로컬 실행 catalog의 수신 지갑은 OpenAI→seller1 `0xF00E…97a0`, Anthropic→seller2 `0xC774…26d8`, Google→seller3 `0x5363…80E4`로 설정했다. 이 매핑은 Mock 실행의 결제 조건에도 기록되지만, Mock Facilitator는 자산을 전송하지 않는다.
 
