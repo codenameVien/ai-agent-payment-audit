@@ -251,45 +251,121 @@ test("a settled purchase is delivered after a gateway and facilitator restart", 
   }
 });
 
-for (const [label, answer, expected] of [
-  [
-    "an unattributed payer",
-    { payer: undefined },
-    /does not name the payer/,
-  ],
-  [
-    "a foreign payer",
-    { payer: "0x00000000000000000000000000000000000bad01" },
-    /different payer/,
-  ],
-  [
-    "another network",
-    { network: "eip155:1" },
-    /different network/,
-  ],
-  [
-    "a different amount",
-    { amount: "1" },
-    /not the required amount/,
-  ],
-] as const) {
-  test(`a settlement success with ${label} is refused, not served`, async () => {
+interface MismatchCase {
+  label: string;
+  answer: Partial<{ payer: string | undefined; network: string; amount: string }>;
+  expected: RegExp;
+  /** What the durable record must show, taken from the answer, not from our expectations. */
+  recordedPayer: string | null | "signer";
+  recordedNetwork: string;
+  recordedAmount: string;
+}
+
+const MISMATCH_CASES: MismatchCase[] = [
+  {
+    label: "an unattributed payer",
+    answer: { payer: undefined },
+    expected: /did not name the payer/,
+    recordedPayer: null,
+    recordedNetwork: TEST_NETWORK,
+    recordedAmount: AMOUNT.toString(),
+  },
+  {
+    label: "a foreign payer",
+    answer: { payer: "0x00000000000000000000000000000000000bad01" },
+    expected: /payer this module did not authorize/,
+    recordedPayer: "0x00000000000000000000000000000000000bad01",
+    recordedNetwork: TEST_NETWORK,
+    recordedAmount: AMOUNT.toString(),
+  },
+  {
+    label: "another network",
+    answer: { network: "eip155:1" },
+    expected: /not the decided/,
+    recordedPayer: "signer",
+    recordedNetwork: "eip155:1",
+    recordedAmount: AMOUNT.toString(),
+  },
+  {
+    label: "a different amount",
+    answer: { amount: "1" },
+    expected: /facilitator settled 1/,
+    recordedPayer: "signer",
+    recordedNetwork: TEST_NETWORK,
+    recordedAmount: "1",
+  },
+];
+
+for (const { label, answer, expected, recordedPayer, recordedNetwork, recordedAmount } of
+  MISMATCH_CASES) {
+  test(`a settlement success with ${label} is unresolved, never a failure`, async () => {
     const facilitator = new MockFacilitator();
     const original = facilitator.settle.bind(facilitator);
-    // Only the answer is distorted; the authorization and the requirements are untouched.
+    // Only the answer is distorted; the authorization and the requirements are untouched,
+    // so this is a Facilitator that reports success while contradicting what it answered.
     facilitator.settle = async (context) => ({ ...(await original(context)), ...answer });
     const stack = await startStack({ facilitator });
     try {
       const gateway = await stack.newGateway();
-      const result = await stack
-        .newExecutor({ openai: gateway.url })
-        .execute({ purchaseId: PURCHASE, resourceBody: { prompt: "응답 대조 검증" } });
-      assert.notEqual(result.payment_status, "settled");
+      const executor = stack.newExecutor({ openai: gateway.url });
+      const result = await executor.execute({
+        purchaseId: PURCHASE,
+        resourceBody: { prompt: "응답 대조 검증" },
+      });
+
+      // Unresolved, not failed: the money may have moved.
+      assert.equal(result.payment_status, "unknown");
+      assert.equal(result.state, "RECONCILIATION_REQUIRED");
+      assert.match(String(result.provider_error), expected);
       assert.equal(stack.evidence.settlements.length, 0);
       assert.equal(stack.evidence.deliveries.length, 0);
-      assert.match(String(result.provider_error), expected);
+      // The reservation is retained: nothing was released as a confirmed non-payment.
+      assert.equal(stack.evidence.failures.length, 0);
+      assert.equal(stack.evidence.intents.get(PURCHASE)?.state, "RECONCILIATION_REQUIRED");
+
+      // The original answer is preserved durably, including the fields it omitted.
+      assert.equal(stack.evidence.ambiguous.length, 1);
+      const recorded = stack.evidence.ambiguous[0]!;
+      assert.equal(recorded.success, true);
+      assert.equal(recorded.network, recordedNetwork);
+      assert.equal(
+        recorded.payer,
+        recordedPayer === "signer" ? stack.signer.address.toLowerCase() : recordedPayer,
+      );
+      assert.equal(recorded.amount, recordedAmount);
+      assert.match(String(recorded.transaction), /^x402mock:/);
+      assert.match(String(recorded.mismatch_reason), expected);
+
+      // A retry neither signs, verifies, settles nor pays again.
+      const retried = await executor.execute({
+        purchaseId: PURCHASE,
+        resourceBody: { prompt: "응답 대조 재시도" },
+      });
+      assert.equal(retried.payment_status, "unknown");
+      assert.equal(stack.evidence.settlements.length, 0);
+      assert.equal(stack.evidence.failures.length, 0);
+      assert.equal(stack.evidence.ambiguous.length, 1);
     } finally {
       await stack.close();
     }
   });
 }
+
+test("a matching settlement keeps the Facilitator's own answer in the record", async () => {
+  const stack = await startStack();
+  try {
+    const gateway = await stack.newGateway();
+    const result = await stack
+      .newExecutor({ openai: gateway.url })
+      .execute({ purchaseId: PURCHASE, resourceBody: { prompt: "정상 응답 보존" } });
+    assert.equal(result.payment_status, "settled");
+    assert.equal(stack.evidence.settlements.length, 1);
+    const recorded = stack.evidence.settlements[0]!;
+    // The amount the Facilitator reported is stored, not only the one we expected.
+    assert.equal(recorded.facilitator_amount, AMOUNT.toString());
+    assert.equal(recorded.facilitator_payer, stack.signer.address.toLowerCase());
+    assert.equal(recorded.facilitator_network, TEST_NETWORK);
+  } finally {
+    await stack.close();
+  }
+});

@@ -842,6 +842,8 @@ class InternalAegisSettlementRequest(BaseModel):
     facilitator_transaction: str = Field(min_length=1)
     facilitator_network: str = Field(min_length=1)
     facilitator_payer: str = Field(min_length=1)
+    #: The amount the Facilitator itself reported, when it reported one.
+    facilitator_amount: str | None = None
 
 
 class InternalAegisFailureRequest(BaseModel):
@@ -849,6 +851,24 @@ class InternalAegisFailureRequest(BaseModel):
 
     purchase_id: str = Field(min_length=1)
     reason: str = Field(min_length=1)
+
+
+class InternalAegisAmbiguousSettlementRequest(BaseModel):
+    """A Facilitator success whose own fields contradict the terms it answers.
+
+    The answer is carried verbatim, including the fields it omitted, so the stored
+    evidence shows what arrived rather than what was expected.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    purchase_id: str = Field(min_length=1)
+    mismatch_reason: str = Field(min_length=1)
+    success: bool
+    network: str = Field(min_length=1)
+    transaction: str = Field(min_length=1)
+    payer: str | None = None
+    amount: str | None = None
 
 
 class InternalAegisDeliveryRequest(BaseModel):

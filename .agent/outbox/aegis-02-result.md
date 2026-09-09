@@ -48,6 +48,7 @@
 9. **재시작 후 결제 완료 재요청(P2)** — 예약 상태가 SETTLED면 실행 모듈은 서명·verify·settle 없이 결과만 회수한다. Gateway와 Facilitator를 모두 새 인스턴스로 교체한 회귀 `a settled purchase is delivered after a gateway and facilitator restart`에서 settle 수는 1로 유지된다.
 10. **Facilitator 성공 응답 대조(P2)** — Gateway와 실행 모듈 모두 success 응답의 payer/network/제공된 amount/reference를 요구 조건과 정확히 대조한다. payer 누락은 서명자 주소로 채우지 않고 미확인으로 처리해 reconciliation으로 보낸다. 회귀 4건(payer 누락·다른 payer·다른 network·다른 금액) 모두 settle 0건.
 11. **SIGKILL 후 종료 확인(P2)** — `stopAll`이 SIGKILL 이후에도 실제 exit를 기다리고 결과를 반환하며, 확인 실패 시 dbpath를 삭제하지 않고 보존을 알린다.
+12. **모순된 success를 실패로 확정하던 문제(P1, 같은 범주 두 번째 수정)** — Gateway가 `success:true`를 `success:false`로 바꿔 402로 내려보내면 실행 모듈이 fail로 처리해 예약을 해제했다. 이제 Gateway는 응답을 그대로 전달하고 불일치를 별도 신호로 HTTP 409에 실어 보낸다. 실행 모듈은 신규 `POST /internal/evidence/aegis/payments/ambiguous`로 **예약을 유지한 채**(`reservation_action=hold`) `PAYMENT_RECONCILIATION_REQUIRED`를 기록하고, 외부 응답의 success/network/payer/amount/transaction을 `facilitatorResponse`에 원문 그대로(누락 필드는 null로) 보존한다. 정상 정산도 동일한 `facilitatorResponse`를 남기고, 응답 amount가 예약 금액과 다르면 서버가 거부한다. payer 누락을 서명자 주소로 채우지 않는다.
 
 ## 설계 판단
 
@@ -62,13 +63,15 @@
 명령과 결과(모두 로컬):
 
 - `npm run lint` — ruff, mypy(58 files), seller-service/commerce-gateway/dashboard tsc 통과
-- `npm test` — Python 454 passed / 9 skipped(mongo), seller-service 30/30, commerce-gateway 119/119, schema 8 pricing cases 일치, Foundry 26/26
+- `npm test` — Python 458 passed / 11 deselected(mongo), seller-service 30/30, commerce-gateway 120/120, schema 8 pricing cases 일치, Foundry 26/26
 - `npm run test:mongo:local` — 11 passed(실제 격리 mongod)
 - `npm run aegis:smoke` — 8/8. 실제 MongoDB + 6개 프로세스. 세 provider E2E, 동시 중복 1회 정산, 결제 완료 후 재실행 무재결제, 미인증 401, Phase 6 404, cross-site 403
 - `node --test scripts/aegis_local_stack.test.mjs` — 4/4 runner 소유권 경계
 - `npm test --workspace @pbl/dashboard` 4/4, `npm run build --workspace @pbl/dashboard` 성공
 
-주요 negative 검증: 402 금액 변조 거부, 결정 조건과 다른 payload 거부, 잘못된 서명·payer 거부, nonce 재사용 거부, 동시 서로 다른 authorization 1회만 성공, 잘못 라우팅된 provider 409, 타임아웃 시 재결제 없이 reconciliation, 정산 후 provider 실패 시 재결제 없음, terminal 구매 재결제 없음, 안전정수 초과 금액 거부, 증거·결과·로그에 키 미노출.
+주요 negative 검증: 402 금액 변조 거부, 결정 조건과 다른 payload 거부, 잘못된 서명·payer 거부, nonce 재사용 거부, 동시 서로 다른 authorization 1회만 성공, 같은 purchase 다른 nonce 거부, 재시작 후 result-only 회수, 잘못 라우팅된 provider 409, 타임아웃 시 재결제 없이 reconciliation, 정산 후 provider 실패 시 재결제 없음, terminal 구매 재결제 없음, 안전정수 초과 금액 거부, 증거·결과·로그에 키 미노출.
+
+모순된 Facilitator success 4가지(payer 누락·다른 payer·다른 network·다른 amount)는 TS와 Python 양쪽에서 각각 회귀로 덮었다: 상태는 `RECONCILIATION_REQUIRED`, 예약 `reserved_units`는 그대로 유지, `spent_units`는 0, `PAYMENT_SETTLED`/`PAYMENT_FAILED` 없음, 재시도에서 추가 서명·verify·settle 없음, `facilitatorResponse` 원문 보존.
 
 ## 남은 게이트와 한계
 

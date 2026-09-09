@@ -225,6 +225,7 @@ export class AegisEvidenceClient {
     facilitatorTransaction: string;
     facilitatorNetwork: string;
     facilitatorPayer: string;
+    facilitatorAmount?: string;
   }): Promise<AegisPaymentIntentView> {
     return toIntent(
       await this.#post<RawIntent>("/internal/evidence/aegis/payments/settle", {
@@ -232,6 +233,36 @@ export class AegisEvidenceClient {
         facilitator_transaction: args.facilitatorTransaction,
         facilitator_network: args.facilitatorNetwork,
         facilitator_payer: args.facilitatorPayer,
+        facilitator_amount: args.facilitatorAmount ?? null,
+      }),
+    );
+  }
+
+  /**
+   * Park a Facilitator success that contradicts the terms it answers.
+   *
+   * The original answer is stored verbatim by the Evidence API, including the fields the
+   * Facilitator omitted, and the reservation is kept: this is an unresolved payment, not
+   * a confirmed non-payment.
+   */
+  async recordAmbiguousSettlement(args: {
+    purchaseId: string;
+    mismatchReason: string;
+    success: boolean;
+    network: string;
+    transaction: string;
+    payer: string | null;
+    amount: string | null;
+  }): Promise<AegisPaymentIntentView> {
+    return toIntent(
+      await this.#post<RawIntent>("/internal/evidence/aegis/payments/ambiguous", {
+        purchase_id: args.purchaseId,
+        mismatch_reason: args.mismatchReason,
+        success: args.success,
+        network: args.network,
+        transaction: args.transaction,
+        payer: args.payer,
+        amount: args.amount,
       }),
     );
   }

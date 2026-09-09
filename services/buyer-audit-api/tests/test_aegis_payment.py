@@ -346,6 +346,182 @@ def test_a_settled_purchase_is_never_paid_or_failed_again(
         assert len([item for item in events if item["type"] == EventType.PAYMENT_SETTLED]) == 1
 
 
+def _authorized(client: TestClient, purchase_id: str) -> None:
+    client.post(
+        "/internal/evidence/aegis/payments/reserve",
+        json={"purchase_id": purchase_id},
+        headers=INTERNAL_HEADERS,
+    )
+    client.post(
+        "/internal/evidence/payment-intents/authorize",
+        json={
+            "purchase_id": purchase_id,
+            "authorization_hash": "0x" + "ab" * 32,
+            "signature": "0x" + "cd" * 65,
+        },
+        headers=INTERNAL_HEADERS,
+    )
+
+
+def _wallet_policy(container: AppContainer) -> WalletPolicy:
+    async def read() -> WalletPolicy | None:
+        return await PaymentService(
+            repository=container.repository, clock=container.clock
+        ).get_wallet_policy(
+            buyer_wallet_address=BUYER_WALLET,
+            policy_date=container.clock.now().date().isoformat(),
+            token=TOKEN_ADDRESS,
+        )
+
+    policy = asyncio.run(read())
+    assert policy is not None
+    return policy
+
+
+@pytest.mark.parametrize(
+    ("answer", "reason"),
+    [
+        ({"payer": None}, "facilitator settlement did not name the payer it debited"),
+        (
+            {"payer": "0x00000000000000000000000000000000000bad01"},
+            "facilitator settlement names a payer this module did not authorize",
+        ),
+        ({"network": "eip155:1"}, "facilitator settled on eip155:1"),
+        ({"amount": "1"}, "facilitator settled 1, not the decided 619"),
+    ],
+)
+def test_a_contradictory_success_is_parked_with_its_original_answer(
+    runtime_container: AppContainer, answer: dict[str, object], reason: str
+) -> None:
+    """A success that contradicts its own terms is unresolved, and it holds the budget.
+
+    Recording it as a failure would release the reservation for a payment that may already
+    have happened, so the intent stops at reconciliation and the external answer is kept
+    exactly as it arrived.
+    """
+    asyncio.run(_bind_wallet(runtime_container))
+    with TestClient(create_app(runtime_container)) as client:
+        purchase_id = _decided(client)
+        _authorized(client, purchase_id)
+        reserved = _wallet_policy(runtime_container)
+        assert reserved.reserved_units == OPENAI_AMOUNT_UNITS
+
+        body = {
+            "purchase_id": purchase_id,
+            "mismatch_reason": reason,
+            "success": True,
+            "network": "eip155:84532",
+            "transaction": "x402mock:11112222333344445555666677778888",
+            "payer": BUYER_WALLET,
+            "amount": str(OPENAI_AMOUNT_UNITS),
+            **answer,
+        }
+        parked = client.post(
+            "/internal/evidence/aegis/payments/ambiguous",
+            json=body,
+            headers=INTERNAL_HEADERS,
+        )
+        assert parked.status_code == 200, parked.text
+        assert parked.json()["state"] == "RECONCILIATION_REQUIRED"
+
+        events = client.get(f"/purchases/{purchase_id}/events").json()
+        recorded = next(
+            item
+            for item in events
+            if item["type"] == EventType.PAYMENT_RECONCILIATION_REQUIRED
+        )
+        response = recorded["payload"]["facilitatorResponse"]
+        # The answer is preserved verbatim, including what it failed to say.
+        assert response["success"] is True
+        assert response["network"] == body["network"]
+        assert response["payer"] == (
+            None if body["payer"] is None else str(body["payer"]).lower()
+        )
+        assert response["amount"] == body["amount"]
+        assert response["transaction"] == body["transaction"]
+        assert recorded["payload"]["mismatchReason"] == reason
+        assert recorded["payload"]["verificationBasis"] == "facilitator_response"
+        assert recorded["payload"]["executionMode"] == "mock"
+
+        # The reservation is still held, and no terminal outcome was written.
+        held = _wallet_policy(runtime_container)
+        assert held.reserved_units == OPENAI_AMOUNT_UNITS
+        assert held.spent_units == 0
+        assert not [
+            item
+            for item in events
+            if item["type"] in {EventType.PAYMENT_SETTLED, EventType.PAYMENT_FAILED}
+        ]
+
+        # A retry of the same answer is idempotent; nothing may settle or fail afterwards.
+        assert (
+            client.post(
+                "/internal/evidence/aegis/payments/ambiguous",
+                json=body,
+                headers=INTERNAL_HEADERS,
+            ).status_code
+            == 200
+        )
+        assert (
+            client.post(
+                "/internal/evidence/aegis/payments/settle",
+                json=_settle_body(purchase_id),
+                headers=INTERNAL_HEADERS,
+            ).status_code
+            == 409
+        )
+        assert (
+            client.post(
+                "/internal/evidence/aegis/payments/fail",
+                json={"purchase_id": purchase_id, "reason": "late refusal"},
+                headers=INTERNAL_HEADERS,
+            ).status_code
+            == 409
+        )
+
+
+def test_a_settlement_records_the_amount_the_facilitator_reported(
+    runtime_container: AppContainer,
+) -> None:
+    asyncio.run(_bind_wallet(runtime_container))
+    with TestClient(create_app(runtime_container)) as client:
+        purchase_id = _decided(client)
+        _authorized(client, purchase_id)
+        settled = client.post(
+            "/internal/evidence/aegis/payments/settle",
+            json=_settle_body(purchase_id, facilitator_amount=str(OPENAI_AMOUNT_UNITS)),
+            headers=INTERNAL_HEADERS,
+        )
+        assert settled.status_code == 200, settled.text
+        events = client.get(f"/purchases/{purchase_id}/events").json()
+        payload = next(
+            item for item in events if item["type"] == EventType.PAYMENT_SETTLED
+        )["payload"]
+        assert payload["facilitatorResponse"] == {
+            "amount": str(OPENAI_AMOUNT_UNITS),
+            "network": "eip155:84532",
+            "payer": BUYER_WALLET,
+            "success": True,
+            "transaction": "x402mock:11112222333344445555666677778888",
+        }
+
+
+def test_a_settlement_amount_that_is_not_the_reserved_amount_is_refused(
+    runtime_container: AppContainer,
+) -> None:
+    asyncio.run(_bind_wallet(runtime_container))
+    with TestClient(create_app(runtime_container)) as client:
+        purchase_id = _decided(client)
+        _authorized(client, purchase_id)
+        refused = client.post(
+            "/internal/evidence/aegis/payments/settle",
+            json=_settle_body(purchase_id, facilitator_amount="1"),
+            headers=INTERNAL_HEADERS,
+        )
+        assert refused.status_code == 409
+        assert "not the reserved" in refused.json()["detail"]
+
+
 def test_delivery_requires_a_settled_payment_and_the_decided_model(
     runtime_container: AppContainer,
 ) -> None:

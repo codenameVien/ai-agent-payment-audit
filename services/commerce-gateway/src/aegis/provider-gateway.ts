@@ -83,6 +83,13 @@ export interface ProviderGatewayOptions {
   tokenVersion?: string;
 }
 
+/** A Facilitator answer together with the reason it cannot be acted on, if any. */
+export interface SettlementOutcome {
+  settlement: AegisSettlementResponse;
+  /** Set when the answer claims success but contradicts the terms it answers. */
+  mismatch: string | null;
+}
+
 export class ProviderGateway {
   readonly #providerId: string;
   readonly #provider: MockProvider;
@@ -267,9 +274,9 @@ export class ProviderGateway {
   async #settle(
     purchaseId: string,
     context: { paymentPayload: AegisPaymentPayload; paymentRequirements: AegisPaymentRequirements },
-  ): Promise<AegisSettlementResponse> {
+  ): Promise<SettlementOutcome> {
     const known = this.#settlements.get(purchaseId);
-    if (known !== undefined) return known;
+    if (known !== undefined) return { settlement: known, mismatch: null };
     const verified = await this.#facilitator<{
       isValid: boolean;
       payer?: string;
@@ -277,26 +284,27 @@ export class ProviderGateway {
     }>("/verify", context);
     if (verified.isValid !== true || typeof verified.payer !== "string") {
       return {
-        success: false,
-        transaction: "",
-        network: context.paymentRequirements.network,
-        errorReason: verified.invalidReason ?? "facilitator rejected the payment",
+        settlement: {
+          success: false,
+          transaction: "",
+          network: context.paymentRequirements.network,
+          errorReason: verified.invalidReason ?? "facilitator rejected the payment",
+        },
+        mismatch: null,
       };
     }
     const settled = await this.#facilitator<AegisSettlementResponse>("/settle", context);
-    if (settled.success !== true) return settled;
+    if (settled.success !== true) return { settlement: settled, mismatch: null };
     const refusal = settlementMismatch(settled, context);
     if (refusal !== null) {
-      // A success we cannot match to what we asked for is not a settlement we will serve
-      // a result against, and the original answer is preserved in the reason.
-      return {
-        ...settled,
-        success: false,
-        errorReason: refusal,
-      };
+      // A success we cannot match to what we asked for is not a refusal either. Money may
+      // have moved, so the answer is passed on unchanged - rewriting `success` to false
+      // here would make the buyer treat a possible payment as a confirmed non-payment and
+      // release the reservation for a second one.
+      return { settlement: settled, mismatch: refusal };
     }
     this.#settlements.set(purchaseId, settled);
-    return settled;
+    return { settlement: settled, mismatch: null };
   }
 
   async handle(request: Request): Promise<Response> {
@@ -393,8 +401,17 @@ export class ProviderGateway {
       });
     }
 
-    const settlement = await this.#settle(purchaseId, context);
+    const { settlement, mismatch } = await this.#settle(purchaseId, context);
     const paymentResponse = { "PAYMENT-RESPONSE": encodeHeader(settlement) };
+    if (mismatch !== null) {
+      // 409, not 402: a payment refusal and an unresolved payment are different facts,
+      // and only the first one may release the buyer's reservation.
+      return json(
+        { error: mismatch, settlementMismatch: mismatch, settlementAmbiguous: true },
+        409,
+        paymentResponse,
+      );
+    }
     if (settlement.success !== true) {
       return json(
         { error: settlement.errorReason ?? "payment settlement failed" },

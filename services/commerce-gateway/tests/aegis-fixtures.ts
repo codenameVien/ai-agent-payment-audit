@@ -174,6 +174,8 @@ export interface EvidenceApiDouble {
   settlements: Record<string, unknown>[];
   failures: Record<string, unknown>[];
   reconciliations: Record<string, unknown>[];
+  /** Contradictory Facilitator successes, recorded with their original answer. */
+  ambiguous: Record<string, unknown>[];
   budgetUnits: number;
 }
 
@@ -193,6 +195,7 @@ export async function startEvidenceApiDouble(args: {
     settlements: [],
     failures: [],
     reconciliations: [],
+    ambiguous: [],
     budgetUnits: 1_000_000,
   };
 
@@ -321,6 +324,17 @@ export async function startEvidenceApiDouble(args: {
       if (url.pathname === "/internal/evidence/payment-intents/reconciliation") {
         intent.state = "RECONCILIATION_REQUIRED";
         state.reconciliations.push({ purchaseId, ...body });
+        send(200, intent);
+        return;
+      }
+      if (url.pathname === "/internal/evidence/aegis/payments/ambiguous") {
+        if (intent.state !== "AUTHORIZED" && intent.state !== "RECONCILIATION_REQUIRED") {
+          send(409, { detail: "payment cannot enter reconciliation from this state" });
+          return;
+        }
+        intent.state = "RECONCILIATION_REQUIRED";
+        // The reservation is held: this double records no budget release here either.
+        state.ambiguous.push({ purchaseId, ...body });
         send(200, intent);
         return;
       }

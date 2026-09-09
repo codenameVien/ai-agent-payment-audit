@@ -103,10 +103,15 @@ export function settlementAnswerMismatch(
   settlement: AegisSettlementResponse,
   expected: { network: string; payer: string; amountUnits: bigint },
 ): string | null {
+  if (typeof settlement.payer !== "string" || settlement.payer.length === 0) {
+    // Never substituted with the address we signed with: an answer that names no payer
+    // verified no payer.
+    return "facilitator settlement did not name the payer it debited";
+  }
   if (settlement.network !== expected.network) {
     return `facilitator settled on ${settlement.network}, not the decided ${expected.network}`;
   }
-  if ((settlement.payer ?? "").toLowerCase() !== expected.payer.toLowerCase()) {
+  if (settlement.payer.toLowerCase() !== expected.payer.toLowerCase()) {
     return "facilitator settlement names a payer this module did not authorize";
   }
   if (settlement.amount !== undefined && settlement.amount !== expected.amountUnits.toString()) {
@@ -369,29 +374,23 @@ export class AegisPaymentExecutor {
     }
 
     if (settlement?.success === true) {
-      const payer = settlement.payer;
-      if (typeof payer !== "string" || payer.length === 0) {
-        // An unattributed success is not proof this purchase was debited, and inventing
-        // the payer we expected would record an attribution nobody verified.
-        intent = await this.#evidence.requireReconciliation(
-          args.purchaseId,
-          "facilitator settlement did not name the payer it debited",
-        );
-        return this.#result({
-          derived,
-          intent,
-          status: "unknown",
-          settlement,
-          providerError: "facilitator settlement did not name the payer it debited",
-        });
-      }
       const mismatch = settlementAnswerMismatch(settlement, {
         network: this.#network,
         payer: this.#signer.address,
         amountUnits: derived.amountUnits,
       });
       if (mismatch !== null) {
-        intent = await this.#evidence.requireReconciliation(args.purchaseId, mismatch);
+        // A success that contradicts itself may still have moved money. It is recorded
+        // as unresolved, with the answer preserved verbatim, and the reservation is kept.
+        intent = await this.#evidence.recordAmbiguousSettlement({
+          purchaseId: args.purchaseId,
+          mismatchReason: mismatch,
+          success: settlement.success,
+          network: settlement.network,
+          transaction: settlement.transaction,
+          payer: settlement.payer ?? null,
+          amount: settlement.amount ?? null,
+        });
         return this.#result({
           derived,
           intent,
@@ -400,11 +399,13 @@ export class AegisPaymentExecutor {
           providerError: mismatch,
         });
       }
+      const payer = settlement.payer!;
       intent = await this.#evidence.settle({
         purchaseId: args.purchaseId,
         facilitatorTransaction: settlement.transaction,
         facilitatorNetwork: settlement.network,
         facilitatorPayer: payer,
+        ...(settlement.amount === undefined ? {} : { facilitatorAmount: settlement.amount }),
       });
       if (paid.status !== 200) {
         // Paid, not delivered. The payment stays settled and is never repeated.

@@ -32,6 +32,7 @@ from buyer_audit_api.api.schemas import (
     EventResponse,
     EvidenceHeadResponse,
     ExternalAnchorRequest,
+    InternalAegisAmbiguousSettlementRequest,
     InternalAegisDeliveryRequest,
     InternalAegisFailureRequest,
     InternalAegisSettlementRequest,
@@ -2164,6 +2165,7 @@ def create_app(container: AppContainer) -> FastAPI:
                 facilitator_transaction=body.facilitator_transaction,
                 facilitator_network=body.facilitator_network,
                 facilitator_payer=body.facilitator_payer,
+                facilitator_amount=body.facilitator_amount,
             )
         except (
             PaymentEvidenceError,
@@ -2187,6 +2189,39 @@ def create_app(container: AppContainer) -> FastAPI:
             intent = await aegis_payments.fail(
                 purchase_id=body.purchase_id,
                 reason=body.reason,
+            )
+        except (
+            PaymentEvidenceError,
+            PaymentPolicyError,
+            PaymentConflictError,
+            EvidenceTransitionError,
+        ) as exc:
+            raise payment_error(exc) from exc
+        return _payment_intent_response(intent)
+
+    @app.post(
+        "/internal/evidence/aegis/payments/ambiguous",
+        response_model=PaymentIntentResponse,
+    )
+    async def record_ambiguous_aegis_settlement(
+        body: InternalAegisAmbiguousSettlementRequest,
+        authorization: str | None = Header(default=None),
+    ) -> PaymentIntentResponse:
+        """A contradictory success is parked with its original answer, never failed.
+
+        The reservation is deliberately kept: the attempt may or may not have moved money,
+        and releasing the budget would let a second payment be made for the same purchase.
+        """
+        require_internal(authorization)
+        try:
+            intent = await aegis_payments.record_ambiguous_settlement(
+                purchase_id=body.purchase_id,
+                mismatch_reason=body.mismatch_reason,
+                success=body.success,
+                network=body.network,
+                transaction=body.transaction,
+                payer=body.payer,
+                amount=body.amount,
             )
         except (
             PaymentEvidenceError,

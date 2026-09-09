@@ -55,6 +55,28 @@ MOCK_EXECUTION_MODE = "mock"
 EXECUTION_MODES = frozenset({MOCK_EXECUTION_MODE, "live"})
 
 
+def facilitator_response_payload(
+    *,
+    success: bool,
+    network: str,
+    transaction: str,
+    payer: str | None,
+    amount: str | None,
+) -> JsonObject:
+    """The external answer exactly as it arrived, including what it failed to say.
+
+    Absent fields stay `null` instead of being filled in from what we expected, because a
+    Facilitator that did not name a payer or an amount did not verify one.
+    """
+    return {
+        "amount": amount,
+        "network": network,
+        "payer": payer,
+        "success": success,
+        "transaction": transaction,
+    }
+
+
 def caip2_network(chain_id: int) -> str:
     """The CAIP-2 identifier of the chain the decision priced this purchase against."""
     return f"eip155:{chain_id}"
@@ -364,6 +386,7 @@ class AegisPaymentService:
         facilitator_transaction: str,
         facilitator_network: str,
         facilitator_payer: str,
+        facilitator_amount: str | None = None,
     ) -> PaymentIntent:
         """Record the Facilitator's success answer as the payment status basis.
 
@@ -391,6 +414,11 @@ class AegisPaymentService:
             )
         if payer != intent.buyer_wallet_address:
             raise PaymentEvidenceError("facilitator payer is not the bound buyer wallet")
+        if facilitator_amount is not None and facilitator_amount != str(intent.amount_units):
+            raise PaymentEvidenceError(
+                f"facilitator settled {facilitator_amount}, not the reserved "
+                f"{intent.amount_units}"
+            )
         outcome_key = terminal_outcome_key(purchase_id)
         payload: JsonObject = {
             "amountUnits": intent.amount_units,
@@ -398,6 +426,15 @@ class AegisPaymentService:
             "executionMode": self._execution_mode,
             "facilitatorNetwork": network,
             "facilitatorPayer": payer,
+            # The original answer is preserved beside the derived fields, so an audit can
+            # always see what the Facilitator actually said rather than our reading of it.
+            "facilitatorResponse": facilitator_response_payload(
+                success=True,
+                network=network,
+                transaction=reference,
+                payer=payer,
+                amount=facilitator_amount,
+            ),
             "settlementReference": reference,
             "terminalOutcomeKey": outcome_key,
             "termsBindingHash": terms.terms_binding_hash,
@@ -442,6 +479,83 @@ class AegisPaymentService:
 
     async def fail(self, *, purchase_id: str, reason: str) -> PaymentIntent:
         """Record a rejected attempt and release the reservation, once and for all."""
+        return await self._fail(purchase_id=purchase_id, reason=reason)
+
+    async def record_ambiguous_settlement(
+        self,
+        *,
+        purchase_id: str,
+        mismatch_reason: str,
+        success: bool,
+        network: str,
+        transaction: str,
+        payer: str | None,
+        amount: str | None,
+    ) -> PaymentIntent:
+        """Park an attempt whose Facilitator answer contradicts the terms it answers.
+
+        A success that names the wrong amount, network or payer - or names no payer at
+        all - is not evidence that nothing happened. Money may well have moved, so this is
+        neither a settlement nor a failure: the reservation is **held**, the purchase
+        leaves the authorized state only towards reconciliation, and the original answer is
+        stored verbatim next to the reason it was refused. Recording it as a failure would
+        release the budget for a payment that may already have been made.
+        """
+        reason = mismatch_reason.strip()
+        if not reason:
+            raise PaymentEvidenceError("a mismatch reason is required")
+        terms, intent, events = await self._transition_context(purchase_id)
+        response = facilitator_response_payload(
+            success=success,
+            network=network.strip(),
+            transaction=transaction.strip(),
+            payer=None if payer is None else payer.strip().lower(),
+            amount=None if amount is None else amount.strip(),
+        )
+        payload: JsonObject = {
+            "evidenceSource": EvidenceSource.SYNTHETIC_LOCAL.value,
+            "executionMode": self._execution_mode,
+            "facilitatorResponse": response,
+            "mismatchReason": reason,
+            "reason": reason,
+            "termsBindingHash": terms.terms_binding_hash,
+            "verificationBasis": FACILITATOR_VERIFICATION_BASIS,
+        }
+        if intent.state is PaymentIntentState.RECONCILIATION_REQUIRED:
+            recorded = next(
+                (
+                    event
+                    for event in events
+                    if event.type == EventType.PAYMENT_RECONCILIATION_REQUIRED
+                ),
+                None,
+            )
+            if recorded is not None and recorded.payload == payload:
+                return intent
+            raise PaymentConflictError("payment is already parked with a different answer")
+        if intent.state in TERMINAL_PAYMENT_INTENT_STATES:
+            raise PaymentConflictError("payment already has a terminal outcome")
+        if intent.state is not PaymentIntentState.AUTHORIZED:
+            raise PaymentConflictError("payment cannot enter reconciliation from this state")
+        return await self._repository.transition_payment_intent(
+            next_intent=replace(
+                intent,
+                state=PaymentIntentState.RECONCILIATION_REQUIRED,
+                reconciliation_reason=reason,
+            ),
+            expected_states=(PaymentIntentState.AUTHORIZED,),
+            event_type=EventType.PAYMENT_RECONCILIATION_REQUIRED,
+            occurred_at=self._clock.now(),
+            actor={"id": "payment-executor", "type": "service"},
+            payload=payload,
+            evidence_refs=(terms.decision_event_hash, terms.terms_binding_hash),
+            expected_event_count=len(events),
+            expected_head_event_hash=events[-1].event_hash,
+            # The budget stays reserved: an ambiguous attempt must not free it for another.
+            reservation_action="hold",
+        )
+
+    async def _fail(self, *, purchase_id: str, reason: str) -> PaymentIntent:
         normalized_reason = reason.strip()
         if not normalized_reason:
             raise PaymentEvidenceError("failure reason is required")
