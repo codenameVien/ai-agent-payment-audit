@@ -111,6 +111,17 @@ ensureEphemeralServiceToken(env, "ADMIN_SERVICE_TOKEN");
 ensureEphemeralServiceToken(env, "GATEWAY_SERVICE_TOKEN");
 const facilitatorUrl = httpsUrl(required(env, "AEGIS_FACILITATOR_URL"), "AEGIS_FACILITATOR_URL");
 
+// The user can keep an AA key configured for later, but this demo has no verified
+// exact live catalog for its three fixed model IDs.  Preserve the fail-closed AA rule
+// by selecting the checked-in fixture for this runner rather than starting a partial
+// live capture that would block before a purchase can be audited.
+const liveAaCatalog = env.AA_MODEL_CATALOG_PATH?.trim();
+const aaMode = liveAaCatalog ? "live-catalog" : "fixture";
+if (!liveAaCatalog) {
+  env.AA_API_KEY = "";
+  env.AA_MODEL_CATALOG_PATH = "";
+}
+
 const apiPort = port(env, "AEGIS_API_PORT", "8100");
 const executorPort = port(env, "AEGIS_EXECUTOR_PORT", "8094");
 const gatewayPorts = {
@@ -225,6 +236,7 @@ try {
     payer: buyerWalletAddress,
     token: env.PBLC_TOKEN_ADDRESS,
     providerOutput: "mock",
+    aaMode,
     note: "A PBLC transfer can occur only after a user submits one consented request.",
   }, null, 2)}\n`);
 } catch (error) {

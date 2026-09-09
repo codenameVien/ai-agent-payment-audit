@@ -28,6 +28,8 @@
    ```bash
    npm run aegis:local-crypto:setup
    ```
+
+   AA API 키가 이미 있어도, 세 고정 모델의 정확한 live catalog(`AA_MODEL_CATALOG_PATH`)가 없으면 live runner는 이 실행에 한해 fixture AA를 사용한다. 키를 지우거나 수정하지 않으며, 결제 전에 불완전한 live AA 데이터를 섞지 않기 위한 동작이다.
 2. 읽기 전용 점검을 실행한다.
 
    ```bash
