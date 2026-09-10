@@ -1,25 +1,25 @@
 {
-  "catalog_version": "aegis-runtime-2026-09-09",
+  "catalog_version": "aegis-runtime-standard-task-v1",
   "entries": [
     {
       "provider_id": "openai",
-      "provider_model_id": "gpt-4.1-2025-04-14",
+      "provider_model_id": "gpt-4.1-mini-2025-04-14",
       "model_version": "2025-04-14",
       "aa_model_id": "fixture-aa-openai-alpha",
       "aa_slug": "fixture-aa-openai-alpha",
-      "display_name": "OpenAI GPT-4.1 (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a001",
+      "display_name": "OpenAI GPT-4.1 mini (Mock Provider, AA fixture)",
+      "recipient": "0xF00E8e0ecEF3B405250242F932849edB409497a0",
       "capabilities": ["korean", "reasoning"],
       "mapping_provenance": "fixture"
     },
     {
       "provider_id": "anthropic",
-      "provider_model_id": "claude-sonnet-5",
-      "model_version": "claude-sonnet-5",
+      "provider_model_id": "claude-haiku-4-5-20251001",
+      "model_version": "2025-10-01",
       "aa_model_id": "fixture-aa-anthropic-beta",
       "aa_slug": "fixture-aa-anthropic-beta",
-      "display_name": "Anthropic Claude Sonnet 5 (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a002",
+      "display_name": "Anthropic Claude Haiku 4.5 (Mock Provider, AA fixture)",
+      "recipient": "0xC77492d3AD5c97B09C6529284e71c417Be8926d8",
       "capabilities": ["korean", "reasoning", "vision"],
       "mapping_provenance": "fixture"
     },
@@ -29,8 +29,8 @@
       "model_version": "gemini-2.5-flash",
       "aa_model_id": "fixture-aa-google-gamma",
       "aa_slug": "fixture-aa-google-gamma",
-      "display_name": "Google Gemini 2.5 Flash (Mock Provider, synthetic AA fixture)",
-      "recipient": "0x000000000000000000000000000000000000a003",
+      "display_name": "Google Gemini 2.5 Flash (Mock Provider, AA fixture)",
+      "recipient": "0x5363903850f7AD4bF5FdbceFe9769A9e5b7080E4",
       "capabilities": ["korean"],
       "mapping_provenance": "fixture"
     }

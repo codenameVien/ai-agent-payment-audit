@@ -1,10 +1,10 @@
 [한국어](README.md) | [English](README.en.md)
 
-# AEGIS — AI 모델 구매와 감사
+# PBLC V2 — AI 모델 구매와 감사
 
 ## 왜 만들었나
 
-사용자 요청에 맞춰 구매 에이전트가 모델을 비교하고, 고정 가격 결제 요청과 결과를 같은 `purchaseId`로 연결하는 시스템입니다. 발표용 단일 사용자 로컬 데모의 핵심 검증을 완료했습니다. 실제 API·온체인 결제·공개 서비스 완성을 뜻하지 않습니다. 완료·미완료 범위는 [검증 기록](docs/AEGIS_VERIFICATION.md)을 확인하세요.
+사용자 요청에 맞춰 구매 에이전트가 모델을 비교하고, PBLC 고정 가격 결제 요청과 결과를 같은 `purchaseId`로 연결하는 시스템입니다. 기본은 Mock 로컬 데모이고, 명시 동의로만 Base Sepolia PBLC 실제 결제를 시도할 수 있습니다. Provider 결과는 계속 Mock이며, 실제 유료 모델 호출·AWS 배포는 포함하지 않습니다.
 
 ## 주요 기능
 
@@ -18,7 +18,7 @@ flowchart LR
   R --> B[구매 에이전트]
   B --> P[결제 실행 모듈 · 키 격리]
   P --> G[세 Provider Mock Gateway]
-  G --> F[Mock Facilitator]
+  G --> F[Facilitator\nMock 또는 외부 x402]
   G -->|결과| B
   B -->|결과| R
   B --> E[감사 증거 기록 API]
@@ -31,7 +31,7 @@ flowchart LR
 
 OpenAI·Anthropic Claude·Google Gemini Gateway는 선택된 모델의 결과를 반환하는 일반 코드입니다. 구매 에이전트가 요청 분석, AA 데이터 조회, 가격 계산, 필터·비교·선택을 담당합니다. 별도 프로세스의 **결제 실행 모듈**이 키를 격리하고 x402 v2 exact + ERC-3009 승인에 서명하며, Gateway가 Facilitator의 verify/settle 확인 후 결과를 제공합니다.
 
-현재 Provider와 Facilitator는 모두 Mock이고 AA 수치는 synthetic fixture입니다. 실제 모델 ID를 표시해도 fixture 숫자가 해당 모델의 실제 벤치마크는 아닙니다. 실제 Provider·AA·블록체인·AWS 호출 없이 실행합니다. [구조도와 책임 경계](docs/AEGIS_ARCHITECTURE.md)
+기본 실행은 Provider·Facilitator 모두 Mock입니다. `live` 모드는 사용자 소유 PBLC로 외부 x402 Facilitator 정산을 시도하며, Provider 결과는 명확히 Mock으로 유지합니다. 서버에 `AA_API_KEY`와 정확한 `AA_MODEL_CATALOG_PATH`를 함께 설정할 때만 실제 Artificial Analysis snapshot을 조회합니다. [구조도와 책임 경계](docs/AEGIS_ARCHITECTURE.md) · [실제 PBLC 요청 흐름](docs/LIVE_PBLC_REQUEST_FLOW.md)
 
 ## 시작하기
 
@@ -80,9 +80,11 @@ ok 5 - two concurrent runs of one purchase settle exactly once
 
 명시적 priority가 우선이며, 미지정이면 요청 문구를 분류합니다. 예산·기능·최대 허용시간·허용 Provider를 먼저 필터링한 뒤 통과 후보의 세 점수를 비교합니다. 평판·freshness·수동 품질 점수는 신규 선택에 쓰지 않습니다.
 
-`quoteAEGIS = (예상 입력 토큰 × 입력 단가 + 최대 출력 토큰 × 출력 단가) / 1,000,000`
+`quotePBLC = (예상 입력 토큰 × 입력 단가 + 최대 출력 토큰 × 출력 단가) / 1,000,000`
 
-markup 없이 6-decimal 정수 단위로 올림합니다. 최대 출력량을 반영한 사전 고정 결제액이며 사용량 사후 정산이 아닙니다. **1 AEGIS = 1 USD는 명목 환산이고 달러 담보·상환 약속이 아닙니다.**
+markup 없이 6-decimal 정수 단위로 올림합니다. 최대 출력량을 반영한 사전 고정 결제액이며 사용량 사후 정산이 아닙니다. **1 PBLC = 1 USD는 명목 환산이고 달러 담보·상환 약속이 아닙니다.**
+
+현재 표준 작업은 최대 출력 8,000 tokens를 결제 전에 고정합니다. 모델 ID·seller 수신 지갑·단가와 짧은 요청 기준 0.01~0.04 PBLC 예시는 [모델별 표준 작업 결제 조건](docs/MODEL_TASK_PRICING.md)을 참고하세요.
 
 데이터 계약 출처는 [Artificial Analysis](https://artificialanalysis.ai/data-api/docs)입니다. 완료시간은 기본 500 answer tokens 조건의 벤치마크 참고값이며 실제 완료 보장이 아닙니다. snapshot·정확한 mapping·필수 값 검증에 실패하면 결제 전 중단합니다.
 
@@ -108,4 +110,16 @@ npm run build --workspace @pbl/dashboard
 
 과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다. [과거 증거와 인계](docs/HANDOFF.md)
 
-AEGIS 계약은 로컬 준비 단계이며 실제 배포·자산 이동·실제 테스트넷 결제는 지갑·방식·예상 주소·가스·금액을 제시하고 별도 승인받습니다. AA 실제 API 검증은 서버 키와 진짜 ID/slug mapping 검증이 필요한 외부 게이트입니다. Provider 실제 키는 연결하지 않습니다. **AWS 배포는 진행하지 않습니다.** 공개 접근 제어와 원문 보존 정책은 향후 배포 전에 별도로 결정합니다.
+신규 기본 Mock 실행은 사용자 소유 PBLC ERC-3009 계약([`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8), Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 사용자 지갑이 owner이며 초기 `1,000,000 PBLC` mint는 완료됐습니다. 과거 PBLC V2와 거래는 읽기 전용으로 보존합니다. `npm run pblc:live:enable` 뒤 `npm run aegis:live-payment`을 사용하면 `/request` 동의 한 건에서 실제 x402 결제를 시도합니다. 실행 전 절차·제약은 [실제 PBLC 요청 흐름](docs/LIVE_PBLC_REQUEST_FLOW.md)을 따르세요. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
+
+현재 로컬 실행 catalog의 수신 지갑은 OpenAI→seller1 `0xF00E…97a0`, Anthropic→seller2 `0xC774…26d8`, Google→seller3 `0x5363…80E4`로 설정했다. 기본 Mock 모드에서는 이 매핑을 증거로만 기록하고, live 모드에서는 선택된 수신자에게 고정 PBLC 금액을 지급 조건으로 제시한다.
+
+### 지갑 결제 사전점검 (읽기 전용)
+
+실제 전송 준비 상태만 확인하려면 `.env.local`의 `PBLC_USER_ADDRESS`를 사용합니다. 이 단계에서는 개인키를 읽거나 사용하지 않습니다.
+
+```bash
+npm run pblc:payment:preflight
+```
+
+사전점검은 지갑 공개 주소, ETH/PBLC 잔액, PBLC V2의 이름·심볼·decimals, Facilitator의 `exact + Base Sepolia` 지원만 읽습니다. 서명·`/verify`·`/settle`·트랜잭션 전송을 하지 않습니다. PBLC 커스텀 토큰의 실제 Facilitator 수락은 별도 승인 후에만 `verify/settle` smoke로 확인합니다.

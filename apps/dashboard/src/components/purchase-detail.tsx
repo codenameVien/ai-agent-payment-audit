@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 
 import { AegisPurchaseDecision } from "@/features/ai-inference/aegis-decision";
 import { AiInferencePurchaseEvidence } from "@/features/ai-inference/purchase-evidence";
-import { isAegisRequest } from "@/lib/aegis";
+import { isAegisRequest, readAegisSettlement } from "@/lib/aegis";
 import { api, short } from "@/lib/api";
 import type { PurchaseDetail as Detail } from "@/lib/types";
 import {
@@ -32,6 +32,7 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
   // The stored request schema decides which policy this purchase was judged under.
   // Historical purchases keep their signed-quote evidence exactly as it was recorded.
   const aegis = isAegisRequest(detail.summary.request_summary);
+  const settlement = aegis ? readAegisSettlement(detail.events) : null;
 
   return (
     <main>
@@ -47,6 +48,7 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
             status={detail.summary.status}
             policy={aegis ? "aegis" : "legacy"}
             paymentStatus={detail.summary.payment_status}
+            executionMode={settlement?.executionMode}
           />
           {detail.summary.transaction_hash && (
             <a
@@ -104,6 +106,26 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
         <AegisPurchaseDecision events={detail.events} />
       ) : (
         <AiInferencePurchaseEvidence events={detail.events} />
+      )}
+      {aegis && settlement !== null && (
+        <section className="panel">
+          <p className="eyebrow">x402 정산 증거</p>
+          <h2>{settlement.executionMode === "live" ? "실제 PBLC 결제 모드" : "Mock 결제 모드"}</h2>
+          <dl className="walletList">
+            <div><dt>x402 Facilitator verify/settle</dt><dd>{settlement.executionMode === "live" ? "Facilitator 응답 수신" : "Mock 응답"}</dd></div>
+            <div><dt>seller 수신 지갑</dt><dd title={settlement.recipient ?? undefined}>{settlement.recipient ?? "기록 없음"}</dd></div>
+            <div><dt>결제 금액</dt><dd>{settlement.amountUnits === null ? "기록 없음" : `${settlement.amountUnits / 1_000_000} PBLC`}</dd></div>
+            <div><dt>결제 네트워크</dt><dd>{settlement.network ?? "기록 없음"}</dd></div>
+          </dl>
+          {settlement.executionMode === "live" && settlement.settlementReference?.match(/^0x[0-9a-fA-F]{64}$/) ? (
+            <p className="panelNote">
+              <a href={`https://sepolia.basescan.org/tx/${settlement.settlementReference}`} target="_blank" rel="noreferrer">Facilitator가 제출한 Base Sepolia 거래 보기 ↗</a>
+              {" · "}앱이 별도로 receipt·Transfer를 교차 검증한 표시는 아닙니다.
+            </p>
+          ) : (
+            <p className="panelNote">Mock 모드에서는 seller 지갑으로 PBLC를 전송하지 않습니다.</p>
+          )}
+        </section>
       )}
       <section className="panel">
         <div className="sectionHead">

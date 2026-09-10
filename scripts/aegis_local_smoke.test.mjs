@@ -11,8 +11,8 @@ import { after, before, test } from "node:test";
 import { startAegisStack } from "./aegis_local_stack.mjs";
 
 const PROVIDERS = {
-  openai: { providerModelId: "gpt-4.1-2025-04-14", modelVersion: "2025-04-14" },
-  anthropic: { providerModelId: "claude-sonnet-5", modelVersion: "claude-sonnet-5" },
+  openai: { providerModelId: "gpt-4.1-mini-2025-04-14", modelVersion: "2025-04-14" },
+  anthropic: { providerModelId: "claude-haiku-4-5-20251001", modelVersion: "2025-10-01" },
   google: { providerModelId: "gemini-2.5-flash", modelVersion: "gemini-2.5-flash" },
 };
 

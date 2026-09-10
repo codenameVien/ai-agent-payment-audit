@@ -146,7 +146,10 @@ export async function resolvePendingRequest(
   if (!facts.isAegis) {
     return { status: "foreign", purchaseId: pendingId, pending: facts, historical };
   }
-  if (facts.settled || facts.audited) {
+  // A recovered live settlement can exist before the Mock Provider result and audit have
+  // been written. Keep that exact purchase resumable: the executor sees SETTLED and only
+  // requests delivery, never signs or calls the Facilitator again.
+  if (facts.audited) {
     return { status: "completed", purchaseId: pendingId, pending: facts, historical };
   }
   return { status: "resume", purchaseId: pendingId, pending: facts, historical };
@@ -174,7 +177,7 @@ export function canSubmitRequest(
 ): boolean {
   if (state.busy || !state.acknowledged) return false;
   if (pending === null) return false;
-  return pending.status !== "blocked";
+  return pending.status !== "blocked" && pending.status !== "completed";
 }
 
 /**
@@ -365,6 +368,20 @@ export interface AegisDeliveryView {
   responseId: string | null;
 }
 
+/**
+ * Settlement evidence is sourced from the Facilitator response. `live` means the
+ * Facilitator submitted a Base Sepolia transaction; it does not mean the dashboard
+ * independently inspected a receipt or Transfer log.
+ */
+export interface AegisSettlementView {
+  executionMode: string | null;
+  settlementReference: string | null;
+  network: string | null;
+  payer: string | null;
+  recipient: string | null;
+  amountUnits: number | null;
+}
+
 function scores(value: unknown): AegisScores | null {
   const raw = record(value);
   const total = decimalText(raw.total);
@@ -508,5 +525,20 @@ export function readAegisDelivery(events: EvidenceEvent[]): AegisDeliveryView | 
     modelId: text(payload.modelId),
     modelVersion: text(payload.modelVersion),
     responseId: text(payload.responseId),
+  };
+}
+
+export function readAegisSettlement(events: EvidenceEvent[]): AegisSettlementView | null {
+  const settled = events.find((event) => event.type === "PAYMENT_SETTLED");
+  if (settled === undefined) return null;
+  const payload = settled.payload as Json;
+  const response = record(payload.facilitatorResponse);
+  return {
+    executionMode: text(payload.executionMode),
+    settlementReference: text(payload.settlementReference),
+    network: text(payload.facilitatorNetwork) ?? text(response.network),
+    payer: text(payload.facilitatorPayer) ?? text(response.payer),
+    recipient: text(payload.to),
+    amountUnits: integer(payload.amountUnits),
   };
 }

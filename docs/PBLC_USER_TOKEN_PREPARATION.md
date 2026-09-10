@@ -1,0 +1,77 @@
+# 사용자 소유 PBLC 결제 준비
+
+상태: **Base Sepolia 배포 및 초기 민팅 완료. 실제 Facilitator 호출·x402 결제는 미실행.**
+
+## 왜 새 PBLC 주소가 필요한가
+
+기존 PBLC V2(`0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3`)의 `owner`는
+`0x5B2BC76a3e4DeA700309FD9D746180162bcAbec8`이다. 이 주소는 사용자 MetaMask
+계정이 아니므로, 그 계약에는 mint 권한이 없다. 이 권한을 우회하거나 타인 지갑을 사용하지
+않는다. 과거 PBLC V2 거래·감사 증거는 수정하지 않는다.
+
+실제 전환 시에는 같은 ERC-20 + ERC-3009 구현을 **새 주소에 독립 배포**하고, 사용자 지갑
+`0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3`를 `deployer = owner = initial holder`
+로 둘 수 있다. 이 지갑은 구매자/결제 승인자이며, OpenAI·Anthropic·Google 수신 지갑과는
+다르다. 새 계약도 name `PBL Agent Credit`, symbol `PBLC`, 6 decimals, EIP-712 version `2`를
+쓴다. 따라서 **새 계약 주소가 확정되기 전에는** 기존 PBLC V2를 새 자산인 것처럼 표시하지 않는다.
+
+## plan-only 명령
+
+```bash
+npm run pblc:user-token:plan -- \
+  --deployer 0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3 \
+  --holder 0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3 \
+  --nonce <Base-Sepolia-pending-nonce> \
+  --initial-supply-units 1000000000000 \
+  --chain-id 84532
+```
+
+명령은 공개 주소·nonce·공급량만으로 예상 CREATE 주소와 calldata를 계산한다. 개인키, `.env`,
+RPC, 서명, 브로드캐스트를 읽거나 사용하지 않는다. `1,000,000 PBLC`는 6-decimal raw units
+`1000000000000`이다.
+
+## 배포 승인 전에 다시 제시할 값
+
+1. deployer/owner/initial holder 공개 주소와 새 contract 예상 주소
+2. 실행 직전 pending nonce와 live `eth_estimateGas`·max fee 기반 최대 가스비
+3. 초기 공급량과 첫 결제 상한
+4. 실제 x402 Facilitator의 custom PBLC `exact + eip3009` verify/settle 수락 계획
+
+위 네 값을 제시한 뒤에만 사용자가 별도로 승인할 수 있다. 이 문서는 승인 자체가 아니다.
+
+## 2026-09-10 실제 배포 및 초기 민팅 결과
+
+- deployer = owner = initial holder: `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3`
+- 새 PBLC ERC-3009 계약: [`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8)
+- 배포 거래: [`0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339`](https://base-sepolia.blockscout.com/tx/0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339), block `46613692`
+- constructor 초기 mint: `1,000,000 PBLC` = `1,000,000,000,000` raw units (6 decimals)
+- 배포 후 공개 RPC 조회: name `PBL Agent Credit`, symbol `PBLC`, version `2`, owner와 holder 잔액이 위 사용자 지갑과 일치
+
+과거 PBLC V2와 과거 거래는 수정하거나 이동하지 않았다. 이 결과는 실제 x402 Facilitator verify/settle 또는 실제 Provider 호출을 뜻하지 않는다.
+
+## 실제 배포 승인 후의 로컬 입력 및 실행
+
+사용자 승인은 받았지만 개인키는 채팅에 입력하지 않는다. 먼저 아래 명령을 **사용자 터미널**에서
+실행해 `PBLC_USER_ADDRESS`와 일치하는 MetaMask 키를 숨김 입력으로 저장한다.
+
+```bash
+cd /Users/vien/MyProjects/PBL-aegis
+bash scripts/set_pblc_user_wallet_key.sh
+```
+
+그 다음 공개 정보만 다시 확인한다.
+
+```bash
+node scripts/pblc_user_token_deploy.mjs plan
+```
+
+`deployerOwnerInitialHolder`, `predictedTokenAddress`, `nativeBalanceEth`를 확인한 후에만 아래 명령이
+배포와 constructor 초기 mint를 한 번 수행한다. 성공 출력의 `contractAddress`가 새 PBLC 주소다.
+
+```bash
+PBLC_USER_TOKEN_DEPLOY_APPROVED=yes npm run pblc:user-token:deploy
+```
+
+이 명령은 기존 PBLC V2를 수정하거나 기존 자산을 이동하지 않는다. 배포 뒤 x402 custom-token
+verify/settle과 0.1 PBLC smoke 전송은 별도의 다음 단계이며, 새 계약 주소와 Facilitator 수락 여부를
+확인한 뒤 진행한다.

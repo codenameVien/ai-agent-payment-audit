@@ -1,10 +1,10 @@
 [한국어](README.md) | [English](README.en.md)
 
-# AEGIS — AI Model Purchasing and Audit
+# PBLC V2 — AI Model Purchasing and Audit
 
 ## Why
 
-A system connecting a buyer agent's model selection, fixed-price payment request, and result through one `purchaseId`. Core verification of the presentation single-user local demo is complete. This is not completion of live APIs, on-chain payments, or a public service. See the [verification record](docs/AEGIS_VERIFICATION.md) for measured completion and remaining work.
+A system connecting a buyer agent's model selection, PBLC fixed-price payment request, and result through one `purchaseId`. The default is a Mock local demo; explicit consent can enable a Base Sepolia PBLC payment attempt. Provider output remains Mock, and paid Provider APIs and AWS are out of scope.
 
 ## Features
 
@@ -18,7 +18,7 @@ flowchart LR
   R --> B[Buyer agent]
   B --> P[Payment execution module · isolated key]
   P --> G[Three Mock Provider Gateways]
-  G --> F[Mock Facilitator]
+  G --> F[Facilitator\nMock or external x402]
   G -->|Result| B
   B -->|Result| R
   B --> E[Audit Evidence API]
@@ -31,7 +31,7 @@ flowchart LR
 
 OpenAI, Anthropic Claude, and Google Gemini Gateways are ordinary code modules. The buyer analyzes the request, reads AA data, calculates prices, filters candidates, and selects a model. An isolated payment execution module signs x402 v2 exact + ERC-3009 authorizations; the Gateway releases the result after Facilitator verify/settle confirmation.
 
-Providers and the Facilitator are currently **Mock**, and AA values are **synthetic fixtures**. Real model identifiers do not make fixture values real benchmarks for those models. The local stack makes no real Provider, AA, blockchain, or AWS calls. See the [architecture](docs/AEGIS_ARCHITECTURE.md).
+The default uses Mock Providers and a Mock Facilitator. The server-side `live` mode can settle PBLC through an external x402 Facilitator after a consented request, while Provider output remains explicitly Mock. AA uses fixtures by default; only a server-side `AA_API_KEY` plus an exact configured `AA_MODEL_CATALOG_PATH` enables a live Artificial Analysis snapshot. See the [architecture](docs/AEGIS_ARCHITECTURE.md) and [live PBLC request flow](docs/LIVE_PBLC_REQUEST_FLOW.md).
 
 ## Getting Started
 
@@ -80,9 +80,11 @@ Fixed `aa-three-factor-v1` weights:
 
 Explicit priority wins; otherwise request wording selects the preset. Budget, capabilities, maximum allowed time, and allowed Providers are hard filters applied before scoring. Reputation, freshness, and manual quality scores are excluded from new selection.
 
-`quoteAEGIS = (estimated input tokens × input price + maximum output tokens × output price) / 1,000,000`
+`quotePBLC = (estimated input tokens × input price + maximum output tokens × output price) / 1,000,000`
 
-There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 AEGIS = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
+There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 PBLC = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
+
+The current standard task reserves a maximum 8,000 output tokens before payment. Exact model IDs, seller recipients, rates, and short-request examples in the 0.01–0.04 PBLC range are documented in [model task pricing](docs/MODEL_TASK_PRICING.md).
 
 The data contract comes from [Artificial Analysis](https://artificialanalysis.ai/data-api/docs). Completion time is a benchmark reference, normally based on 500 answer tokens, not a completion guarantee. Invalid snapshots, missing required values, or failed exact mapping stop purchasing before payment.
 
@@ -108,4 +110,16 @@ The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION
 
 Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
 
-AEGIS is prepared locally, not deployed. Deployment, asset movement, and real testnet payment require separate approval after wallets, method, predicted address, gas estimate, and test amount are presented. Live AA validation remains gated on a server-side key and genuine exact AA ID/slug mapping. Real Provider keys are not connected. **AWS deployment is not being performed.** Public access control and sensitive-payload retention remain future pre-deployment decisions.
+The default Mock path uses the user-owned ERC-3009 PBLC at `0xe75013d333bebb90b321dd658440c10b5a0face8` (Base Sepolia, 6 decimals). Its owner wallet received the initial 1,000,000 PBLC mint. After explicit enablement, the local `live` path can submit one consented `/request` through an external x402 Facilitator; Provider output remains Mock. See the [live PBLC request flow](docs/LIVE_PBLC_REQUEST_FLOW.md). **AWS deployment is not being performed.**
+
+The current local-run catalog maps recipients as OpenAI → seller1 `0xF00E…97a0`, Anthropic → seller2 `0xC774…26d8`, and Google → seller3 `0x5363…80E4`. Mock mode records this mapping only; live mode offers the selected recipient the exact fixed PBLC amount.
+
+### Wallet payment preflight (read-only)
+
+The read-only preflight uses `PBLC_USER_ADDRESS` from `.env.local` and never reads or uses a private key.
+
+```bash
+npm run pblc:payment:preflight
+```
+
+The preflight reads only the wallet public address, ETH/PBLC balances, PBLC V2 name/symbol/decimals, and Facilitator support for `exact + Base Sepolia`. It never signs, calls `/verify` or `/settle`, or broadcasts a transaction. A separate approval is required before verifying that the Facilitator accepts the custom PBLC token.

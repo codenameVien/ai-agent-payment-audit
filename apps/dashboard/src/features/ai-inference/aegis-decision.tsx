@@ -44,7 +44,7 @@ export function AegisPurchaseDecision({ events }: { events: EvidenceEvent[] }) {
     <section className="panel">
       <div className="sectionHead">
         <div>
-          <p className="eyebrow">AEGIS 선택 증거</p>
+          <p className="eyebrow">구매 에이전트 선택 증거</p>
           <h2>가격 · 완료시간 · AA 성능 3요소 비교</h2>
         </div>
         <div className="detailMeta">
@@ -213,8 +213,9 @@ export function AegisPurchaseDecision({ events }: { events: EvidenceEvent[] }) {
       <p className="panelNote">
         예상 완료시간은 Artificial Analysis가 공개한 median end-to-end 값을 환산한 벤치마크 참고
         추정치이며 이 실행의 응답 지연 보장이 아닙니다. fixture 스냅샷의 가격·시간·성능 값은 저장된
-        고정 표본이고 이번 실행에서 측정한 값이 아닙니다. 실행과 결제는 Mock Provider와 Mock
-        Facilitator 응답을 기준으로 기록되며, 체인 독립 검증 결과가 아닙니다.
+        고정 표본이고 이번 실행에서 측정한 값이 아닙니다. Provider 응답은 Mock으로 기록됩니다.
+        결제는 거래별 실행 모드의 Facilitator 응답을 기준으로 하며, 이 화면은 체인 독립 검증
+        결과를 주장하지 않습니다.
       </p>
     </section>
   );

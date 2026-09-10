@@ -1,13 +1,15 @@
 # 구현 로드맵
 
-> 최신 사용자 지시: 발표용 로컬 데모로 축소. [.agent/DEMO_SCOPE.md](../.agent/DEMO_SCOPE.md)가 아래 과거 광범위 완료 조건보다 우선한다. 2026-09-10 Coder Terra로 재개해 세 Provider E2E·핵심 이상3종·dashboard build·기본 lint·최소 문서 갱신만 수행한다. 제외한 추가 검증은 미해결 후속 과제이며 이번 완료 조건이 아니다.
+> 최신 사용자 지시: 발표용 로컬 데모를 유지하면서, 사용자 소유 PBLC로 `/request`에서 실제 x402 결제를 시도할 수 있게 한다. 유료 Provider API·AWS 배포는 범위 밖이다. 제외한 추가 검증은 미해결 후속 과제이며 이번 완료 조건이 아니다.
 
-## 현재 전환 — 2026-09-09 AEGIS / AA
+## 현재 전환 — 2026-09-10 사용자 소유 PBLC / AA
 
 - AA adapter·snapshot·세 점수 정책과 로컬 계약 준비: 검증 완료. 상세 측정값은 [검증 기록](AEGIS_VERIFICATION.md)을 따른다.
 - 결제 런타임: `823f3bd` + `9744d8d`에서 재시작·중복 결제 경계 수정 및 독립 리뷰 완료.
 - UI: `9f6e23f` 구현·집중 검증 완료. 원문 priority 감사 집중 리뷰 통과. 2026-09-10 발표용 데모의 세 Provider E2E·예산 초과·중복 결제5건, 402 불일치2건, dashboard build·기본 lint 및 최종 리뷰 통과.
-- 사용자가 남은 로컬 구현·검증 예산 연장을 승인했다. AWS 실제 배포는 진행하지 않는다. 실제 토큰 배포·자산 이동·테스트넷 결제는 별도 상세 승인 경계다.
+- AWS 실제 배포는 진행하지 않는다. 사용자 소유 PBLC 계약 배포·초기 mint는 완료됐고, live 실행은 `/request` 동의와 서버 승인 플래그로만 실제 Facilitator 정산을 시도한다.
+- 기존 PBLC V2 owner는 사용자 지갑이 아니다. 신규 지급 자산은 사용자 소유 PBLC `0xe750…ace8`이며, 과거 계약·거래는 읽기 전용으로 보존한다. [실제 PBLC 요청 흐름](LIVE_PBLC_REQUEST_FLOW.md)을 따른다.
+- AA free endpoint를 읽어 확인했지만 세 고정 모델의 exact ID/slug mapping이 없었다. 현재 검증된 기본 경로는 fixture이며, live AA/API Provider 호출은 결제 흐름과 분리된 후속 작업이다.
 
 아래 완료 목록은 당시 정책의 구현 이력이다. SIWE·평판·Anchor·독립 RPC 검증 등 과거 체크가 신규 AEGIS 실행에 포함된다는 뜻은 아니다. 신규 수용 조건은 `aidlc-docs/inception/tasks.md`를 따른다.
 

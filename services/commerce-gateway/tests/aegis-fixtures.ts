@@ -16,9 +16,9 @@ export const TEST_TOKEN: AegisTokenIdentity = {
   address: "0x0000000000000000000000000000000000000000",
   chainId: 84532,
   decimals: 6,
-  name: "AEGIS",
-  status: "prepared",
-  symbol: "AEGIS",
+  name: "PBL Agent Credit",
+  status: "deployed-base-sepolia",
+  symbol: "PBLC",
 };
 
 export const TEST_NETWORK = "eip155:84532";

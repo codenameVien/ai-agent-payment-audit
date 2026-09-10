@@ -81,6 +81,10 @@ export interface ProviderGatewayOptions {
   maxTimeoutSeconds?: number;
   tokenName?: string;
   tokenVersion?: string;
+  /** `mock` means no chain transfer; `live` allows an external Facilitator settlement. */
+  executionMode?: string;
+  /** Server-only Facilitator authentication, if the selected Facilitator requires it. */
+  facilitatorHeaders?: Record<string, string>;
 }
 
 /** A Facilitator answer together with the reason it cannot be acted on, if any. */
@@ -100,6 +104,8 @@ export class ProviderGateway {
   readonly #maxTimeoutSeconds: number;
   readonly #tokenName: string | undefined;
   readonly #tokenVersion: string | undefined;
+  readonly #executionMode: string;
+  readonly #facilitatorHeaders: Record<string, string>;
   /**
    * Settlements obtained by this process.
    *
@@ -119,6 +125,8 @@ export class ProviderGateway {
     this.#maxTimeoutSeconds = options.maxTimeoutSeconds ?? DEFAULT_MAX_TIMEOUT_SECONDS;
     this.#tokenName = options.tokenName;
     this.#tokenVersion = options.tokenVersion;
+    this.#executionMode = options.executionMode ?? MOCK_EXECUTION_MODE;
+    this.#facilitatorHeaders = { ...(options.facilitatorHeaders ?? {}) };
   }
 
   /** The gateway's own view of the terms, taken from evidence and never from the body. */
@@ -220,7 +228,7 @@ export class ProviderGateway {
         mimeType: "application/json",
       },
       accepts: [this.#requirements(terms)],
-      extensions: { aegis: bindingFor(terms, MOCK_EXECUTION_MODE) },
+      extensions: { aegis: bindingFor(terms, this.#executionMode) },
     };
   }
 
@@ -245,7 +253,7 @@ export class ProviderGateway {
     ) {
       throw new X402BindingError("PAYMENT-SIGNATURE does not match the decided terms");
     }
-    const binding = bindingFor(terms, MOCK_EXECUTION_MODE);
+    const binding = bindingFor(terms, this.#executionMode);
     const offered = payload.extensions?.aegis;
     if (offered === undefined) {
       throw new X402BindingError("PAYMENT-SIGNATURE carries no AEGIS decision binding");
@@ -261,7 +269,7 @@ export class ProviderGateway {
   async #facilitator<T>(path: string, body: unknown): Promise<T> {
     const response = await this.#fetch(`${this.#facilitatorUrl}${path}`, {
       method: "POST",
-      headers: { "content-type": "application/json" },
+      headers: { "content-type": "application/json", ...this.#facilitatorHeaders },
       body: JSON.stringify(body),
     });
     const text = await response.text();
@@ -315,7 +323,7 @@ export class ProviderGateway {
         providerId: this.#providerId,
         providerModelId: this.#provider.providerModelId,
         modelVersion: this.#provider.modelVersion,
-        executionMode: MOCK_EXECUTION_MODE,
+        executionMode: this.#executionMode,
       });
     }
     if (request.method !== "POST" || url.pathname !== "/v1/inference") {

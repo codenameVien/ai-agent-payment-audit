@@ -2,21 +2,21 @@
 
 ## Current user override — 2026-09-10
 
-The current goal is the presentation local demo defined in `.agent/DEMO_SCOPE.md`; it supersedes conflicting completion/assurance gates below. Coder is Terra (`gpt-5.6-terra`); Planner/Reviewer remain Astra Light. Finish only three Mock Provider request→AA selection→Mock x402 payment→result→audit E2Es, over-budget rejection, 402-condition mismatch rejection, duplicate-success prevention per purchaseId, dashboard build/basic lint, and minimal documentation. Preserve existing implementation, uncommitted changes and historical evidence.
+The current goal began as the presentation local demo defined in `.agent/DEMO_SCOPE.md`. **2026-09-10 user override:** additionally complete the local Base Sepolia user-owned PBLC `live` x402 exact + ERC-3009 payment path, while Provider output remains explicitly Mock. Coder is Terra (`gpt-5.6-terra`); Planner/Reviewer remain Astra Light. Preserve existing implementation, uncommitted changes and historical evidence.
 
-Defer full Python outbound instrumentation, broad historical zero-write regression, Mongo failure-cleanup stress tests, broad-suite repeats and additional hardening. These are reported limitations, not demo completion blockers; do not claim they passed. Use owned disposable storage only. Do not invoke real AA/Provider APIs, deploy tokens, move assets, make real testnet payments or deploy AWS. Prior broader task checklists remain history, not mandatory work for this reduced goal.
+Defer full Python outbound instrumentation, broad historical zero-write regression, Mongo failure-cleanup stress tests, broad-suite repeats and additional hardening. These are reported limitations, not demo completion blockers; do not claim they passed. The user-owned PBLC contract is already deployed. The narrow live-payment exception requires UI consent plus `AEGIS_REAL_PAYMENT_APPROVED=yes`, must use only the configured user wallet, and must not enable paid Provider calls or AWS deployment. Prior broader task checklists remain history, not mandatory work for this reduced goal.
 
 This graduation PBL audits whether an AI buyer's model choice obeyed the request, budget, and deterministic Artificial Analysis policy. The 2026-09-09 confirmed scope supersedes earlier active seller/reputation/anchor/SIWE/RPC requirements. Preserve prior implementation and transaction history.
 
 ## Product Intent & Invariants
 
 - New flow: user → /request → buyer agent → Provider Gateway → result. Gateways are ordinary code for OpenAI, Anthropic Claude, and Google Gemini; comparison units are exact model IDs/versions.
-- Provider APIs and settlement use mocks for this delivery. Never describe mock evidence as live execution.
+- Provider APIs use Mock output for this delivery. `live` settlement is an explicitly user-approved Base Sepolia PBLC transfer through an external Facilitator; never describe Mock Provider evidence as live model execution.
 - AA free API snapshots and explicit mappings provide price, benchmark completion time, and intelligence. Fail before payment on missing/null/invalid evidence or mapping; no fuzzy matching or fabricated fallback scores.
 - New scoringPolicyVersion is aa-three-factor-v1. Fixed price/time/intelligence ratios: default .4/.3/.3, price .6/.2/.2, speed .2/.6/.2, intelligence .2/.2/.6. Explicit priority wins. No reputation/freshness/manual scores in new selection.
 - Apply hard filters before normalization; store all candidates/rejections, same snapshot, policy, exact amount, and priority reason.
 - One purchaseId permits at most one successful payment. It is not the blockchain transaction hash.
-- New token preparation: name/symbol AEGIS, 6 decimals, ERC-3009. Existing PBLC contracts/history keep original names and addresses. No reset/rebase/amend/squash or data rewrites.
+- New execution uses the user-owned deployed PBLC ERC-3009 token (6 decimals) as payment terms. Existing PBLC contracts/history keep their original names and addresses. No reset/rebase/amend/squash or data rewrites.
 - Use x402 v2 exact + ERC-3009 only. Payment execution module (user-facing Korean: 결제 실행 모듈) isolates keys and signs approval; Facilitator submits transfers. Gateway independently verifies price using the same trusted snapshot/policy and releases result only after settlement confirmation.
 - New runtime excludes seller negotiation/counteroffer, SIWE, ERC-8004, Evidence Anchor, and application independent receipt/Transfer/AuthorizationUsed cross-checks. Preserve historical readers and evidence.
 - Local single-user demo does not implement public multi-user authentication. Keep internal API protection, key isolation, and encrypted sensitive payload separation.

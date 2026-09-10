@@ -34,19 +34,21 @@ class Settings(BaseSettings):
     # abnormal-evidence scenarios can be exercised against the real service. Empty means
     # the shipped pages. It has no effect once AA_API_KEY selects the live adapter.
     aa_fixture_pages_json: str = ""
-    aegis_model_catalog_path: str | None = None
-    aegis_max_output_tokens: int = 1024
+    # Exact provider-model -> AA id/slug mappings. A live AA key is rejected unless this
+    # catalog is explicitly configured; no fuzzy matching is permitted.
+    aa_model_catalog_path: str | None = None
+    # standard-answer-v1: a fixed maximum output allocation used for the one-task quote.
+    aegis_max_output_tokens: int = 8_000
     aegis_system_prompt: str = ""
-    # AEGIS is prepared, not deployed. The zero address means "no deployment yet" and is
-    # recorded as such in evidence; it is never presented as a live token address.
-    aegis_token_address: str = "0x0000000000000000000000000000000000000000"
-    aegis_token_status: str = "prepared"
+    # User-owned six-decimal ERC-3009 PBLC on Base Sepolia. Whether a request can
+    # settle is controlled only by the server-side execution mode and approval gate.
+    pblc_token_address: str = "0xe75013d333bebb90b321dd658440c10b5a0face8"
+    pblc_token_status: str = "deployed-base-sepolia"
     # Single-user local demo identity. This is server configuration, not a login: the
     # browser can never choose it. Clearing it restores the historical SIWE composition
     # for reading PBLC history, and that legacy mode is manual only.
     aegis_local_owner_address: str = "0x00000000000000000000000000000000000a6e15"
     aegis_local_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     aegis_local_allowed_hosts: str = "localhost,127.0.0.1"
-    # Mock providers and a Mock Facilitator are the only execution this runtime performs.
-    # The mode is recorded from here, so no client can present mock evidence as live.
+    # The server records this mode; a client can never label its own evidence as live.
     aegis_execution_mode: str = "mock"

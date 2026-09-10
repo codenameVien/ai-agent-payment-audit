@@ -39,6 +39,7 @@ const ALLOWED_OPTIONS = new Set([
 const PROVIDERS = ["openai", "anthropic", "google"];
 const NETWORK = "eip155:84532";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
+const PBLC_V2_ADDRESS = "0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3";
 const LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -357,12 +358,12 @@ export async function startAegisStack(options = {}) {
         GATEWAY_SERVICE_TOKEN: secrets.gatewayServiceToken,
         COMMERCE_GATEWAY_URL: executorUrl,
         AEGIS_LOCAL_OWNER_ADDRESS: LOCAL_OWNER,
-        AEGIS_TOKEN_ADDRESS: ZERO_ADDRESS,
-        AEGIS_TOKEN_STATUS: "prepared",
+        PBLC_TOKEN_ADDRESS: PBLC_V2_ADDRESS,
+        PBLC_TOKEN_STATUS: "deployed-base-sepolia",
         AEGIS_EXECUTION_MODE: "mock",
         ...(options.modelCatalogPath === undefined
           ? {}
-          : { AEGIS_MODEL_CATALOG_PATH: options.modelCatalogPath }),
+          : { AA_MODEL_CATALOG_PATH: options.modelCatalogPath }),
         ...(options.aaFixturePages === undefined
           ? {}
           : { AA_FIXTURE_PAGES_JSON: JSON.stringify(options.aaFixturePages) }),
@@ -448,7 +449,9 @@ export async function startAegisStack(options = {}) {
       body: JSON.stringify({
         buyer_wallet_address: buyerWalletAddress,
         policy_date: new Date().toISOString().slice(0, 10),
-        token: ZERO_ADDRESS,
+        // The wallet policy must use the identical asset configured in the decision;
+        // otherwise the Evidence API correctly refuses reservation before signing.
+        token: PBLC_V2_ADDRESS,
         per_transaction_limit_units: options.perTransactionLimitUnits ?? 100_000,
         daily_limit_units: options.dailyLimitUnits ?? 1_000_000,
       }),

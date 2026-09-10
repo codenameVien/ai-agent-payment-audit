@@ -59,7 +59,7 @@ export function PurchaseList() {
                     </td>
                     <td>
                       {item.domain}
-                      <small>{aegis ? "aegis-aa-v1 · Mock 실행" : "과거 서명 견적 정책"}</small>
+                      <small>{aegis ? "aegis-aa-v1 · Provider Mock" : "과거 서명 견적 정책"}</small>
                     </td>
                     <td>
                       <PurchaseStatusBadge value={item.status} />

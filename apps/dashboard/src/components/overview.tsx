@@ -107,8 +107,9 @@ export function Overview() {
           <h1>AI 에이전트 결제 감사</h1>
           <p>
             로컬 소유자 계정의 모델 선택 증거, 고정 선결제, 감사 경고를 읽기 전용으로
-            확인합니다. 신규 거래는 aa-three-factor-v1 정책과 Mock Provider·Facilitator
-            기록이며, 과거 PBLC 거래는 그때의 정책과 증거로 그대로 남습니다.
+            확인합니다. 신규 거래는 aa-three-factor-v1 정책과 Mock Provider 응답을 사용하며,
+            결제 모드는 각 거래의 Facilitator 정산 증거에 기록됩니다. 과거 PBLC 거래는 그때의
+            정책과 증거로 그대로 남습니다.
           </p>
         </div>
         <div className="scopePill">
@@ -141,7 +142,7 @@ export function Overview() {
           <span>정산 완료 거래</span>
           <strong>{settled.length}</strong>
           <small>
-            AEGIS 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
+            PBLC V2 조건 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
             {settled.length - aegisSettled.length}건
           </small>
         </article>
@@ -334,8 +335,7 @@ export function Overview() {
                 <span>
                   <strong>정산 기록</strong>
                   <small>
-                    {settled.length}건 · 신규 {aegisSettled.length}건은 Mock Facilitator
-                    응답 기준
+                    {settled.length}건 · 신규 {aegisSettled.length}건은 Facilitator 응답 기준
                   </small>
                 </span>
               </li>

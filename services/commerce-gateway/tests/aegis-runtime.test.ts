@@ -15,7 +15,7 @@ import { AegisEvidenceClient } from "../src/aegis/evidence-client.js";
 import { MockFacilitator } from "../src/aegis/facilitator.js";
 import { AegisPaymentExecutor } from "../src/aegis/payment-executor.js";
 import { ProviderGateway } from "../src/aegis/provider-gateway.js";
-import { createMockProvider, mockProviderFor, type MockProvider } from "../src/aegis/providers.js";
+import { createMockProvider, type MockProvider } from "../src/aegis/providers.js";
 import { AegisAuthorizationSigner } from "../src/aegis/signer.js";
 import { AegisTermsError } from "../src/aegis/terms.js";
 import { X402BindingError } from "../src/aegis/x402.js";
@@ -57,9 +57,18 @@ async function startHarness(
   const closers: (() => Promise<void>)[] = [facilitatorServer.close, evidence.close];
   const routes: Record<string, string> = {};
   for (const providerId of Object.keys(TEST_MODELS)) {
+    const model = TEST_MODELS[providerId]!;
     const gateway = new ProviderGateway({
       providerId,
-      provider: options.providers?.[providerId] ?? mockProviderFor(providerId),
+      // Runtime catalogues intentionally use the current published IDs.  These tests
+      // exercise older fixed evidence fixtures, so their gateway must serve the model
+      // that the fixture selected rather than the production catalogue's current one.
+      provider: options.providers?.[providerId] ?? createMockProvider({
+        providerId: model.providerId,
+        providerModelId: model.providerModelId,
+        modelVersion: model.modelVersion,
+        vendorLabel: model.providerId,
+      }),
       evidence: new AegisEvidenceClient({
         baseUrl: evidence.url,
         internalServiceToken: INTERNAL_TOKEN,
@@ -228,7 +237,7 @@ test("a gateway refuses a payment payload that is not the decided terms", async 
           asset: "0x0000000000000000000000000000000000000000",
           payTo: TEST_MODELS.openai!.recipient,
           maxTimeoutSeconds: 60,
-          extra: { assetTransferMethod: "eip3009", name: "AEGIS", version: "1" },
+          extra: { assetTransferMethod: "eip3009", name: "PBL Agent Credit", version: "2" },
         },
         payload: {
           signature: `0x${"ab".repeat(65)}`,

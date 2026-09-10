@@ -20,6 +20,7 @@ import { mockProviderFor, MOCK_EXECUTION_MODE } from "./providers.js";
 import { AegisAuthorizationSigner } from "./signer.js";
 
 export const DEFAULT_NETWORK = "eip155:84532";
+export const AEGIS_EXECUTION_MODES = new Set(["mock", "live"]);
 
 function required(env: NodeJS.ProcessEnv, name: string): string {
   const value = env[name]?.trim();
@@ -31,6 +32,39 @@ function chainIdOf(network: string): number {
   const match = /^eip155:([0-9]+)$/.exec(network);
   if (match === null) throw new Error(`unsupported network: ${network}`);
   return Number(match[1]);
+}
+
+function executionModeFor(env: NodeJS.ProcessEnv): "mock" | "live" {
+  const mode = (env.AEGIS_EXECUTION_MODE?.trim() || MOCK_EXECUTION_MODE).toLowerCase();
+  if (!AEGIS_EXECUTION_MODES.has(mode)) {
+    throw new Error("AEGIS_EXECUTION_MODE must be mock or live");
+  }
+  return mode as "mock" | "live";
+}
+
+/** Live mode may sign only with the explicitly configured user-owned PBLC wallet. */
+function signerFor(
+  env: NodeJS.ProcessEnv,
+  network: string,
+  mode: "mock" | "live",
+): AegisAuthorizationSigner {
+  const keyName = mode === "live" ? "PBLC_USER_PRIVATE_KEY" : "AEGIS_SIGNER_PRIVATE_KEY";
+  if (mode === "live" && env.AEGIS_REAL_PAYMENT_APPROVED !== "yes") {
+    throw new Error("live payment is blocked: AEGIS_REAL_PAYMENT_APPROVED=yes is required");
+  }
+  const signer = new AegisAuthorizationSigner(required(env, keyName) as Hex, chainIdOf(network));
+  if (mode === "live") {
+    const configuredAddress = required(env, "PBLC_USER_ADDRESS").toLowerCase();
+    if (signer.address.toLowerCase() !== configuredAddress) {
+      throw new Error("PBLC_USER_PRIVATE_KEY does not match PBLC_USER_ADDRESS");
+    }
+  }
+  return signer;
+}
+
+function facilitatorHeadersFor(env: NodeJS.ProcessEnv): Record<string, string> {
+  const authorization = env.AEGIS_FACILITATOR_AUTHORIZATION?.trim();
+  return authorization ? { authorization } : {};
 }
 
 async function nodeRequest(request: IncomingMessage): Promise<Request> {
@@ -75,6 +109,7 @@ function serve(handler: (request: Request) => Promise<Response>): Server {
 
 export function createProviderGateway(env: NodeJS.ProcessEnv = process.env): ProviderGateway {
   const providerId = required(env, "AEGIS_PROVIDER_ID");
+  const executionMode = executionModeFor(env);
   return new ProviderGateway({
     providerId,
     provider: mockProviderFor(providerId),
@@ -84,6 +119,8 @@ export function createProviderGateway(env: NodeJS.ProcessEnv = process.env): Pro
     }),
     facilitatorUrl: required(env, "AEGIS_FACILITATOR_URL"),
     network: env.AEGIS_NETWORK?.trim() || DEFAULT_NETWORK,
+    executionMode,
+    facilitatorHeaders: facilitatorHeadersFor(env),
   });
 }
 
@@ -101,6 +138,7 @@ export function createPaymentExecutor(
   env: NodeJS.ProcessEnv = process.env,
 ): AegisPaymentExecutor {
   const network = env.AEGIS_NETWORK?.trim() || DEFAULT_NETWORK;
+  const executionMode = executionModeFor(env);
   const routes = JSON.parse(required(env, "AEGIS_GATEWAY_ROUTES_JSON")) as unknown;
   if (typeof routes !== "object" || routes === null || Array.isArray(routes)) {
     throw new Error("AEGIS_GATEWAY_ROUTES_JSON must be an object");
@@ -115,14 +153,12 @@ export function createPaymentExecutor(
       baseUrl: required(env, "EVIDENCE_API_URL"),
       internalServiceToken: required(env, "INTERNAL_SERVICE_TOKEN"),
     }),
-    // The key never leaves this process, and the local runner supplies an ephemeral one.
-    signer: new AegisAuthorizationSigner(
-      required(env, "AEGIS_SIGNER_PRIVATE_KEY") as Hex,
-      chainIdOf(network),
-    ),
+    // The key never leaves this process. Mock runs use an ephemeral key; live runs use
+    // only the configured user-owned PBLC wallet after an explicit server-side gate.
+    signer: signerFor(env, network, executionMode),
     gatewayRoutes: routes as Record<string, string>,
     network,
-    executionMode: MOCK_EXECUTION_MODE,
+    executionMode,
   });
 }
 
@@ -133,6 +169,7 @@ export function createPaymentExecutor(
  */
 export function createPaymentExecutorServer(env: NodeJS.ProcessEnv = process.env): Server {
   const executor = createPaymentExecutor(env);
+  const executionMode = executionModeFor(env);
   const serviceToken = required(env, "GATEWAY_SERVICE_TOKEN");
   return serve(async (request) => {
     const url = new URL(request.url);
@@ -142,7 +179,7 @@ export function createPaymentExecutorServer(env: NodeJS.ProcessEnv = process.env
         headers: { "content-type": "application/json" },
       });
     if (request.method === "GET" && url.pathname === "/health") {
-      return json({ status: "ok", role: "payment-executor", executionMode: MOCK_EXECUTION_MODE });
+      return json({ status: "ok", role: "payment-executor", executionMode });
     }
     if (request.headers.get("authorization") !== `Bearer ${serviceToken}`) {
       return json({ error: "unauthorized" }, 401);

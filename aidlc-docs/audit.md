@@ -329,3 +329,33 @@
 - 새 탭에서 생성된 두 번째 구매 `378beb23-e352-49f0-b450-87da88791292`는 결제 tx `0x32562decbafa3c670280501bafbce01b72ce698d0391c63f4e3c5113f070a0a8`로 완료됐다. block `46341684`, Transfer log index `117`, buyer → Gemini seller, `100000` raw units를 공개 RPC에서 독립 확인했다.
 - 성공 구매는 `REQUESTED`부터 `AUDITED`까지 10개 hash-linked event를 가지며 head는 `sha256:7a5e5ab4a71dbd483b9364417c780479e928cba41d915f523052b0ac7e4614bc`, 감사는 `NORMAL`, findings 없음이다. buyer 잔액은 `999999700000` raw units, permit nonce는 `3`, Permit2 allowance는 `0`이다.
 - 탭별 `sessionStorage`가 새 탭의 중복 purchase 생성을 막지 못한 실증 결과에 따라 보류 `purchaseId` 저장소를 동일 출처 탭이 공유하는 `localStorage`로 변경했다.
+
+## 2026-09-10 — PBLC V2 지갑 결제 사전점검 준비
+
+- 사용자 요청에 따라 실제 전송 전 준비 경로를 추가했다. `npm run pblc:payment:preflight`은 공개 `AEGIS_LIVE_PAYER_ADDRESS`를 사용해 ETH/PBLC 잔액·PBLC V2 메타데이터·Facilitator `/supported`만 읽는다. 개인키는 이 단계에서 저장하거나 읽지 않는다.
+
+## 2026-09-10 — 사용자 소유 PBLC 및 모델별 결제 조건 준비
+
+- 기존 PBLC V2의 owner는 사용자 MetaMask 계정이 아닌 주소임을 공개 읽기로 재확인했다. 기존 계약과 과거 거래는 그대로 보존하고, 사용자 지갑을 deployer/owner/initial holder로 하는 별도 PBLC ERC-3009 계약의 **오프라인 승인 패킷**만 준비했다.
+- 현재 pending nonce 기준 예상 CREATE 주소·가스·초기 공급량은 [PBLC 사용자 소유 토큰 준비](../docs/PBLC_USER_TOKEN_PREPARATION.md)에 기록했다. 이 패킷은 개인키·RPC·서명·브로드캐스트를 사용하지 않으며 실제 배포·민팅·전송은 하지 않았다.
+- OpenAI GPT-4.1 mini, Claude Haiku 4.5, Gemini 2.5 Flash의 정확한 model ID, seller 수신 지갑, 공개 1M-token 가격을 [모델별 표준 작업 결제 조건](../docs/MODEL_TASK_PRICING.md)에 기록했다. 현재는 Mock Gateway/Mock Facilitator 검증용 가격이며 실제 Provider 호출은 미구현이다.
+- 서버의 AA free endpoint를 읽기 전용으로 확인한 결과 세 고정 모델의 exact ID/slug mapping을 얻지 못했다. live AA 모드는 fail-closed로 남기고 fixture AA를 유지한다.
+
+## 2026-09-10 — 사용자 소유 PBLC Base Sepolia 배포·초기 민팅 완료
+
+- 사용자 명시 승인 후 `0x043D966B3f30Ff9FAC08FD6b5eFeDa6ac895a0a3`를 deployer/owner/initial holder로 사용해 별도 PBLC ERC-3009 계약을 배포했다.
+- 계약 `0xe75013d333bebb90b321dd658440c10b5a0face8`, 배포 tx `0xafb8c6851d07c637c18cfafd99ea32e7c4052297a2fa559b68855c0019903339`, block `46613692`.
+- constructor가 사용자 지갑에 `1,000,000 PBLC` (6 decimals raw `1000000000000`)를 mint했음을 공개 RPC로 name/symbol/version/owner/totalSupply/balanceOf와 함께 재확인했다.
+- 실제 x402 Facilitator verify/settle, seller 지급 전송, Provider API 호출, AWS 배포는 수행하지 않았다.
+- 사전점검은 EIP-712 서명을 만들지 않고 Facilitator `/verify`·`/settle` 및 블록체인 트랜잭션 전송을 호출하지 않는다. PBLC custom-token 실제 수락과 자산 이동은 별도 사용자 승인 전까지 실행하지 않는다.
+
+## 2026-09-10 — `/request` 실제 PBLC 결제 실행 경로 준비
+
+- 사용자 방향전환: 기본 Mock 데모는 유지하되, 선택된 모델의 고정 가격을 사용자의 PBLC로 실제 Base Sepolia에서 결제할 수 있게 한다. Provider 응답은 계속 Mock이며 유료 Provider API와 AWS 배포는 진행하지 않는다.
+- `AEGIS_EXECUTION_MODE=live`와 `AEGIS_REAL_PAYMENT_APPROVED=yes`를 모두 요구하고, 결제 실행 모듈이 `PBLC_USER_PRIVATE_KEY`로부터 유도한 주소가 `PBLC_USER_ADDRESS`와 일치할 때만 시작하게 했다. 브라우저가 모드를 지정하거나 개인키를 받지 않는다.
+- 실제 제출은 `/request`의 실행 동의 뒤에만 외부 Facilitator `/verify`·`/settle`로 요청한다. 기본 x402.org Facilitator의 Base Sepolia exact 지원은 사전점검하지만, 사용자 정의 PBLC 수락 여부는 첫 승인된 요청의 외부 결과로만 확인된다.
+- 이 준비 변경에서는 live verify/settle, seller Transfer, 유료 Provider 호출, AWS 배포를 실행하지 않았다. 절차와 모델별 고정 가격은 [실제 PBLC 요청 흐름](../docs/LIVE_PBLC_REQUEST_FLOW.md)을 단일 운영 참고로 둔다.
+
+## 2026-09-10 — 로컬 Mock 판매자 수신 지갑 매핑
+
+- 사용자가 정한 새 수신 지갑을 local runtime catalog에 적용했다: OpenAI→seller1, Anthropic→seller2, Google→seller3. 기존 기록은 변경하지 않고, 이후 Mock 실행의 결제 조건만 이 주소를 가리킨다.

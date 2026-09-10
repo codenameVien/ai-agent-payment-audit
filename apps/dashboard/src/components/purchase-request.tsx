@@ -18,20 +18,21 @@ import { api, credits, short } from "@/lib/api";
 import type { PurchaseDetail } from "@/lib/types";
 
 const DEFAULT_PROMPT = "사용자 요구에 가장 적합한 AI 모델을 선택해 한 문장으로 응답해줘.";
-/** AEGIS is a 6-decimal token, so one unit is 1e-6 nominal USD. */
-const AEGIS_UNITS_PER_TOKEN = 1_000_000;
+/** PBLC V2 is a 6-decimal token, so one unit is 1e-6 nominal USD. */
+const PBLC_UNITS_PER_TOKEN = 1_000_000;
 
 type Phase = "ready" | "invalid" | "creating" | "running";
+type RuntimeMode = "checking" | "mock" | "live" | "unavailable";
 
 function toBudgetUnits(value: FormDataEntryValue | null): number | null {
   const text = String(value ?? "").trim();
   if (text === "") return null;
   const amount = Number(text);
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1) {
-    throw new Error("예산은 0보다 크고 1 AEGIS 이하여야 합니다.");
+    throw new Error("예산은 0보다 크고 1 PBLC 이하여야 합니다.");
   }
-  const units = Math.round(amount * AEGIS_UNITS_PER_TOKEN);
-  if (units <= 0) throw new Error("예산은 최소 0.000001 AEGIS입니다.");
+  const units = Math.round(amount * PBLC_UNITS_PER_TOKEN);
+  if (units <= 0) throw new Error("예산은 최소 0.000001 PBLC입니다.");
   return units;
 }
 
@@ -50,6 +51,7 @@ export function PurchaseRequest() {
   const [phase, setPhase] = useState<Phase>("ready");
   const [pending, setPending] = useState<PendingResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("checking");
 
   const resolvePending = useCallback(async () => {
     // The stored id is only trusted after a public detail GET proves what it is. Keys
@@ -63,6 +65,18 @@ export function PurchaseRequest() {
   useEffect(() => {
     void resolvePending();
   }, [resolvePending]);
+
+  useEffect(() => {
+    let active = true;
+    void api<{ execution_mode?: unknown }>("/health")
+      .then((health) => {
+        if (active) setRuntimeMode(health.execution_mode === "live" ? "live" : "mock");
+      })
+      .catch(() => {
+        if (active) setRuntimeMode("unavailable");
+      });
+    return () => { active = false; };
+  }, []);
 
   const busy = phase === "creating" || phase === "running";
   const checking = pending === null;
@@ -151,10 +165,14 @@ export function PurchaseRequest() {
     ? "구매 요청 기록 중…"
     : phase === "running"
       ? "비교·선택·결제·감사 진행 중…"
-      : checking
-        ? "저장된 요청 확인 중…"
-        : resumable
-          ? "같은 요청이면 기존 구매 이어서 실행"
+    : checking
+      ? "저장된 요청 확인 중…"
+      : resumable
+          ? resumable.settled
+            ? "정산된 구매의 결과·감사 이어서 받기"
+            : "같은 요청이면 기존 구매 이어서 실행"
+          : pending?.status === "completed"
+            ? "정산·감사 완료 — 거래 상세 확인"
           : "구매 에이전트 실행";
 
   return (
@@ -165,7 +183,15 @@ export function PurchaseRequest() {
             <p className="eyebrow">PURCHASE REQUEST</p>
             <h2>AI 구매 요청</h2>
           </div>
-          <span className="badge caution">Mock 실행 · 준비 토큰</span>
+          <span className={`badge ${runtimeMode === "live" ? "normal" : "caution"}`}>
+            {runtimeMode === "live"
+              ? "실제 PBLC 결제 · Mock Provider"
+              : runtimeMode === "checking"
+                ? "결제 모드 확인 중"
+                : runtimeMode === "unavailable"
+                  ? "결제 모드 확인 불가"
+                  : "Mock 결제 · PBLC V2 조건"}
+          </span>
         </div>
 
         <form className="experimentForm" onSubmit={run}>
@@ -175,10 +201,10 @@ export function PurchaseRequest() {
           </label>
 
           <label>
-            <span>예산(AEGIS, 선택)</span>
+            <span>예산(PBLC, 선택)</span>
             <input name="budget" type="number" min="0.000001" max="1" step="0.000001" placeholder="비워두면 지갑의 1회 한도 적용" />
             <small>
-              AEGIS는 소수점 6자리이고 1 AEGIS는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
+              PBLC V2는 소수점 6자리이고 1 PBLC는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
               화폐 가치가 아닙니다.
             </small>
           </label>
@@ -201,18 +227,20 @@ export function PurchaseRequest() {
 
           <div className="experimentTerms" aria-label="구매 실행 조건">
             <div><span>구매 주체</span><strong>구매 에이전트</strong></div>
-            <div><span>결제 자산</span><strong>AEGIS · 발행 준비 상태</strong></div>
-            <div><span>실행·정산</span><strong>Mock Provider · Mock Facilitator</strong></div>
+            <div><span>결제 자산</span><strong>PBLC · 표준 작업 최대 8,000 출력 토큰 기준</strong></div>
+            <div><span>실행·정산</span><strong>{runtimeMode === "live" ? "Mock Provider · 실제 x402 Facilitator 정산" : "Mock Provider · Mock Facilitator"}</strong></div>
             <div><span>감사 범위</span><strong>선택 · 결제 · 전달</strong></div>
           </div>
 
           <label className="paymentConsent">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
             <span>
-              구매 에이전트가 aa-three-factor-v1 정책으로 고른 고정 선결제 금액을 x402 exact +
+              구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
               ERC-3009 승인으로 한 번만 요청하고, 판단·결제·감사 증거를 같은 purchaseId로
-              기록하는 것을 확인했습니다. 제공자 호출과 정산은 모의 구성이며 실제 테스트넷 토큰
-              전송은 실행하지 않습니다.
+              기록하는 것을 확인했습니다. 서버가 <strong>실제 결제 모드</strong>로 구성된 경우에는
+              이 실행이 선택된 판매자 지갑에 실제 Base Sepolia PBLC를 한 번 전송할 수 있으며,
+              Provider 응답은 계속 모의 실행으로 표시됩니다. Mock 결제 모드에서는 토큰을 전송하지
+              않습니다.
             </span>
           </label>
 
@@ -227,7 +255,7 @@ export function PurchaseRequest() {
 
           {blocked && (
             <div className="notice risk" role="alert">
-              저장된 AEGIS purchaseId {short(pending?.purchaseId, 10)}를 조회하지 못해 재개
+              저장된 신규 정책 purchaseId {short(pending?.purchaseId, 10)}를 조회하지 못해 재개
               여부를 확인할 수 없습니다. 확인 전에는 실행하지 않습니다.{" "}
               <button type="button" onClick={() => void resolvePending()}>다시 확인</button>
             </div>
@@ -235,12 +263,14 @@ export function PurchaseRequest() {
 
           {resumable && (
             <div className="notice">
-              진행 중인 AEGIS 구매 {short(resumable.purchaseId, 10)}가 있습니다. 저장된 요청과
-              같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다.
+              {resumable.settled
+                ? "PBLC 정산은 이미 기록됐습니다. 같은 요청으로 결과와 감사를 이어서 받을 수 있으며, 이 동작은 새 서명·Facilitator 호출·토큰 전송을 하지 않습니다."
+                : "진행 중인 PBLC V2 조건 구매가 있습니다. 저장된 요청과 같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다."}{" "}
+              {short(resumable.purchaseId, 10)}
               <small>
                 저장된 요청: 프롬프트 해시 {short(resumable.promptHash, 10)} · priority{" "}
                 {resumable.originalPriority ?? "미지정(자동 분류)"} · 예산{" "}
-                {credits(resumable.budgetUnits)} AEGIS
+                {credits(resumable.budgetUnits)} PBLC
               </small>
             </div>
           )}
@@ -268,7 +298,7 @@ export function PurchaseRequest() {
           {pending?.historical.map((item) => (
             <div className="notice" key={item.key}>
               과거 PBLC 정책으로 남은 purchaseId {short(item.purchaseId, 10)}({item.key})가
-              있습니다. 이 기록은 새 AEGIS 요청으로 다시 실행하지 않고 그대로 보존합니다.{" "}
+              있습니다. 이 기록은 새 정책 요청으로 다시 실행하지 않고 그대로 보존합니다.{" "}
               <Link href={`/purchases/${encodeURIComponent(item.purchaseId)}`}>
                 과거 거래 상세 보기 →
               </Link>
@@ -293,8 +323,8 @@ export function PurchaseRequest() {
           <li><span><strong>요청 정규화</strong><small>예산과 우선순위를 확정하고 분류 근거를 남깁니다.</small></span></li>
           <li><span><strong>AA 스냅샷 캡처</strong><small>명시적으로 매핑된 모델의 가격·완료시간·성능을 그대로 저장합니다.</small></span></li>
           <li><span><strong>3요소 비교·선택</strong><small>하드 필터 뒤 고정 가중치로 점수를 계산하고 후보와 제외 사유를 기록합니다.</small></span></li>
-          <li><span><strong>정확히 한 번 결제</strong><small>결제 실행 모듈이 고정 금액을 서명하고 Facilitator 응답을 상태 근거로 기록합니다.</small></span></li>
-          <li><span><strong>결과·감사 반환</strong><small>모의 실행 응답과 감사 결과를 읽기 전용 대시보드에 연결합니다.</small></span></li>
+          <li><span><strong>정확히 한 번 결제</strong><small>결제 실행 모듈이 고정 금액을 서명하고, 실제 모드에서는 Facilitator가 정산합니다.</small></span></li>
+          <li><span><strong>결과·감사 반환</strong><small>Mock Provider 응답과 결제·감사 결과를 읽기 전용 대시보드에 연결합니다.</small></span></li>
         </ol>
         <p className="panelNote">이 페이지는 구매 요청 전용입니다. 거래 조회와 감사는 대시보드에서 수행합니다.</p>
       </aside>
