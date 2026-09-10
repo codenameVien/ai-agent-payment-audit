@@ -102,7 +102,8 @@ test("purchase detail branches on the stored policy instead of one merged view",
   assert.match(detail, /<AiInferencePurchaseEvidence events=\{detail\.events\}/);
   assert.match(decision, /벤치마크 참고 추정치/);
   assert.match(decision, /fixture 스냅샷의 가격·시간·성능 값은 저장된/);
-  assert.match(decision, /Mock Provider와 Mock\n\s*Facilitator/);
+  assert.match(decision, /Provider 응답은 Mock으로 기록됩니다/);
+  assert.match(decision, /거래별 실행 모드의 Facilitator 응답/);
   assert.match(decision, /관측 실행시간\(모의 실행\)/);
 });
 
@@ -134,15 +135,16 @@ test("aegis settlement is never presented as an independently verified chain pay
     readFile(overviewUrl, "utf8"),
   ]);
   assert.match(status, /policy === "aegis"/);
-  assert.match(status, /Facilitator 응답 기준 정산 · 모의 결제/);
-  // The aegis branch must resolve on its own, without the historical on-chain wording
-  // or the transaction hash the new settlement never produces.
+  assert.match(status, /Facilitator 응답 기준 정산 · Mock 결제/);
+  assert.match(status, /Facilitator 응답 기준 정산 · 실제 PBLC 전송 제출/);
+  // The aegis branch resolves from its own Facilitator basis, not by claiming an
+  // application-side chain receipt verification.
   const aegisBranch = status.slice(
     status.indexOf('if (policy === "aegis")'),
     status.indexOf("const confirmed ="),
   );
   assert.ok(aegisBranch.length > 0);
-  assert.doesNotMatch(aegisBranch, /온체인|BaseScan|transactionHash/);
+  assert.doesNotMatch(aegisBranch, /온체인 결제 확인/);
   assert.match(overview, /item\.payment_status === "PAYMENT_SETTLED"/);
   assert.match(overview, /Facilitator 응답 기준/);
   assert.doesNotMatch(overview, /BASE SEPOLIA LIVE/);

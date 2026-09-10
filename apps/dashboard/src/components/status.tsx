@@ -1,8 +1,9 @@
 import { credits } from "@/lib/api";
 
 /**
- * `aegis` purchases settle against a Mock Facilitator answer and never carry an EVM
- * transaction hash, so they must not reuse the historical on-chain wording.
+ * `aegis` purchases use a Facilitator response as their settlement basis. A live
+ * settlement may carry the transaction reference the Facilitator submitted; that is
+ * intentionally distinct from application-side receipt verification.
  */
 export type PurchasePolicy = "legacy" | "aegis";
 
@@ -58,16 +59,20 @@ export function PaymentAmount({
   status,
   policy = "legacy",
   paymentStatus,
+  executionMode,
 }: {
   amountUnits: number | null;
   transactionHash: string | null;
   status: string;
   policy?: PurchasePolicy;
   paymentStatus?: string;
+  executionMode?: string | null;
 }) {
   if (amountUnits === null) return <span className="muted">—</span>;
   if (policy === "aegis") {
     const settled = (paymentStatus ?? status) === "PAYMENT_SETTLED";
+    const live = executionMode === "live";
+    const mock = executionMode === "mock";
     return (
       <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
         <strong>
@@ -76,8 +81,16 @@ export function PaymentAmount({
         </strong>
         <small>
           {settled
-            ? "Facilitator 응답 기준 정산 · 모의 결제"
-            : "정산 미확정 · 모의 결제"}
+            ? live
+              ? "Facilitator 응답 기준 정산 · 실제 PBLC 전송 제출"
+              : mock
+                ? "Facilitator 응답 기준 정산 · Mock 결제"
+                : "Facilitator 응답 기준 정산"
+            : live
+              ? "정산 미확정 · 실제 결제 모드"
+              : mock
+                ? "정산 미확정 · Mock 결제"
+                : "정산 미확정"}
         </small>
       </span>
     );
