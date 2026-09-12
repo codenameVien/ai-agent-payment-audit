@@ -1,5 +1,7 @@
 # 로컬 완료 및 외부 실행 인계
 
+> **구매 버튼 연결 복구:** 3100 서버가 꺼지면 최초 health 실패 후 실행 버튼이 계속 잠기던 문제를 수정했다. 확인 카드에 사유와 `연결 다시 확인`을 표시하며 health/저장 요청 GET만 재시도한다(8초 제한). 재확인은 결제하지 않고 카드·초안·pending ID를 보존한다. `npm run aegis:observer:demo` 실행 터미널을 유지한다. 임시 DB 종료 후 사라진 ID의 404는 자동 삭제로 우회하지 않는다.
+
 > **채팅 UX 교정:** `/request`는 메시지별 독립 구매 카드·카드 안의 명시 실행 동의·같은 대화 안의 결과/오류를 사용한다. 미전송 경고 및 성공 후 자동 상세 이동을 제거했다. 완료한 뒤 같은 문구를 보내면 새 구매, 실패 카드 재시도는 같은 ID다. 기존 pending 조회 실패는 안전 확인 전 실행을 막는다. 일반 메시지 전송은 여전히 결제하지 않는다. 관련 검증은 `scripts/chat_request_browser_smoke.mjs`와 [검증 기록](DECISION_OBSERVER_VERIFICATION.md)의 UX 교정 절을 따른다.
 
 > **최신 추가 구현:** 채팅 초안/실행 동의 분리, 별도 Qwen 결정·감사 관찰, 두 checkpoint API·실행 모듈. 아래 기존 Anchor 제외 설명보다 [최신 설계·검증 경계](DECISION_OBSERVER_PLAN.md)가 우선한다. 미리보기는 `npm run aegis:observer:demo` → `http://127.0.0.1:3100/request`. 실제 Anchor 배포/쓰기·신규 AEGIS 정산·AWS·유료 호출은 실행하지 않았다. 기존 실거래 `.env.local`·DB·다른 worktree는 그대로다. preview DB는 종료 때 제거되는 별도 임시 데이터다.
