@@ -1,5 +1,9 @@
 # Project Overview
 
+## Current user override — 2026-09-12
+
+Use the newly deployed AEGIS token (decimals 6, EIP-712 version 1) and local Qwen automatic priority classification. Explicit priority bypasses Qwen; weights and scoring remain deterministic. The user explicitly superseded DB history preservation: 48 targeted legacy PBLC documents were deleted, without deleting Git/onchain history. Do not relabel old PBLC transactions as AEGIS. See docs/AEGIS_QWEN_MIGRATION.md. New AEGIS external settlement remains unverified; Mock review blocks only core user-flow errors. AWS/paid Provider calls remain out of scope.
+
 ## Current user override — 2026-09-10
 
 The current goal began as the presentation local demo defined in `.agent/DEMO_SCOPE.md`. **2026-09-10 user override:** additionally complete the local Base Sepolia user-owned PBLC `live` x402 exact + ERC-3009 payment path, while Provider output remains explicitly Mock. Coder is Terra (`gpt-5.6-terra`); Planner/Reviewer remain Astra Light. Preserve existing implementation, uncommitted changes and historical evidence.

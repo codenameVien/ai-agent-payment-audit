@@ -28,6 +28,7 @@ const DATABASE = "pbl_aegis_local";
 const REPLICA_SET = "aegisrs";
 // Storage is deliberately absent from this list: this run always owns its own mongod.
 const ALLOWED_OPTIONS = new Set([
+  "priorityClassifier",
   "perTransactionLimitUnits",
   "dailyLimitUnits",
   // Abnormal-evidence scenarios point the fixture capture at other shipped fixtures.
@@ -39,7 +40,7 @@ const ALLOWED_OPTIONS = new Set([
 const PROVIDERS = ["openai", "anthropic", "google"];
 const NETWORK = "eip155:84532";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-const PBLC_V2_ADDRESS = "0xDed7F4992D98eF31453dCebbB8c2A6b50d0284B3";
+const PBLC_V2_ADDRESS = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b";
 const LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -292,6 +293,9 @@ export async function reclaim(children, owned) {
  * log line, ever receives it.
  */
 export async function startAegisStack(options = {}) {
+  if (options.priorityClassifier && !["deterministic", "local-qwen"].includes(options.priorityClassifier)) {
+    throw new Error("unsupported priorityClassifier");
+  }
   const unknown = Object.keys(options).filter((key) => !ALLOWED_OPTIONS.has(key));
   if (unknown.length > 0) {
     throw new Error(
@@ -360,6 +364,10 @@ export async function startAegisStack(options = {}) {
         AEGIS_LOCAL_OWNER_ADDRESS: LOCAL_OWNER,
         PBLC_TOKEN_ADDRESS: PBLC_V2_ADDRESS,
         PBLC_TOKEN_STATUS: "deployed-base-sepolia",
+        PAYMENT_TOKEN_NAME: "AEGIS",
+        PAYMENT_TOKEN_SYMBOL: "AEGIS",
+        AEGIS_PRIORITY_CLASSIFIER: options.priorityClassifier || "deterministic",
+        AEGIS_OLLAMA_TIMEOUT_SECONDS: "30",
         AEGIS_EXECUTION_MODE: "mock",
         ...(options.modelCatalogPath === undefined
           ? {}

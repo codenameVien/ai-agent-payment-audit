@@ -1,6 +1,8 @@
 [한국어](README.md) | [English](README.en.md)
 
-# PBLC V2 — AI Model Purchasing and Audit
+# AEGIS — AI Model Purchasing and Audit
+
+> 2026-09-12: A new AEGIS contract and initial 1,000,000 supply are deployed. Local Qwen classifies automatic priority; fixed code retains weights, pricing and payment checks. Legacy PBLC database records were deleted at the user's request. New AEGIS external settlement is not yet verified. See [current migration and validation boundaries](docs/AEGIS_QWEN_MIGRATION.md). Older PBLC command names are compatibility names; historical payment evidence is not AEGIS evidence.
 
 ## Why
 

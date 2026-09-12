@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { AegisPurchaseDecision } from "@/features/ai-inference/aegis-decision";
 import { AiInferencePurchaseEvidence } from "@/features/ai-inference/purchase-evidence";
 import { isAegisRequest, readAegisSettlement } from "@/lib/aegis";
-import { api, short } from "@/lib/api";
+import { api, short, paymentTokenSymbol } from "@/lib/api";
 import type { PurchaseDetail as Detail } from "@/lib/types";
 import {
   Empty,
@@ -49,6 +49,7 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
             policy={aegis ? "aegis" : "legacy"}
             paymentStatus={detail.summary.payment_status}
             executionMode={settlement?.executionMode}
+            tokenAddress={detail.summary.token}
           />
           {detail.summary.transaction_hash && (
             <a
@@ -110,11 +111,11 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
       {aegis && settlement !== null && (
         <section className="panel">
           <p className="eyebrow">x402 정산 증거</p>
-          <h2>{settlement.executionMode === "live" ? "실제 PBLC 결제 모드" : "Mock 결제 모드"}</h2>
+          <h2>{settlement.executionMode === "live" ? "실제 토큰 결제 모드" : "Mock 결제 모드"}</h2>
           <dl className="walletList">
             <div><dt>x402 Facilitator verify/settle</dt><dd>{settlement.executionMode === "live" ? "Facilitator 응답 수신" : "Mock 응답"}</dd></div>
             <div><dt>seller 수신 지갑</dt><dd title={settlement.recipient ?? undefined}>{settlement.recipient ?? "기록 없음"}</dd></div>
-            <div><dt>결제 금액</dt><dd>{settlement.amountUnits === null ? "기록 없음" : `${settlement.amountUnits / 1_000_000} PBLC`}</dd></div>
+            <div><dt>결제 금액</dt><dd>{settlement.amountUnits === null ? "기록 없음" : `${settlement.amountUnits / 1_000_000} ${paymentTokenSymbol(detail.summary.token)}`}</dd></div>
             <div><dt>결제 네트워크</dt><dd>{settlement.network ?? "기록 없음"}</dd></div>
           </dl>
           {settlement.executionMode === "live" && settlement.settlementReference?.match(/^0x[0-9a-fA-F]{64}$/) ? (
@@ -123,7 +124,7 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
               {" · "}앱이 별도로 receipt·Transfer를 교차 검증한 표시는 아닙니다.
             </p>
           ) : (
-            <p className="panelNote">Mock 모드에서는 seller 지갑으로 PBLC를 전송하지 않습니다.</p>
+            <p className="panelNote">Mock 모드에서는 seller 지갑으로 토큰을 전송하지 않습니다.</p>
           )}
         </section>
       )}

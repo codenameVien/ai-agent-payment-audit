@@ -26,7 +26,11 @@ import { baseSepolia } from "viem/chains";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = resolve(ROOT, ".env.local");
-const ARTIFACT_PATH = resolve(ROOT, "infra/contracts/out/DemoTokenV2.sol/DemoTokenV2.json");
+const aegis = process.argv.includes("--aegis");
+const tokenSymbol = aegis ? "AEGIS" : "PBLC";
+const ARTIFACT_PATH = resolve(ROOT, aegis
+  ? "infra/contracts/out/AEGISToken.sol/AEGISToken.json"
+  : "infra/contracts/out/DemoTokenV2.sol/DemoTokenV2.json");
 const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
 
 function parseEnv(text) {
@@ -81,7 +85,7 @@ async function plan() {
     predictedAddressHasCode: code !== undefined && code !== "0x",
     nativeBalanceEth: formatEther(balance),
     initialSupplyUnits: INITIAL_SUPPLY_UNITS.toString(),
-    initialSupplyDisplay: "1000000 PBLC",
+    initialSupplyDisplay: `1000000 ${tokenSymbol}`,
     estimatedGas: gas.toString(),
     maxFeePerGasWei: maxFeePerGas?.toString() ?? null,
     estimatedMaxFeeEth: maxFeePerGas === undefined ? null : formatEther(gas * maxFeePerGas),
@@ -114,7 +118,7 @@ async function deploy() {
     contractAddress: receipt.contractAddress,
     deployerOwnerInitialHolder: account.address,
     initialSupplyUnits: INITIAL_SUPPLY_UNITS.toString(),
-    initialSupplyDisplay: "1000000 PBLC",
+    initialSupplyDisplay: `1000000 ${tokenSymbol}`,
     blockNumber: receipt.blockNumber.toString(),
   }, null, 2)}\n`);
 }

@@ -29,10 +29,10 @@ function toBudgetUnits(value: FormDataEntryValue | null): number | null {
   if (text === "") return null;
   const amount = Number(text);
   if (!Number.isFinite(amount) || amount <= 0 || amount > 1) {
-    throw new Error("예산은 0보다 크고 1 PBLC 이하여야 합니다.");
+    throw new Error("예산은 0보다 크고 결제 토큰 1개 이하여야 합니다.");
   }
   const units = Math.round(amount * PBLC_UNITS_PER_TOKEN);
-  if (units <= 0) throw new Error("예산은 최소 0.000001 PBLC입니다.");
+  if (units <= 0) throw new Error("예산은 최소 0.000001 토큰입니다.");
   return units;
 }
 
@@ -52,10 +52,15 @@ export function PurchaseRequest() {
   const [pending, setPending] = useState<PendingResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [runtimeMode, setRuntimeMode] = useState<RuntimeMode>("checking");
+  const [tokenSymbol, setTokenSymbol] = useState("토큰");
 
   const resolvePending = useCallback(async () => {
+    // User-approved PBLC record cleanup. The new AEGIS pending key is untouched.
+    for (const key of ["aegis:purchase-request-id", "pbl:purchase-request-id", "pbl:normal-experiment-purchase-id"]) {
+      window.localStorage.removeItem(key);
+    }
     // The stored id is only trusted after a public detail GET proves what it is. Keys
-    // written by the superseded PBLC runtime are listed for lookup and never touched.
+    // written by the superseded PBLC runtime were removed explicitly above.
     // `null` re-enters the checking state, so a re-check blocks the run exactly like
     // the first one does.
     setPending(null);
@@ -68,9 +73,10 @@ export function PurchaseRequest() {
 
   useEffect(() => {
     let active = true;
-    void api<{ execution_mode?: unknown }>("/health")
+    void api<{ execution_mode?: unknown; token_symbol?: string }>("/health")
       .then((health) => {
         if (active) setRuntimeMode(health.execution_mode === "live" ? "live" : "mock");
+        if (active) setTokenSymbol(health.token_symbol || "토큰");
       })
       .catch(() => {
         if (active) setRuntimeMode("unavailable");
@@ -185,12 +191,12 @@ export function PurchaseRequest() {
           </div>
           <span className={`badge ${runtimeMode === "live" ? "normal" : "caution"}`}>
             {runtimeMode === "live"
-              ? "실제 PBLC 결제 · Mock Provider"
+              ? `실제 ${tokenSymbol} 결제 · Mock Provider`
               : runtimeMode === "checking"
                 ? "결제 모드 확인 중"
                 : runtimeMode === "unavailable"
                   ? "결제 모드 확인 불가"
-                  : "Mock 결제 · PBLC V2 조건"}
+                  : `Mock 결제 · ${tokenSymbol} 조건`}
           </span>
         </div>
 
@@ -201,10 +207,10 @@ export function PurchaseRequest() {
           </label>
 
           <label>
-            <span>예산(PBLC, 선택)</span>
+            <span>예산({tokenSymbol}, 선택)</span>
             <input name="budget" type="number" min="0.000001" max="1" step="0.000001" placeholder="비워두면 지갑의 1회 한도 적용" />
             <small>
-              PBLC V2는 소수점 6자리이고 1 PBLC는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
+              {tokenSymbol}는 소수점 6자리이고 1 {tokenSymbol}는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
               화폐 가치가 아닙니다.
             </small>
           </label>
@@ -227,7 +233,7 @@ export function PurchaseRequest() {
 
           <div className="experimentTerms" aria-label="구매 실행 조건">
             <div><span>구매 주체</span><strong>구매 에이전트</strong></div>
-            <div><span>결제 자산</span><strong>PBLC · 표준 작업 최대 8,000 출력 토큰 기준</strong></div>
+            <div><span>결제 자산</span><strong>{tokenSymbol} · 표준 작업 최대 8,000 출력 토큰 기준</strong></div>
             <div><span>실행·정산</span><strong>{runtimeMode === "live" ? "Mock Provider · 실제 x402 Facilitator 정산" : "Mock Provider · Mock Facilitator"}</strong></div>
             <div><span>감사 범위</span><strong>선택 · 결제 · 전달</strong></div>
           </div>
@@ -238,7 +244,7 @@ export function PurchaseRequest() {
               구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
               ERC-3009 승인으로 한 번만 요청하고, 판단·결제·감사 증거를 같은 purchaseId로
               기록하는 것을 확인했습니다. 서버가 <strong>실제 결제 모드</strong>로 구성된 경우에는
-              이 실행이 선택된 판매자 지갑에 실제 Base Sepolia PBLC를 한 번 전송할 수 있으며,
+              이 실행이 선택된 판매자 지갑에 실제 Base Sepolia {tokenSymbol}를 한 번 전송할 수 있으며,
               Provider 응답은 계속 모의 실행으로 표시됩니다. Mock 결제 모드에서는 토큰을 전송하지
               않습니다.
             </span>
@@ -264,13 +270,13 @@ export function PurchaseRequest() {
           {resumable && (
             <div className="notice">
               {resumable.settled
-                ? "PBLC 정산은 이미 기록됐습니다. 같은 요청으로 결과와 감사를 이어서 받을 수 있으며, 이 동작은 새 서명·Facilitator 호출·토큰 전송을 하지 않습니다."
-                : "진행 중인 PBLC V2 조건 구매가 있습니다. 저장된 요청과 같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다."}{" "}
+                ? "정산은 이미 기록됐습니다. 같은 요청으로 결과와 감사를 이어서 받을 수 있으며, 이 동작은 새 서명·Facilitator 호출·토큰 전송을 하지 않습니다."
+                : "진행 중인 구매가 있습니다. 저장된 요청과 같을 때만 이어서 실행하고, 프롬프트·우선순위·예산이 달라지면 새 구매를 만듭니다."}{" "}
               {short(resumable.purchaseId, 10)}
               <small>
                 저장된 요청: 프롬프트 해시 {short(resumable.promptHash, 10)} · priority{" "}
                 {resumable.originalPriority ?? "미지정(자동 분류)"} · 예산{" "}
-                {credits(resumable.budgetUnits)} PBLC
+                {credits(resumable.budgetUnits)} {tokenSymbol}
               </small>
             </div>
           )}

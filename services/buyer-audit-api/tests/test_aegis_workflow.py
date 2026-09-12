@@ -9,7 +9,13 @@ import pytest
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
-from buyer_audit_api.core.aa_policy import AA_SCORING_POLICY_VERSION
+from buyer_audit_api.core.aa_policy import (
+    AA_SCORING_POLICY_VERSION,
+    LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD,
+    PriorityClassification,
+    PriorityReason,
+    RequestPriority,
+)
 from buyer_audit_api.core.documents import verify_immutable_document
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import (
@@ -169,6 +175,47 @@ async def test_decision_records_snapshot_then_decision_evidence(
     assert decided["weights"] == {"price": 40, "completionTime": 30, "intelligence": 30}
     assert decided["token"]["symbol"] == "AEGIS"
     assert decided["token"]["status"] == "prepared"
+
+
+async def test_local_qwen_priority_reaches_selection_and_deterministic_explanation(
+    repository: InMemoryEvidenceRepository,
+    clock: FrozenClock,
+    workflow: AegisDecisionWorkflow,
+) -> None:
+    class LocalClassifier:
+        def classify(self, *, prompt: str) -> PriorityClassification:
+            return PriorityClassification(
+                effective=RequestPriority.INTELLIGENCE,
+                original=None,
+                reason=PriorityReason.LOCAL_MODEL,
+                matched_keywords=(),
+                matched_priorities=(),
+                classification_method=LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD,
+                classification_model="qwen3.5:4b",
+                classification_evidence="intelligence",
+            )
+
+    purchases = PurchaseService(
+        repository=repository,
+        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
+        domains=DomainRegistry(
+            [
+                AiInferenceDomainModule(
+                    default_max_output_tokens=MAX_OUTPUT_TOKENS,
+                    priority_classifier=LocalClassifier(),
+                )
+            ]
+        ),
+        clock=clock,
+    )
+    purchase_id = await _create(purchases, budget_units=5_000)
+    decision = await workflow.decide(purchase_id=purchase_id)
+    assert decision.classification.reason is PriorityReason.LOCAL_MODEL
+    assert "로컬 Qwen 요청 의미 분류" in decision.explanation
+    events = await repository.list_events(purchase_id)
+    priority = events[-1].payload["priority"]
+    assert priority["classificationMethod"] == LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD
+    assert priority["classificationModel"] == "qwen3.5:4b"
 
 
 async def test_amounts_are_the_exact_ceiling_of_the_aa_prices(

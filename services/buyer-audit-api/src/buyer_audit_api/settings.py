@@ -40,10 +40,18 @@ class Settings(BaseSettings):
     # standard-answer-v1: a fixed maximum output allocation used for the one-task quote.
     aegis_max_output_tokens: int = 8_000
     aegis_system_prompt: str = ""
+    # Existing tests and non-demo deployments keep deterministic keyword classification.
+    # The local runner explicitly opts into the bounded loopback Qwen classifier.
+    aegis_priority_classifier: str = "deterministic"
+    aegis_ollama_url: str = "http://127.0.0.1:11434"
+    aegis_ollama_model: str = "qwen3.5:4b"
+    aegis_ollama_timeout_seconds: float = 8.0
     # User-owned six-decimal ERC-3009 PBLC on Base Sepolia. Whether a request can
     # settle is controlled only by the server-side execution mode and approval gate.
     pblc_token_address: str = "0xe75013d333bebb90b321dd658440c10b5a0face8"
     pblc_token_status: str = "deployed-base-sepolia"
+    payment_token_name: str = "PBL Agent Credit"
+    payment_token_symbol: str = "PBLC"
     # Single-user local demo identity. This is server configuration, not a login: the
     # browser can never choose it. Clearing it restores the historical SIWE composition
     # for reading PBLC history, and that legacy mode is manual only.

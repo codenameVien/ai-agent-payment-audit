@@ -142,7 +142,7 @@ export function Overview() {
           <span>정산 완료 거래</span>
           <strong>{settled.length}</strong>
           <small>
-            PBLC V2 조건 모의 정산 {aegisSettled.length}건 · 과거 PBLC{" "}
+            Facilitator 정산 {aegisSettled.length}건 · 과거 정책{" "}
             {settled.length - aegisSettled.length}건
           </small>
         </article>
@@ -213,6 +213,7 @@ export function Overview() {
                             status={item.status}
                             policy={aegis ? "aegis" : "legacy"}
                             paymentStatus={item.payment_status}
+                            tokenAddress={item.token}
                           />
                         </td>
                         <td>

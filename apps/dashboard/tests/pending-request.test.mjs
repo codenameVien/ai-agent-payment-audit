@@ -10,7 +10,7 @@ const skip = stripsTypes ? false : "requires a Node build with TypeScript type s
 
 const OLD_COMMON_KEY = "pbl:purchase-request-id";
 const OLD_EXPERIMENT_KEY = "pbl:normal-experiment-purchase-id";
-const NEW_KEY = "aegis:purchase-request-id";
+const NEW_KEY = "aegis:token-v1:purchase-request-id";
 
 /** A store that fails loudly if the resume policy ever writes to browser storage. */
 function store(values) {

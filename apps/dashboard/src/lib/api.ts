@@ -35,3 +35,10 @@ export function tokenAmount(value: number | null, decimals = 6): string {
 export function credits(value: number | null): string {
   return tokenAmount(value, 6);
 }
+
+/** Contract identity, never a relabel of an older PBLC transfer. */
+export function paymentTokenSymbol(address: string | null | undefined): string {
+  if (address?.toLowerCase() === "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b") return "AEGIS";
+  if (["0xe75013d333bebb90b321dd658440c10b5a0face8", "0xded7f4992d98ef31453dcebbb8c2a6b50d0284b3"].includes(address?.toLowerCase() ?? "")) return "PBLC";
+  return "토큰";
+}

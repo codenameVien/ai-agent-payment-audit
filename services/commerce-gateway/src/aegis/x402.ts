@@ -9,7 +9,7 @@
  */
 
 import { encodeHeader, X402BindingError } from "../x402.js";
-import { PBLC_TOKEN_NAME, PBLC_TOKEN_VERSION, type AegisTerms } from "./terms.js";
+import { PBLC_TOKEN_VERSION, type AegisTerms } from "./terms.js";
 
 export { encodeHeader, X402BindingError };
 
@@ -118,8 +118,8 @@ export function requirementsFor(args: {
     maxTimeoutSeconds: args.maxTimeoutSeconds,
     extra: {
       assetTransferMethod: "eip3009",
-      name: args.tokenName ?? PBLC_TOKEN_NAME,
-      version: args.tokenVersion ?? PBLC_TOKEN_VERSION,
+      name: args.tokenName ?? args.terms.token.name,
+      version: args.tokenVersion ?? (args.terms.token.name === "AEGIS" ? "1" : PBLC_TOKEN_VERSION),
     },
   };
 }

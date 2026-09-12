@@ -314,7 +314,7 @@ try {
   }
 
   process.stdout.write(`${JSON.stringify({
-    mode: "live-pblc-payment-mock-provider",
+    mode: "live-token-payment-mock-provider",
     transactionBroadcastAtStartup: false,
     api: apiUrl,
     request: "Start the dashboard with API_ORIGIN set to this API, then open /request.",
@@ -322,10 +322,12 @@ try {
     facilitator: facilitatorUrl.toString(),
     payer: buyerWalletAddress,
     token: env.PBLC_TOKEN_ADDRESS,
+    tokenSymbol: env.PAYMENT_TOKEN_SYMBOL || "PBLC",
+    priorityClassifier: env.AEGIS_PRIORITY_CLASSIFIER || "deterministic",
     evidenceMongo: "project-local replica set",
     providerOutput: "mock",
     aaMode,
-    note: "A PBLC transfer can occur only after a user submits one consented request.",
+    note: "A token transfer can occur only after a user submits one consented request.",
   }, null, 2)}\n`);
 } catch (error) {
   stop();

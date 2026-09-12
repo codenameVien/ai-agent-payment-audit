@@ -16,8 +16,10 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
+from buyer_audit_api.adapters.local_priority import PriorityClassifier
 from buyer_audit_api.core.aa_policy import (
     AA_REQUEST_SCHEMA_VERSION,
+    PRIORITY_CLASSIFICATION_METHOD,
     TOKEN_ESTIMATION_METHOD,
     AaRequestSchemaVersion,
     PolicyNumberError,
@@ -58,6 +60,9 @@ class AegisNormalizedRequest(BaseModel):
     priority_reason: PriorityReason
     matched_keywords: tuple[str, ...] = ()
     matched_priorities: tuple[RequestPriority, ...] = ()
+    classification_method: str = PRIORITY_CLASSIFICATION_METHOD
+    classification_model: str | None = None
+    classification_evidence: str | None = None
     required_capabilities: tuple[str, ...] = ()
     allowed_providers: tuple[str, ...] = ()
     max_completion_ms: int | None = Field(default=None, gt=0)
@@ -79,6 +84,9 @@ class AegisNormalizedRequest(BaseModel):
             reason=self.priority_reason,
             matched_keywords=self.matched_keywords,
             matched_priorities=self.matched_priorities,
+            classification_method=self.classification_method,
+            classification_model=self.classification_model,
+            classification_evidence=self.classification_evidence,
         )
 
     @property
@@ -104,6 +112,7 @@ def normalize_aegis_request(
     *,
     default_max_output_tokens: int,
     system_prompt: str = "",
+    priority_classifier: PriorityClassifier | None = None,
 ) -> AegisNormalizedRequest:
     """Build the stored normalization, including the whole input the model will receive."""
     prompt, explicit_priority = classification_inputs(payload)
@@ -115,6 +124,8 @@ def normalize_aegis_request(
         raise ValueError("max_output_tokens must be a positive integer")
     try:
         classification = classify_priority(prompt=prompt, explicit=explicit_priority)
+        if classification.original is None and priority_classifier is not None:
+            classification = priority_classifier.classify(prompt=prompt)
         estimate = estimate_tokens(
             model_input_parts=(system_prompt, prompt),
             max_output_tokens=max_output_tokens,
@@ -154,6 +165,9 @@ def normalize_aegis_request(
             priority_reason=classification.reason,
             matched_keywords=classification.matched_keywords,
             matched_priorities=classification.matched_priorities,
+            classification_method=classification.classification_method,
+            classification_model=classification.classification_model,
+            classification_evidence=classification.classification_evidence,
             required_capabilities=required,
             allowed_providers=providers,
             max_completion_ms=payload.get("max_completion_ms"),

@@ -1,5 +1,7 @@
 # 로컬 완료 및 외부 실행 인계
 
+> **최신 2026-09-12:** [AEGIS/Qwen 전환 기록](AEGIS_QWEN_MIGRATION.md)이 아래 이전 상태보다 우선한다. AEGIS 신규 배포·초기 mint 완료, PBLC 관련 DB 48문서 삭제. 로컬 Qwen 자동 priority와 고정 정책을 연결했다. AEGIS 외부 Facilitator 실결제는 아직 검증하지 않았으며 과거 PBLC 성공과 구분한다. AWS·유료 Provider 호출은 하지 않는다.
+
 > **현재 범위:** 발표용 로컬 데모와 사용자 승인된 Base Sepolia PBLC 실제 결제 경로를 준비한다. Mock Provider E2E, 예산 초과·402 불일치·중복 결제 방지, dashboard build·기본 lint가 기존 검증 범위다. `live` 결제는 별도 서버 모드·`/request` 실행 동의로만 시도하며, 유료 Provider 호출과 AWS 배포는 하지 않는다.
 
 > 2026-09-10: 아래 과거 PBLC 구성·실거래 결과는 **역사 기록**이다. 기존 PBLC V2는 타 지갑이 owner라 신규 지급 자산으로 재사용하지 않는다. 사용자 소유 PBLC `0xe750…ace8`는 배포·초기 mint까지 완료됐다. 새 `live` 경로는 외부 Facilitator를 통해 실제 PBLC 결제를 시도할 수 있지만, 이 변경만으로 verify/settle 또는 전송을 실행한 것은 아니다. Provider는 Mock이다.

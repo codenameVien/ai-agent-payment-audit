@@ -36,6 +36,7 @@ AA_SCORING_POLICY_VERSION: AaScoringPolicyVersion = "aa-three-factor-v1"
 AA_REQUEST_SCHEMA_VERSION: AaRequestSchemaVersion = "aegis-aa-v1"
 TOKEN_ESTIMATION_METHOD: TokenEstimationMethod = "utf8-bytes-div4-v1"
 PRIORITY_CLASSIFICATION_METHOD = "keyword-single-match-v1"
+LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD = "ollama-qwen-structured-v1"
 
 # AEGIS is a 6-decimal token, so one unit is 1e-6 nominal USD.
 AEGIS_DECIMALS = 6
@@ -144,6 +145,7 @@ class PriorityReason(StrEnum):
     KEYWORD_MATCH = "keyword_match"
     NO_KEYWORD_MATCH = "no_keyword_match"
     CONFLICTING_KEYWORD_MATCH = "conflicting_keyword_match"
+    LOCAL_MODEL = "local_model_classification"
 
 
 @dataclass(frozen=True, slots=True)
@@ -155,6 +157,9 @@ class PriorityClassification:
     reason: PriorityReason
     matched_keywords: tuple[str, ...]
     matched_priorities: tuple[RequestPriority, ...]
+    classification_method: str = PRIORITY_CLASSIFICATION_METHOD
+    classification_model: str | None = None
+    classification_evidence: str | None = None
 
     @property
     def weights(self) -> PolicyWeights:
@@ -162,7 +167,9 @@ class PriorityClassification:
 
     def to_payload(self) -> JsonObject:
         return {
-            "classificationMethod": PRIORITY_CLASSIFICATION_METHOD,
+            "classificationMethod": self.classification_method,
+            "classificationModel": self.classification_model,
+            "classificationEvidence": self.classification_evidence,
             "effectivePriority": self.effective.value,
             "matchedKeywords": list(self.matched_keywords),
             "matchedPriorities": [item.value for item in self.matched_priorities],

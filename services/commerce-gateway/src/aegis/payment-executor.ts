@@ -84,6 +84,23 @@ function sha256Text(value: string): string {
   return `sha256:${createHash("sha256").update(value, "utf8").digest("hex")}`;
 }
 
+/**
+ * Delivery identity excludes the mock's elapsed-time observation. That number changes
+ * on a safe replay, while every provider-result fact that identifies the delivered
+ * answer remains hash-bound. Keeping it out prevents an already settled retry from
+ * looking like a different delivery to the Evidence API.
+ */
+export function providerResultHash(result: unknown): string {
+  if (typeof result === "object" && result !== null && !Array.isArray(result)) {
+    const { observedExecutionMs: _observedExecutionMs, ...identity } = result as Record<
+      string,
+      unknown
+    >;
+    return sha256Text(JSON.stringify(identity));
+  }
+  return sha256Text(JSON.stringify(result));
+}
+
 function bodyError(body: unknown): string {
   if (typeof body === "object" && body !== null) {
     const error = (body as Record<string, unknown>).error;
@@ -424,7 +441,7 @@ export class AegisPaymentExecutor {
         providerModelId: derived.providerModelId,
         modelVersion: derived.modelVersion,
         responseId: this.#responseId(providerResult),
-        responseHash: sha256Text(JSON.stringify(providerResult)),
+        responseHash: providerResultHash(providerResult),
         observedExecutionMs: this.#observedMs(providerResult),
       });
       return this.#result({
@@ -508,7 +525,7 @@ export class AegisPaymentExecutor {
       providerModelId: derived.providerModelId,
       modelVersion: derived.modelVersion,
       responseId: this.#responseId(delivered.body),
-      responseHash: sha256Text(JSON.stringify(delivered.body)),
+      responseHash: providerResultHash(delivered.body),
       observedExecutionMs: this.#observedMs(delivered.body),
     });
     return this.#result({

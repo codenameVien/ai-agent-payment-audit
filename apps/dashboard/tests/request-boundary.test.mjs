@@ -32,12 +32,12 @@ test("the request posts an aegis-aa-v1 body and omits priority when it is automa
   assert.match(source, /input\.priority === null \? \{\} : \{ priority: input\.priority \}/);
   assert.match(source, /priority === "auto" \? null : priority/);
   assert.match(source, /policy: \{\}/);
-  assert.match(source, /1 PBLC 이하여야 합니다/);
+  assert.match(source, /결제 토큰 1개 이하여야 합니다/);
   // The new surface never asks for a SIWE login and never sends the user to MetaMask.
   assert.doesNotMatch(source, /MetaMask|\/login|siwe/i);
-  assert.match(source, /실제 PBLC 결제 · Mock Provider/);
+  assert.match(source, /실제 \$\{tokenSymbol\} 결제 · Mock Provider/);
   assert.match(source, /실제 x402 Facilitator 정산/);
-  assert.match(source, /실제 Base Sepolia PBLC를 한 번 전송할 수 있으며/);
+  assert.match(source, /실제 Base Sepolia \{tokenSymbol\}를 한 번 전송할 수 있으며/);
 });
 
 test("the request surface only ever writes its own aegis pending key", async () => {
@@ -46,12 +46,12 @@ test("the request surface only ever writes its own aegis pending key", async () 
     (match) => [match[1], match[2].trim()],
   );
   assert.deepEqual(storageCalls, [
+    ["removeItem", "key"],
     ["setItem", "AEGIS_PENDING_PURCHASE_KEY"],
     ["removeItem", "AEGIS_PENDING_PURCHASE_KEY"],
   ]);
-  // The keys of the superseded runtime are never named here: they are read through the
-  // resume policy and only rendered as history links.
-  assert.doesNotMatch(source, /pbl:(purchase-request-id|normal-experiment-purchase-id)/);
+  // Only the explicitly approved old PBLC keys are cleared, never the new pending key.
+  assert.match(source, /\["aegis:purchase-request-id", "pbl:purchase-request-id", "pbl:normal-experiment-purchase-id"\]/);
 });
 
 test("a stored id is verified before any resume and blocks the run when unverified", async () => {
@@ -136,7 +136,7 @@ test("aegis settlement is never presented as an independently verified chain pay
   ]);
   assert.match(status, /policy === "aegis"/);
   assert.match(status, /Facilitator 응답 기준 정산 · Mock 결제/);
-  assert.match(status, /Facilitator 응답 기준 정산 · 실제 PBLC 전송 제출/);
+  assert.match(status, /Facilitator 응답 기준 정산 · 실제 토큰 전송 제출/);
   // The aegis branch resolves from its own Facilitator basis, not by claiming an
   // application-side chain receipt verification.
   const aegisBranch = status.slice(

@@ -13,7 +13,7 @@ import type { Hex } from "viem";
 
 import { AegisEvidenceClient } from "../src/aegis/evidence-client.js";
 import { MockFacilitator } from "../src/aegis/facilitator.js";
-import { AegisPaymentExecutor } from "../src/aegis/payment-executor.js";
+import { AegisPaymentExecutor, providerResultHash } from "../src/aegis/payment-executor.js";
 import { ProviderGateway } from "../src/aegis/provider-gateway.js";
 import { createMockProvider, type MockProvider } from "../src/aegis/providers.js";
 import { AegisAuthorizationSigner } from "../src/aegis/signer.js";
@@ -164,6 +164,39 @@ for (const providerId of Object.keys(TEST_MODELS)) {
     }
   });
 }
+
+test("AEGIS name/version binding settles once using the new token identity", async () => {
+  const harness = await startHarness();
+  try {
+    const purchaseId = "aegis-token-migration";
+    harness.evidence.purchases.set(purchaseId, buildDecisionEvidence({
+      purchaseId, model: TEST_MODELS.google!, amountUnits: AMOUNTS.google!,
+      overrides: { token: { address: "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b",
+        chainId: 84532, decimals: 6, name: "AEGIS", symbol: "AEGIS", status: "deployed-base-sepolia" } },
+    }));
+    const result = await harness.executor.execute({ purchaseId, resourceBody: { prompt: "AEGIS 검증" } });
+    assert.equal(result.payment_status, "settled");
+    const replay = await harness.executor.execute({ purchaseId, resourceBody: { prompt: "AEGIS 검증" } });
+    assert.equal(replay.payment_status, "settled");
+    assert.equal(harness.evidence.settlements.length, 1);
+    assert.equal(harness.evidence.deliveries.length, 2);
+  } finally { await harness.close(); }
+});
+
+test("delivery identity ignores mock timing but keeps result changes distinct", () => {
+  const result = {
+    responseId: "stable-response", providerId: "openai", text: "saved mock answer",
+    observedExecutionMs: 1,
+  };
+  assert.equal(
+    providerResultHash(result),
+    providerResultHash({ ...result, observedExecutionMs: 47 }),
+  );
+  assert.notEqual(
+    providerResultHash(result),
+    providerResultHash({ ...result, text: "different answer" }),
+  );
+});
 
 test("a gateway refuses a purchase that selected another provider", async () => {
   const harness = await startHarness();

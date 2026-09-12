@@ -12,9 +12,9 @@ import { resolve } from "node:path";
 import { createPublicClient, formatUnits, http } from "viem";
 import { baseSepolia } from "viem/chains";
 
-const EXPECTED_TOKEN = "0xe75013d333bebb90b321dd658440c10b5a0face8";
-const EXPECTED_NAME = "PBL Agent Credit";
-const EXPECTED_SYMBOL = "PBLC";
+const EXPECTED_TOKEN = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b";
+const EXPECTED_NAME = "AEGIS";
+const EXPECTED_SYMBOL = "AEGIS";
 const EXPECTED_DECIMALS = 6;
 
 const ERC20_METADATA_ABI = [
@@ -67,8 +67,8 @@ function required(values, key) {
 
 function usage() {
   process.stdout.write([
-    "User-owned PBLC / x402 read-only payment preflight",
-    "Reads .env.local and checks wallet, PBLC metadata/balance, and Facilitator /supported.",
+    "User-owned AEGIS / x402 read-only payment preflight",
+    "Reads .env.local and checks wallet, AEGIS metadata/balance, and Facilitator /supported.",
     "It does not sign, call /verify or /settle, or broadcast any transaction.",
   ].join("\n") + "\n");
 }
@@ -145,7 +145,7 @@ process.stdout.write(`${JSON.stringify({
   facilitator: {
     url: facilitatorUrl,
     supportsV2ExactBaseSepolia: supportsExactBaseSepolia,
-    note: "This endpoint does not prove PBLC custom-token acceptance; that requires a separately approved verify/settle smoke.",
+    note: "This endpoint does not prove AEGIS custom-token acceptance; that requires a separately approved verify/settle smoke.",
   },
 }, null, 2)}\n`);
 

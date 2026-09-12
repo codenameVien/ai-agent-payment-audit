@@ -19,6 +19,7 @@ from decimal import Decimal, InvalidOperation
 
 from buyer_audit_api.core.aa_policy import (
     AA_REQUEST_SCHEMA_VERSION,
+    LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD,
     PRIORITY_CLASSIFICATION_METHOD,
     PRIORITY_KEYWORDS,
     PRIORITY_WEIGHTS,
@@ -455,8 +456,9 @@ def _priority_issues(
     except ValueError:
         priority = None
     expected_weights = None if priority is None else PRIORITY_WEIGHTS[priority]
+    classification_method = normalized.get("classification_method", PRIORITY_CLASSIFICATION_METHOD)
     expected_priority = {
-        "classificationMethod": "keyword-single-match-v1",
+        "classificationMethod": classification_method,
         "effectivePriority": raw_priority,
         "matchedKeywords": list(_strings(normalized.get("matched_keywords"))),
         "matchedPriorities": list(_strings(normalized.get("matched_priorities"))),
@@ -464,6 +466,11 @@ def _priority_issues(
         "reason": normalized.get("priority_reason"),
         "weights": None if expected_weights is None else expected_weights.to_payload(),
     }
+    # Pre-Qwen evidence has neither field. Do not retroactively call that stable
+    # historical shape corrupt merely because the reader learned new optional fields.
+    if "classification_model" in normalized or "classification_evidence" in normalized:
+        expected_priority["classificationModel"] = normalized.get("classification_model")
+        expected_priority["classificationEvidence"] = normalized.get("classification_evidence")
     if expected_weights is None or dict(stored) != expected_priority:
         issues.append(
             AaRecalculationIssue(
@@ -498,6 +505,7 @@ def _classification_issues(
     raw_reason = normalized.get("priority_reason")
     matched_priorities = _strings(normalized.get("matched_priorities"))
     matched_keywords = _strings(normalized.get("matched_keywords"))
+    method = normalized.get("classification_method", PRIORITY_CLASSIFICATION_METHOD)
     try:
         reason = PriorityReason(str(raw_reason))
     except ValueError:
@@ -512,6 +520,49 @@ def _classification_issues(
         ]
     if priority is None:
         return []
+    if method == LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD:
+        actual = {
+            "classificationModel": normalized.get("classification_model"),
+            "classificationEvidence": normalized.get("classification_evidence"),
+            "matchedKeywords": list(matched_keywords),
+            "matchedPriorities": list(matched_priorities),
+            "originalPriority": original,
+            "reason": reason.value,
+        }
+        local_expected: JsonObject = {
+            "classificationModel": "non-empty string",
+            "classificationEvidence": priority.value,
+            "matchedKeywords": [],
+            "matchedPriorities": [],
+            "originalPriority": None,
+            "reason": PriorityReason.LOCAL_MODEL.value,
+        }
+        inconsistent = (
+            not isinstance(normalized.get("classification_model"), str)
+            or not str(normalized.get("classification_model")).strip()
+            or normalized.get("classification_evidence") != priority.value
+            or matched_keywords
+            or matched_priorities
+            or original is not None
+            or reason is not PriorityReason.LOCAL_MODEL
+        )
+        local_issues: list[AaRecalculationIssue] = []
+        if inconsistent:
+            local_issues.append(
+                AaRecalculationIssue(
+                    rule_id="AUD-AA-PRIORITY-CLASSIFICATION-INCONSISTENT",
+                    detail="로컬 모델 분류의 방법·모델·통제된 근거가 서로 맞지 않습니다.",
+                    expected=local_expected,
+                    observed=actual,
+                    mismatched_fields=("priority_reason", "classification_method"),
+                )
+            )
+        local_issues.extend(
+            _original_request_issues(
+                normalized, original_request, reason, matched_keywords, str(method)
+            )
+        )
+        return local_issues
     expectations: dict[str, object] = {}
     if reason is PriorityReason.EXPLICIT:
         expectations = {
@@ -612,7 +663,9 @@ def _classification_issues(
             )
         )
     issues.extend(
-        _original_request_issues(normalized, original_request, reason, matched_keywords)
+        _original_request_issues(
+            normalized, original_request, reason, matched_keywords, str(method)
+        )
     )
     return issues
 
@@ -622,6 +675,7 @@ def _original_request_issues(
     original_request: OriginalClassification | None,
     reason: PriorityReason,
     matched_keywords: tuple[str, ...],
+    classification_method: str = PRIORITY_CLASSIFICATION_METHOD,
 ) -> list[AaRecalculationIssue]:
     """Compare the recorded classification with a re-classification of the original.
 
@@ -634,6 +688,10 @@ def _original_request_issues(
         PriorityReason.CONFLICTING_KEYWORD_MATCH,
     )
     if original_request is None:
+        if classification_method == LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD:
+            # A local model decision is intentionally not re-run during an audit: a
+            # later inference could differ without proving evidence corruption.
+            return []
         if not keyword_reason:
             return []
         # No reader is wired: historical behaviour, reported as not re-derivable.
@@ -675,15 +733,25 @@ def _original_request_issues(
                 is_contradiction=False,
             )
         ]
+    if classification_method == LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD:
+        # Binding/decryption was checked above. Do not equate a deterministic keyword
+        # re-classification with the intentionally recorded local-model inference.
+        return []
     recorded = {
-        "classificationMethod": PRIORITY_CLASSIFICATION_METHOD,
+        "classificationMethod": classification_method,
         "effectivePriority": normalized.get("effective_priority"),
         "matchedKeywords": list(_strings(normalized.get("matched_keywords"))),
         "matchedPriorities": list(_strings(normalized.get("matched_priorities"))),
         "originalPriority": normalized.get("original_priority"),
         "reason": normalized.get("priority_reason"),
     }
+    if "classification_model" in normalized or "classification_evidence" in normalized:
+        recorded["classificationModel"] = normalized.get("classification_model")
+        recorded["classificationEvidence"] = normalized.get("classification_evidence")
     rederived = original_request.to_payload()
+    if "classification_model" not in normalized and "classification_evidence" not in normalized:
+        rederived.pop("classificationModel", None)
+        rederived.pop("classificationEvidence", None)
     if recorded == rederived:
         return []
     return [
