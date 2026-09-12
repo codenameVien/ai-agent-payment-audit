@@ -65,3 +65,6 @@ Gateway는 body의 amount를 믿지 않고 evidence API에서 같은 snapshot과
 신규 audit는 저장된 전체 후보와 snapshot으로 필터·산식·점수·rank를 독립 재계산한다. 분류 이유/weights/amount/402/Facilitator proof와 중복 기록을 대조한다. estimatedCompletionMs와 observedExecutionMs 차이는 모의/실제 구분과 함께 보고하고 보장 위반으로 단정하지 않는다. hash chain은 저장 증거 내부 검증이며 외부 온체인 기준점에 의한 무결성 보장으로 표현하지 않는다.
 
 UI는 policy discriminator에 따라 신규/과거 renderer를 선택한다. PBLC 역사 필드는 그대로, 누락 역사 필드는 unavailable, 새 거래에는 Mock Provider/Mock Facilitator·AA fixture 또는 live·명목 환산·선결제 고정액·벤치마크 참고 시간 표시. SIWE가 없는 local demo에서 기존 history 읽기 범위를 서버 고정 owner 정책으로 처리하고 public multi-user 완성 주장 금지.
+# 2026-09-12 설계 변경
+
+최신 확정 설계와 영향 범위: [Decision Observer 계획](../../docs/DECISION_OBSERVER_PLAN.md). 원문 MongoDB, 두 단계 해시 체크포인트, 분리된 Qwen 관찰, 메시지와 결제 동의 분리.

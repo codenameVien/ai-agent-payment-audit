@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 
 import { AegisPurchaseDecision } from "@/features/ai-inference/aegis-decision";
 import { AiInferencePurchaseEvidence } from "@/features/ai-inference/purchase-evidence";
+import { EvidenceCheckpoints } from "./evidence-checkpoints";
 import { isAegisRequest, readAegisSettlement } from "@/lib/aegis";
 import { api, short, paymentTokenSymbol } from "@/lib/api";
 import type { PurchaseDetail as Detail } from "@/lib/types";
@@ -108,6 +109,7 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
       ) : (
         <AiInferencePurchaseEvidence events={detail.events} />
       )}
+      <EvidenceCheckpoints events={detail.events} />
       {aegis && settlement !== null && (
         <section className="panel">
           <p className="eyebrow">x402 정산 증거</p>

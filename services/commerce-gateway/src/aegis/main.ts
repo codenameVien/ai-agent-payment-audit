@@ -18,6 +18,7 @@ import { AegisPaymentExecutor } from "./payment-executor.js";
 import { ProviderGateway } from "./provider-gateway.js";
 import { mockProviderFor, MOCK_EXECUTION_MODE } from "./providers.js";
 import { AegisAuthorizationSigner } from "./signer.js";
+import { checkpointsFromEnv } from "./checkpoints.js";
 
 export const DEFAULT_NETWORK = "eip155:84532";
 export const AEGIS_EXECUTION_MODES = new Set(["mock", "live"]);
@@ -171,6 +172,7 @@ export function createPaymentExecutor(
  */
 export function createPaymentExecutorServer(env: NodeJS.ProcessEnv = process.env): Server {
   const executor = createPaymentExecutor(env);
+  const checkpoints = checkpointsFromEnv(env);
   const executionMode = executionModeFor(env);
   const serviceToken = required(env, "GATEWAY_SERVICE_TOKEN");
   return serve(async (request) => {
@@ -189,12 +191,23 @@ export function createPaymentExecutorServer(env: NodeJS.ProcessEnv = process.env
     if (request.method === "GET" && url.pathname === "/address") {
       return json({ buyerWalletAddress: executor.buyerAddress });
     }
+    if (request.method === "POST" && url.pathname === "/evidence-checkpoints") {
+      const body = await request.json() as { purchaseId?: unknown; phase?: unknown };
+      if (typeof body.purchaseId !== "string" || !body.purchaseId ||
+          (body.phase !== "decision" && body.phase !== "audit")) return json({ error: "invalid checkpoint request" }, 400);
+      try {
+        return json(await checkpoints.anchor(body.purchaseId, body.phase));
+      } catch {
+        return json({ error: "evidence checkpoint not confirmed; payment must not advance" }, 409);
+      }
+    }
     if (request.method === "POST" && url.pathname === "/execute") {
       const body = (await request.json()) as { purchaseId?: unknown; resourceBody?: unknown };
       if (typeof body.purchaseId !== "string" || body.purchaseId.length === 0) {
         return json({ error: "purchaseId is required" }, 400);
       }
       try {
+        await checkpoints.requireDecision(body.purchaseId);
         return json(
           await executor.execute({
             purchaseId: body.purchaseId,

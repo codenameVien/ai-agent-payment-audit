@@ -137,7 +137,7 @@ async function startProjectLocalReplicaSet(port) {
     "--replSet", LIVE_REPLICA_SET,
     "--nounixsocket",
     "--logpath", resolve(dbPath, "mongod.log"),
-  ], env);
+  ], nonSignerEnv());
   for (let attempt = 0; attempt < 100; attempt += 1) {
     try {
       await mongoshEval(port, "db.runCommand({ping:1}).ok");
@@ -175,6 +175,10 @@ async function startProjectLocalReplicaSet(port) {
 
 const local = parseEnv(await readFile(resolve(REPO_ROOT, ".env.local"), "utf8"));
 const env = { ...process.env, ...local };
+// Wallet/Anchor signing keys belong only to the isolated payment executor.
+const nonSignerEnv = () => Object.fromEntries(
+  Object.entries(env).filter(([name]) => !name.endsWith("PRIVATE_KEY")),
+);
 if (env.AEGIS_EXECUTION_MODE !== "live") {
   throw new Error("Refusing to start: set AEGIS_EXECUTION_MODE=live in .env.local");
 }
@@ -239,7 +243,7 @@ try {
     "run", "--project", "services/buyer-audit-api", "uvicorn", "buyer_audit_api.main:app",
     "--app-dir", "services/buyer-audit-api/src", "--host", "127.0.0.1", "--port", String(apiPort),
   ], {
-    ...env,
+    ...nonSignerEnv(),
     MONGODB_URI: liveMongo.uri,
     MONGODB_DATABASE: env.AEGIS_LIVE_MONGODB_DATABASE || "aegis_live_payment",
     COMMERCE_GATEWAY_URL: executorUrl,
@@ -250,7 +254,7 @@ try {
     start(`gateway-${provider}`, process.execPath, [
       "services/commerce-gateway/dist/src/aegis/main.js", "provider-gateway",
     ], {
-      ...env,
+      ...nonSignerEnv(),
       PORT: String(gatewayPorts[provider]),
       AEGIS_PROVIDER_ID: provider,
       AEGIS_NETWORK: "eip155:84532",

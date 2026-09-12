@@ -29,6 +29,8 @@ const REPLICA_SET = "aegisrs";
 // Storage is deliberately absent from this list: this run always owns its own mongod.
 const ALLOWED_OPTIONS = new Set([
   "priorityClassifier",
+  "observerMode",
+  "checkpointMode",
   "perTransactionLimitUnits",
   "dailyLimitUnits",
   // Abnormal-evidence scenarios point the fixture capture at other shipped fixtures.
@@ -293,6 +295,8 @@ export async function reclaim(children, owned) {
  * log line, ever receives it.
  */
 export async function startAegisStack(options = {}) {
+  if (options.observerMode && !["off", "mock", "local-qwen"].includes(options.observerMode)) throw new Error("invalid observerMode");
+  if (options.checkpointMode && !["off", "mock"].includes(options.checkpointMode)) throw new Error("local runner cannot enable live checkpoints");
   if (options.priorityClassifier && !["deterministic", "local-qwen"].includes(options.priorityClassifier)) {
     throw new Error("unsupported priorityClassifier");
   }
@@ -362,12 +366,15 @@ export async function startAegisStack(options = {}) {
         GATEWAY_SERVICE_TOKEN: secrets.gatewayServiceToken,
         COMMERCE_GATEWAY_URL: executorUrl,
         AEGIS_LOCAL_OWNER_ADDRESS: LOCAL_OWNER,
+        AEGIS_LOCAL_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:3100",
         PBLC_TOKEN_ADDRESS: PBLC_V2_ADDRESS,
         PBLC_TOKEN_STATUS: "deployed-base-sepolia",
         PAYMENT_TOKEN_NAME: "AEGIS",
         PAYMENT_TOKEN_SYMBOL: "AEGIS",
         AEGIS_PRIORITY_CLASSIFIER: options.priorityClassifier || "deterministic",
         AEGIS_OLLAMA_TIMEOUT_SECONDS: "30",
+        AEGIS_OBSERVER_MODE: options.observerMode || "off",
+        AEGIS_CHECKPOINT_MODE: options.checkpointMode || "off",
         AEGIS_EXECUTION_MODE: "mock",
         ...(options.modelCatalogPath === undefined
           ? {}
@@ -412,6 +419,7 @@ export async function startAegisStack(options = {}) {
         AEGIS_NETWORK: NETWORK,
         AEGIS_GATEWAY_ROUTES_JSON: JSON.stringify(gatewayRoutes),
         AEGIS_SIGNER_PRIVATE_KEY: secrets.signerPrivateKey,
+        AEGIS_CHECKPOINT_MODE: options.checkpointMode || "off",
         EVIDENCE_API_URL: evidenceUrl,
         INTERNAL_SERVICE_TOKEN: secrets.internalServiceToken,
         GATEWAY_SERVICE_TOKEN: secrets.gatewayServiceToken,

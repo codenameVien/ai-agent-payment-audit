@@ -21,6 +21,8 @@
     "test:mongo:local": "bash scripts/test_mongo_local.sh",
     "api": "uv run --project services/buyer-audit-api uvicorn buyer_audit_api.main:app --app-dir services/buyer-audit-api/src --env-file .env.local --reload",
     "aegis:stack": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_local_stack.mjs",
+    "aegis:observer:demo": "npm run build --workspace @pbl/commerce-gateway && node scripts/decision_observer_demo.mjs",
+    "test:observer:e2e": "npm run build --workspace @pbl/commerce-gateway && node scripts/decision_observer_smoke.mjs",
     "aegis:live-payment": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_live_payment_stack.mjs",
     "aegis:live-reconcile": "node scripts/aegis_reconcile_live_settlement.mjs",
     "aegis:local-crypto:setup": "bash scripts/setup_aegis_local_crypto.sh",

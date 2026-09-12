@@ -1,5 +1,7 @@
 # 구현 로드맵
 
+> **최신 추가:** 채팅형 구매와 별도 Qwen 결정/감사 관찰 및 두 checkpoint 구현. [설계/체크리스트](DECISION_OBSERVER_PLAN.md), [검증/외부 승인](DECISION_OBSERVER_VERIFICATION.md). 신규 Anchor 배포·체인 쓰기는 아직 실행하지 않았다. 이전의 신규 Anchor 제외는 이 기능에 한해 대체된다.
+
 > **2026-09-12 우선 상태:** AEGIS 신규 배포·초기 발행, 지정 PBLC DB 48문서 삭제 완료. 로컬 Qwen 자동 priority 및 AEGIS Mock E2E 검증은 [최신 전환 기록](AEGIS_QWEN_MIGRATION.md)을 따른다. 아래 PBLC 상태는 과거 단계다. AEGIS 외부 실결제는 아직 미검증이며 AWS는 진행하지 않는다.
 
 > 최신 사용자 지시: 발표용 로컬 데모를 유지하면서, 사용자 소유 PBLC로 `/request`에서 실제 x402 결제를 시도할 수 있게 한다. 유료 Provider API·AWS 배포는 범위 밖이다. 제외한 추가 검증은 미해결 후속 과제이며 이번 완료 조건이 아니다.

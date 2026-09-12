@@ -182,6 +182,42 @@ class PurchaseRunResponse(BaseModel):
     audit: AuditReportResponse
 
 
+class CheckpointRecordResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    mode: Literal["mock", "live"]
+    event_count: int = Field(alias="eventCount")
+    head_event_hash: str = Field(alias="headEventHash")
+    transaction_hash: str | None = Field(default=None, alias="transactionHash")
+    chain_id: int | None = Field(default=None, alias="chainId")
+    contract_address: str | None = Field(default=None, alias="contractAddress")
+
+
+class EvidenceCheckpointResponse(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, serialize_by_alias=True)
+
+    purchase_id: str = Field(alias="purchaseId")
+    phase: Literal["decision", "audit"]
+    event_count: int = Field(alias="eventCount")
+    head_event_hash: str = Field(alias="headEventHash")
+    record: CheckpointRecordResponse | None = None
+
+
+class EvidenceCheckpointRecordRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    mode: Literal["mock", "live"]
+    transaction_hash: str | None = Field(
+        default=None, alias="transactionHash", pattern=EVM_TRANSACTION_HASH_REGEX
+    )
+    chain_id: int | None = Field(default=None, alias="chainId", ge=1)
+    contract_address: str | None = Field(
+        default=None, alias="contractAddress", pattern=r"^0x[0-9a-fA-F]{40}$"
+    )
+    event_count: int = Field(alias="eventCount", ge=1)
+    head_event_hash: str = Field(alias="headEventHash", pattern=SHA256_REGEX)
+
+
 class SellerQuoteTermsResponse(BaseModel):
     purchase_id: str
     quote_id: str
@@ -288,9 +324,7 @@ class InternalPaymentAuthorizeRequest(InternalPaymentClaimRequest):
 class InternalPaymentReconciliationRequest(InternalPaymentClaimRequest):
     reason: str = Field(min_length=1)
     transaction_hash: str | None = Field(default=None, pattern=EVM_TRANSACTION_HASH_REGEX)
-    local_transaction_id: str | None = Field(
-        default=None, pattern=LOCAL_TRANSACTION_ID_REGEX
-    )
+    local_transaction_id: str | None = Field(default=None, pattern=LOCAL_TRANSACTION_ID_REGEX)
     scenario: ScenarioRefModel | None = None
 
 
