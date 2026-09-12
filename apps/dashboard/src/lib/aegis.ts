@@ -64,7 +64,7 @@ export function isAegisRequest(requestSummary: unknown): boolean {
  * keys the superseded PBLC runtime wrote: an id left behind by that runtime must never
  * become the target of a new run.
  */
-export const AEGIS_PENDING_PURCHASE_KEY = "aegis:purchase-request-id";
+export const AEGIS_PENDING_PURCHASE_KEY = "aegis:token-v1:purchase-request-id";
 
 /** Keys written by the superseded runtime. Read-only history: never written, never removed. */
 export const HISTORICAL_PENDING_PURCHASE_KEYS = [
@@ -220,6 +220,7 @@ export const AEGIS_PRIORITY_REASON_LABELS: Record<string, string> = {
   keyword_match: "요청 문구 키워드 분류",
   no_keyword_match: "분류 키워드 없음 · 기본 적용",
   conflicting_keyword_match: "상충 키워드 · 기본 적용",
+  local_model_classification: "로컬 Qwen 요청 의미 분류",
 };
 
 export const AEGIS_REJECTION_LABELS: Record<string, string> = {
@@ -241,7 +242,7 @@ export const AEGIS_PRIORITY_OPTIONS: {
   {
     value: "auto",
     label: "요청에서 자동 판단",
-    note: "priority를 보내지 않고 서버의 결정적 키워드 분류에 맡깁니다.",
+    note: "서버의 요청 분류기(Qwen 설정 시 로컬 LLM)에 맡깁니다.",
   },
   { value: "default", label: "기본", note: "가격 40 / 완료시간 30 / 성능 30" },
   { value: "price", label: "가격 우선", note: "가격 60 / 완료시간 20 / 성능 20" },
@@ -303,6 +304,8 @@ export interface AegisPriorityView {
   original: string | null;
   reason: string | null;
   method: string | null;
+  model: string | null;
+  evidence: string | null;
   matchedKeywords: string[];
 }
 
@@ -456,6 +459,8 @@ export function readAegisDecision(events: EvidenceEvent[]): AegisDecisionView | 
       original: text(priority.originalPriority),
       reason: text(priority.reason),
       method: text(priority.classificationMethod),
+      model: text(priority.classificationModel),
+      evidence: text(priority.classificationEvidence),
       matchedKeywords: strings(priority.matchedKeywords),
     },
     weights: {

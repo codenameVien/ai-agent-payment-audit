@@ -26,6 +26,8 @@
     "aegis:local-crypto:setup": "bash scripts/setup_aegis_local_crypto.sh",
     "aegis:smoke": "npm run build --workspace @pbl/commerce-gateway && node --test scripts/aegis_local_smoke.test.mjs",
     "pblc:payment:preflight": "node scripts/pblc_payment_preflight.mjs",
+    "aegis:payment:preflight": "node scripts/pblc_payment_preflight.mjs",
+    "aegis:token:plan": "forge build --root infra/contracts && node scripts/pblc_user_token_deploy.mjs plan --aegis",
     "pblc:user-token:plan": "forge build --root infra/contracts && node scripts/pblc_user_token_plan.mjs",
     "pblc:user-token:deploy": "forge build --root infra/contracts && node scripts/pblc_user_token_deploy.mjs deploy",
     "pblc:live:enable": "bash scripts/enable_pblc_live_payment.sh",

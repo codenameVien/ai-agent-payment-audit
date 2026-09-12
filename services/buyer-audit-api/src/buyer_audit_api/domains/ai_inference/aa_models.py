@@ -542,6 +542,7 @@ def decision_explanation(
         PriorityReason.KEYWORD_MATCH: "요청 문구 분류",
         PriorityReason.NO_KEYWORD_MATCH: "분류 키워드 없음",
         PriorityReason.CONFLICTING_KEYWORD_MATCH: "상충 키워드",
+        PriorityReason.LOCAL_MODEL: "로컬 Qwen 요청 의미 분류",
     }[classification.reason]
     priority: RequestPriority = classification.effective
     weights = classification.weights

@@ -1,6 +1,8 @@
 [한국어](README.md) | [English](README.en.md)
 
-# PBLC V2 — AI 모델 구매와 감사
+# AEGIS — AI 모델 구매와 감사
+
+> 2026-09-12: 신규 AEGIS 계약 배포·1,000,000 AEGIS 초기 발행 완료. 로컬 Qwen으로 자동 priority를 분류하고 가격·점수·결제 검사는 고정 코드 정책을 유지한다. 기존 PBLC DB 기록은 사용자 지시로 삭제했다. 새 AEGIS 외부 실결제는 아직 검증하지 않았다. [현재 상태·실행·언어별 역할](docs/AEGIS_QWEN_MIGRATION.md). 아래 PBLC 명령명은 호환용이며 과거 실거래 증거는 역사 기록이다.
 
 ## 왜 만들었나
 
@@ -16,6 +18,8 @@
 flowchart LR
   U[사용자] --> R[구매 요청 /request]
   R --> B[구매 에이전트]
+  B -->|자동 priority만| Q[로컬 Qwen]
+  Q -->|프리셋| B
   B --> P[결제 실행 모듈 · 키 격리]
   P --> G[세 Provider Mock Gateway]
   G --> F[Facilitator\nMock 또는 외부 x402]

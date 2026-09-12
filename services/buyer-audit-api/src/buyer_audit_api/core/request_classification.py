@@ -43,12 +43,16 @@ class OriginalClassification:
     matched_keywords: tuple[str, ...] = ()
     matched_priorities: tuple[str, ...] = ()
     classification_method: str = PRIORITY_CLASSIFICATION_METHOD
+    classification_model: str | None = None
+    classification_evidence: str | None = None
     #: A fixed, plaintext-free explanation of why no classification was produced.
     detail: str | None = None
 
     def to_payload(self) -> JsonObject:
         return {
             "classificationMethod": self.classification_method,
+            "classificationModel": self.classification_model,
+            "classificationEvidence": self.classification_evidence,
             "effectivePriority": self.effective_priority,
             "matchedKeywords": list(self.matched_keywords),
             "matchedPriorities": list(self.matched_priorities),

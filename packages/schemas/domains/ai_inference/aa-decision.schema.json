@@ -40,10 +40,19 @@
             "explicit_priority",
             "keyword_match",
             "no_keyword_match",
-            "conflicting_keyword_match"
+            "conflicting_keyword_match",
+            "local_model_classification"
           ]
         },
-        "classificationMethod": { "type": "string", "const": "keyword-single-match-v1" },
+        "classificationMethod": {
+          "type": "string",
+          "enum": ["keyword-single-match-v1", "ollama-qwen-structured-v1"]
+        },
+        "classificationModel": { "type": ["string", "null"] },
+        "classificationEvidence": {
+          "type": ["string", "null"],
+          "enum": ["price", "speed", "intelligence", "default", null]
+        },
         "matchedKeywords": { "type": "array", "items": { "type": "string" } },
         "matchedPriorities": { "type": "array", "items": { "type": "string" } }
       }

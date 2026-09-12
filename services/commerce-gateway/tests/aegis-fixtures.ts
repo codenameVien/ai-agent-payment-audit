@@ -60,6 +60,7 @@ export const TEST_MODELS: Record<string, CatalogModel> = {
 };
 
 export interface DecisionOverrides {
+  token?: AegisTokenIdentity;
   amountUnits?: number;
   recipient?: string;
   /** Swap only the stored payout address, leaving the binding it was computed from. */
@@ -81,6 +82,7 @@ export function buildDecisionEvidence(args: {
   overrides?: DecisionOverrides;
 }): Record<string, unknown> {
   const overrides = args.overrides ?? {};
+  const token = overrides.token ?? TEST_TOKEN;
   const key = candidateKey(args.model);
   const snapshotHash = `sha256:${"1".repeat(64)}`;
   const recipient = overrides.recipient ?? args.model.recipient;
@@ -95,7 +97,7 @@ export function buildDecisionEvidence(args: {
       modelVersion: args.model.modelVersion,
       amountUnits: BigInt(amountUnits),
       recipient,
-      token: TEST_TOKEN,
+      token,
     });
   const source = {
     inputPricePerMillion: args.model.inputPricePerMillion,
@@ -114,7 +116,7 @@ export function buildDecisionEvidence(args: {
         estimatedInputTokens: overrides.estimatedInputTokens ?? 25,
         maxOutputTokens: overrides.maxOutputTokens ?? 1024,
       },
-      token: { ...TEST_TOKEN },
+      token: { ...token },
       winner: {
         candidateKey: key,
         providerId: args.model.providerId,

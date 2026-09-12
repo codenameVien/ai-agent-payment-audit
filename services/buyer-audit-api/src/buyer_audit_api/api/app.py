@@ -802,7 +802,11 @@ def create_app(container: AppContainer) -> FastAPI:
     @app.get("/health")
     async def health() -> dict[str, str]:
         # Server configuration only: the browser can disclose it but cannot select it.
-        return {"status": "ok", "execution_mode": container.aegis_execution_mode}
+        return {
+            "status": "ok",
+            "execution_mode": container.aegis_execution_mode,
+            "token_symbol": container.payment_token_symbol,
+        }
 
     @app.post(
         "/internal/evidence/seller-executions/claim",

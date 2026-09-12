@@ -5,6 +5,7 @@ from typing import Any
 
 from pydantic import ValidationError
 
+from buyer_audit_api.adapters.local_priority import PriorityClassifier
 from buyer_audit_api.core.hashing import sha256_bytes
 from buyer_audit_api.core.models import JsonObject
 from buyer_audit_api.domains.ai_inference.aa_request import (
@@ -33,11 +34,13 @@ class AiInferenceDomainModule:
         *,
         default_max_output_tokens: int = DEFAULT_MAX_OUTPUT_TOKENS,
         system_prompt: str = "",
+        priority_classifier: PriorityClassifier | None = None,
     ) -> None:
         if default_max_output_tokens <= 0:
             raise ValueError("default_max_output_tokens must be a positive integer")
         self._default_max_output_tokens = default_max_output_tokens
         self._system_prompt = system_prompt
+        self._priority_classifier = priority_classifier
 
     @property
     def domain_id(self) -> str:
@@ -49,6 +52,7 @@ class AiInferenceDomainModule:
                 payload,
                 default_max_output_tokens=self._default_max_output_tokens,
                 system_prompt=self._system_prompt,
+                priority_classifier=self._priority_classifier,
             ).model_dump(mode="json")
         raw_prompt = payload.get("prompt", payload.get("query"))
         prompt = raw_prompt if isinstance(raw_prompt, str) else ""

@@ -1,5 +1,7 @@
 # AEGIS 단일 구매 구조
 
+> 2026-09-12 현재 자산은 신규 AEGIS이며 자동 priority는 로컬 Qwen이다. 아래 09-10 PBLC 설명은 이전 전환 이력이다. 현재 배포/검증 경계와 Solidity·일반 코드 분리는 [전환 기록](AEGIS_QWEN_MIGRATION.md)을 따른다.
+
 2026-09-10 기준: 기본 실행은 세 Provider Mock 응답·AA fixture·Mock Facilitator다. 별도 `live` 서버 모드는 사용자 PBLC 지갑으로 외부 x402 Facilitator의 Base Sepolia `exact + ERC-3009` 정산을 시도한다. Provider 결과는 어느 모드에서도 Mock이다. 실제 PBLC 전송 성공 여부는 Facilitator 응답으로만 기록하며, 독립 RPC Transfer 검증이나 유료 모델 호출을 뜻하지 않는다. [실제 PBLC 요청 흐름](LIVE_PBLC_REQUEST_FLOW.md)을 따른다.
 
 ## 실행 경로와 조회 경로
@@ -10,6 +12,9 @@ flowchart TB
   R -->|요청 · 예산 · 선택적 priority · 실행 동의| B
   subgraph BUYER[구매 에이전트의 논리적 책임]
     B[요청 분석 · AA 조회 · 가격 계산 · 필터 · 모델 선택]
+    Q[로컬 Qwen · 자동 priority 분류만]
+    B -->|명시 priority가 없을 때| Q
+    Q -->|프리셋 · 고정 코드 가중치 적용| B
     W[Buyer SDK Wrapper · 외부 API 연결 코드]
     P[결제 실행 모듈 · 별도 프로세스에서 키 격리]
     B --> W

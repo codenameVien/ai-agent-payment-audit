@@ -19,6 +19,7 @@ from buyer_audit_api.adapters.auth.siwe import PythonSiweVerifier
 from buyer_audit_api.adapters.chain.json_rpc import JsonRpcTokenBalanceReader
 from buyer_audit_api.adapters.commerce_gateway import HttpCommerceGatewayClient
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
+from buyer_audit_api.adapters.local_priority import LocalQwenPriorityClassifier
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.adapters.reputation_gateway import (
     GatewayReputationProvider,
@@ -101,6 +102,7 @@ class AppContainer:
     local_allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1")
     #: Server-fixed settlement execution mode. A request can never label its own record.
     aegis_execution_mode: str = "mock"
+    payment_token_symbol: str = "PBLC"
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     aegis_workflow: AegisDecisionWorkflow | None = None
@@ -265,6 +267,20 @@ def build_container(settings: Settings) -> AppContainer:
         uri=settings.siwe_uri,
         chain_id=settings.siwe_chain_id,
     )
+    classifier_mode = settings.aegis_priority_classifier.strip().lower()
+    if classifier_mode not in {"deterministic", "local-qwen"}:
+        raise ConfigurationError(
+            "AEGIS_PRIORITY_CLASSIFIER must be deterministic or local-qwen"
+        )
+    priority_classifier = (
+        LocalQwenPriorityClassifier(
+            base_url=settings.aegis_ollama_url,
+            model=settings.aegis_ollama_model,
+            timeout_seconds=settings.aegis_ollama_timeout_seconds,
+        )
+        if classifier_mode == "local-qwen"
+        else None
+    )
     purchase_service = PurchaseService(
         repository=repository,
         cipher=cipher,
@@ -273,6 +289,7 @@ def build_container(settings: Settings) -> AppContainer:
                 AiInferenceDomainModule(
                     default_max_output_tokens=settings.aegis_max_output_tokens,
                     system_prompt=settings.aegis_system_prompt,
+                    priority_classifier=priority_classifier,
                 )
             ]
         ),
@@ -290,8 +307,8 @@ def build_container(settings: Settings) -> AppContainer:
         catalog=catalog,
         source=build_aa_capture_source(settings, catalog),
         token=TokenIdentity(
-            name="PBL Agent Credit",
-            symbol="PBLC",
+            name=settings.payment_token_name,
+            symbol=settings.payment_token_symbol,
             decimals=6,
             address=settings.pblc_token_address.lower(),
             chain_id=settings.siwe_chain_id,
@@ -315,6 +332,7 @@ def build_container(settings: Settings) -> AppContainer:
             item.strip() for item in settings.aegis_local_allowed_hosts.split(",")
         ),
         aegis_execution_mode=settings.aegis_execution_mode,
+        payment_token_symbol=settings.payment_token_symbol,
         token_balance_reader=(
             JsonRpcTokenBalanceReader(settings.base_sepolia_rpc_url)
             if settings.base_sepolia_rpc_url and not local_owner

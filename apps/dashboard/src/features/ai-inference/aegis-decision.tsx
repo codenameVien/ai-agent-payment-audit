@@ -72,11 +72,13 @@ export function AegisPurchaseDecision({ events }: { events: EvidenceEvent[] }) {
           <dd>{decision.priority.original ?? "미지정(자동 판단)"}</dd>
         </div>
         <div>
-          <dt>분류 근거 키워드</dt>
+          <dt>분류 근거</dt>
           <dd>
-            {decision.priority.matchedKeywords.length === 0
-              ? "없음"
-              : decision.priority.matchedKeywords.join(", ")}
+            {decision.priority.method === "ollama-qwen-structured-v1"
+              ? `로컬 ${decision.priority.model ?? "Qwen"} · ${decision.priority.evidence ?? "통제된 분류값"}`
+              : decision.priority.matchedKeywords.length === 0
+                ? "없음"
+                : decision.priority.matchedKeywords.join(", ")}
           </dd>
         </div>
         <div>

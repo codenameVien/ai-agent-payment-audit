@@ -121,6 +121,8 @@ export function createProviderGateway(env: NodeJS.ProcessEnv = process.env): Pro
     network: env.AEGIS_NETWORK?.trim() || DEFAULT_NETWORK,
     executionMode,
     facilitatorHeaders: facilitatorHeadersFor(env),
+    tokenName: env.PAYMENT_TOKEN_NAME?.trim() || undefined,
+    tokenVersion: env.PAYMENT_TOKEN_VERSION?.trim() || undefined,
   });
 }
 

@@ -71,6 +71,7 @@ export function PurchaseList() {
                         status={item.status}
                         policy={aegis ? "aegis" : "legacy"}
                         paymentStatus={item.payment_status}
+                        tokenAddress={item.token}
                       />
                     </td>
                     <td>

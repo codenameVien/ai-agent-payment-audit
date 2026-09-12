@@ -1,4 +1,4 @@
-import { credits } from "@/lib/api";
+import { credits, paymentTokenSymbol } from "@/lib/api";
 
 /**
  * `aegis` purchases use a Facilitator response as their settlement basis. A live
@@ -60,6 +60,7 @@ export function PaymentAmount({
   policy = "legacy",
   paymentStatus,
   executionMode,
+  tokenAddress,
 }: {
   amountUnits: number | null;
   transactionHash: string | null;
@@ -67,6 +68,7 @@ export function PaymentAmount({
   policy?: PurchasePolicy;
   paymentStatus?: string;
   executionMode?: string | null;
+  tokenAddress?: string | null;
 }) {
   if (amountUnits === null) return <span className="muted">—</span>;
   if (policy === "aegis") {
@@ -77,12 +79,12 @@ export function PaymentAmount({
       <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
         <strong>
           {settled ? "" : "예정 "}
-          {credits(amountUnits)} PBLC
+          {credits(amountUnits)} {paymentTokenSymbol(tokenAddress)}
         </strong>
         <small>
           {settled
             ? live
-              ? "Facilitator 응답 기준 정산 · 실제 PBLC 전송 제출"
+              ? "Facilitator 응답 기준 정산 · 실제 토큰 전송 제출"
               : mock
                 ? "Facilitator 응답 기준 정산 · Mock 결제"
                 : "Facilitator 응답 기준 정산"
