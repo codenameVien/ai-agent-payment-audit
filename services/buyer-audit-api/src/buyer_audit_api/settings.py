@@ -46,6 +46,10 @@ class Settings(BaseSettings):
     aegis_ollama_url: str = "http://127.0.0.1:11434"
     aegis_ollama_model: str = "qwen3.5:4b"
     aegis_ollama_timeout_seconds: float = 8.0
+    # Disabled by default so existing clients keep their current deterministic flow.
+    aegis_observer_mode: str = "off"
+    aegis_observer_timeout_seconds: float = 30.0
+    aegis_checkpoint_mode: str = "off"
     # User-owned six-decimal ERC-3009 PBLC on Base Sepolia. Whether a request can
     # settle is controlled only by the server-side execution mode and approval gate.
     pblc_token_address: str = "0xe75013d333bebb90b321dd658440c10b5a0face8"

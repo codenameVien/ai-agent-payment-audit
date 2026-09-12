@@ -30,6 +30,7 @@ from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import ConfigurationError
 from buyer_audit_api.core.models import BASE_SEPOLIA_CHAIN_ID
+from buyer_audit_api.core.observer import LocalQwenEvidenceObserver, ObserverMode
 from buyer_audit_api.core.ports import (
     Clock,
     EvidenceRepository,
@@ -109,13 +110,14 @@ class AppContainer:
     aegis_evidence_reader: AegisEvidenceReader | None = None
     commerce_gateway: HttpCommerceGatewayClient | None = None
     terminal_coordinator: TerminalAuditCoordinator | None = None
+    observer_mode: str = "off"
+    checkpoint_mode: str = "off"
+    evidence_observer: LocalQwenEvidenceObserver | None = None
     reputation_outbox: ReputationOutboxPort | None = None
     reputation_snapshots: ReputationSnapshotPort | None = None
 
 
-def build_aa_capture_source(
-    settings: Settings, catalog: ModelCatalog
-) -> AaCaptureSource:
+def build_aa_capture_source(settings: Settings, catalog: ModelCatalog) -> AaCaptureSource:
     """Fail closed: a live capture is only possible with an explicitly mapped catalog.
 
     Without a server AA key the buyer reads the checked-in fixture pages and records
@@ -141,9 +143,7 @@ def build_aa_capture_source(
             ):
                 raise ConfigurationError("AA_FIXTURE_PAGES_JSON must be a list of paths")
             pages = tuple(Path(item) for item in declared)
-        return FixtureArtificialAnalysisSource(
-            page_paths=pages, field_paths=field_paths
-        )
+        return FixtureArtificialAnalysisSource(page_paths=pages, field_paths=field_paths)
     if catalog.provenance != {MappingProvenance.CONFIGURED}:
         raise ConfigurationError(
             "AA_API_KEY is set but the model catalog is not an explicitly configured "
@@ -269,9 +269,7 @@ def build_container(settings: Settings) -> AppContainer:
     )
     classifier_mode = settings.aegis_priority_classifier.strip().lower()
     if classifier_mode not in {"deterministic", "local-qwen"}:
-        raise ConfigurationError(
-            "AEGIS_PRIORITY_CLASSIFIER must be deterministic or local-qwen"
-        )
+        raise ConfigurationError("AEGIS_PRIORITY_CLASSIFIER must be deterministic or local-qwen")
     priority_classifier = (
         LocalQwenPriorityClassifier(
             base_url=settings.aegis_ollama_url,
@@ -281,6 +279,16 @@ def build_container(settings: Settings) -> AppContainer:
         if classifier_mode == "local-qwen"
         else None
     )
+    observer_mode = settings.aegis_observer_mode.strip().lower()
+    checkpoint_mode = settings.aegis_checkpoint_mode.strip().lower()
+    if observer_mode not in {item.value for item in ObserverMode}:
+        raise ConfigurationError("AEGIS_OBSERVER_MODE must be off, mock or local-qwen")
+    if checkpoint_mode not in {"off", "mock", "live"}:
+        raise ConfigurationError("AEGIS_CHECKPOINT_MODE must be off, mock or live")
+    if checkpoint_mode != "off" and observer_mode == ObserverMode.OFF.value:
+        raise ConfigurationError(
+            "AEGIS_CHECKPOINT_MODE requires AEGIS_OBSERVER_MODE=mock or local-qwen"
+        )
     purchase_service = PurchaseService(
         repository=repository,
         cipher=cipher,
@@ -332,6 +340,17 @@ def build_container(settings: Settings) -> AppContainer:
             item.strip() for item in settings.aegis_local_allowed_hosts.split(",")
         ),
         aegis_execution_mode=settings.aegis_execution_mode,
+        observer_mode=observer_mode,
+        checkpoint_mode=checkpoint_mode,
+        evidence_observer=(
+            LocalQwenEvidenceObserver(
+                base_url=settings.aegis_ollama_url,
+                model=settings.aegis_ollama_model,
+                timeout_seconds=settings.aegis_observer_timeout_seconds,
+            )
+            if observer_mode == ObserverMode.LOCAL_QWEN.value
+            else None
+        ),
         payment_token_symbol=settings.payment_token_symbol,
         token_balance_reader=(
             JsonRpcTokenBalanceReader(settings.base_sepolia_rpc_url)

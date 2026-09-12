@@ -2,6 +2,10 @@
 
 # AEGIS — AI Model Purchasing and Audit
 
+> **New:** chat-style drafting (sending a message never starts a purchase), a separate local Qwen advisory observer at decision/audit checkpoints, and an isolated Anchor writer. `npm run aegis:observer:demo` opens a preview at `http://127.0.0.1:3100/request` with local Qwen but fixture AA, Mock Providers, settlement and checkpoints. It uses disposable storage, never `.env.local` or existing transaction data. New on-chain deployment/writes remain approval-gated. See [design and verification boundaries](docs/DECISION_OBSERVER_PLAN.md).
+
+![Chat draft preview](docs/images/chat-request.png)
+
 > 2026-09-12: A new AEGIS contract and initial 1,000,000 supply are deployed. Local Qwen classifies automatic priority; fixed code retains weights, pricing and payment checks. Legacy PBLC database records were deleted at the user's request. New AEGIS external settlement is not yet verified. See [current migration and validation boundaries](docs/AEGIS_QWEN_MIGRATION.md). Older PBLC command names are compatibility names; historical payment evidence is not AEGIS evidence.
 
 ## Why

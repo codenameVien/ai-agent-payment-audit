@@ -17,6 +17,7 @@ from buyer_audit_api.core.errors import (
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.hashing import sha256_json
 from buyer_audit_api.core.models import (
+    AUXILIARY_EVENT_TYPES,
     TERMINAL_PAYMENT_EVENT_TYPES,
     EventType,
     EvidenceEvent,
@@ -231,9 +232,7 @@ def finding_from_payload(item: JsonObject) -> AuditFinding:
 
 def combine_severity(findings: tuple[AuditFinding, ...]) -> AuditSeverity:
     """Deterministic rules own the verdict; semantic advisories cap out at a warning."""
-    deterministic = [
-        item for item in findings if item.authority is AuditAuthority.DETERMINISTIC
-    ]
+    deterministic = [item for item in findings if item.authority is AuditAuthority.DETERMINISTIC]
     if any(item.severity is AuditSeverity.RISK for item in deterministic):
         return AuditSeverity.RISK
     if findings:
@@ -328,7 +327,10 @@ class AuditReportReader:
             report=report,
             audited_sequence=audited_event.sequence,
             audited_head_event_hash=audited_head,
-            covers_head=audited_event.sequence == len(events),
+            # Advisory observer/checkpoint records do not change the deterministic
+            # facts audited above. Any other later lifecycle event still demands a
+            # deliberate re-audit policy.
+            covers_head=all(event.type in AUXILIARY_EVENT_TYPES for event in events[index + 1 :]),
         )
 
 
@@ -376,9 +378,9 @@ class AuditEvaluator:
             "severity": severity.value,
         }
         audit_bundle_hash = sha256_json(bundle)
-        report_digest = sha256_json(
-            {"purchaseId": purchase_id, "bundle": audit_bundle_hash}
-        ).split(":", 1)[1]
+        report_digest = sha256_json({"purchaseId": purchase_id, "bundle": audit_bundle_hash}).split(
+            ":", 1
+        )[1]
         return AuditDraft(
             purchase_id=purchase_id,
             severity=severity,
@@ -494,9 +496,7 @@ class AuditEvaluator:
         no_transfer = by_type.get(EventType.PAYMENT_RECONCILED_NO_TRANSFER)
         delivered = by_type.get(EventType.DELIVERED)
         checks = [
-            event
-            for event in events
-            if event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
+            event for event in events if event.type == EventType.PAYMENT_RECONCILIATION_CHECKED
         ]
 
         if requested is not None and is_aa_policy_request(requested.payload):
@@ -617,8 +617,7 @@ class AuditEvaluator:
                     "AUD-SELECTION-WEIGHTS-MISMATCH",
                     AuditSeverity.RISK,
                     "후보 점수의 가중치가 우선순위 정책과 다릅니다",
-                    "eligible 후보의 weights가 기록된 preset의 "
-                    "고정 가중치와 일치하지 않습니다.",
+                    "eligible 후보의 weights가 기록된 preset의 고정 가중치와 일치하지 않습니다.",
                     (requested.event_hash, decided.event_hash),
                     expected={"weights": expected_weights},
                     observed={
@@ -864,8 +863,7 @@ class AuditEvaluator:
         facilitator_success_without_transfer = [
             event
             for event in checks
-            if event.payload.get("verifierOutcome")
-            == "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"
+            if event.payload.get("verifierOutcome") == "SUCCESS_RECEIPT_WITHOUT_MATCHING_TRANSFER"
         ]
         if facilitator_success_without_transfer:
             add(
@@ -1172,13 +1170,15 @@ def _quote_payment_mismatch(
     if actual_source is not None and actual_transfer is not None:
         if actual_transfer.get("amountUnits") != selected_quote.get("amount_units"):
             mismatched.add("amount")
-        if str(actual_transfer.get("token", "")).lower() != str(
-            selected_quote.get("token", "")
-        ).lower():
+        if (
+            str(actual_transfer.get("token", "")).lower()
+            != str(selected_quote.get("token", "")).lower()
+        ):
             mismatched.add("token")
-        if str(actual_transfer.get("to", "")).lower() != str(
-            selected_quote.get("pay_to", "")
-        ).lower():
+        if (
+            str(actual_transfer.get("to", "")).lower()
+            != str(selected_quote.get("pay_to", "")).lower()
+        ):
             mismatched.add("recipient")
         observed["actualTransfer"] = actual_transfer
         refs.append(actual_source.event_hash)
@@ -1218,9 +1218,7 @@ def is_final_eligible(events: list[EvidenceEvent]) -> bool:
         EventType.PAYMENT_RECONCILED_NO_TRANSFER,
     }:
         return True
-    return (
-        EventType.PAYMENT_SETTLED in event_types and EventType.DELIVERED in event_types
-    )
+    return EventType.PAYMENT_SETTLED in event_types and EventType.DELIVERED in event_types
 
 
 class AuditService:
@@ -1241,9 +1239,7 @@ class AuditService:
         self._evaluator = AuditEvaluator()
         self._reader = AuditReportReader()
 
-    async def _referenced_documents(
-        self, events: list[EvidenceEvent]
-    ) -> dict[str, JsonObject]:
+    async def _referenced_documents(self, events: list[EvidenceEvent]) -> dict[str, JsonObject]:
         """Load the immutable bodies the evidence points at, verifying each on the way.
 
         A body whose stored hash does not describe it is dropped, so the recalculation

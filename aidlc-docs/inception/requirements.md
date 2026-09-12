@@ -78,3 +78,6 @@ Status: 사용자 확정 요청 2026-09-09에 따른 구현 기준. 기존 요�
 필수 완료: AA pagination/snapshot/mapping/missing 계약, 수치/올림/분류/filter/점수/tie, 402 결속/중복/race, 과거 schema/평판/증거 읽기, 세 Gateway HTTP E2E, 개정 Phase 6 비정상 시나리오 E2E, 전체 tests/typecheck/lint/dashboard build, README/설계/구조도/project log/handoff 갱신.
 
 외부 게이트를 로컬 완료와 분리한다: AA 실제 계약(키 없으면 미완료), 실제 Provider(이번 범위 제외), AEGIS 배포·이동·실결제(승인 대기), 공개 다중 사용자 인증·접근 제어/원문 보존 정책(AWS 전 결정), AWS 실제 배포(항상 정지).
+# 2026-09-12 추가 확정 요구사항
+
+채팅 요청·Qwen 이벤트 감사·판단/감사 온체인 체크포인트의 최신 범위는 [실행 계획](../../docs/DECISION_OBSERVER_PLAN.md)의 요구사항/검증 기준이다. 이전 Anchor 비활성화 범위를 이번 요청에 한해 대체한다.

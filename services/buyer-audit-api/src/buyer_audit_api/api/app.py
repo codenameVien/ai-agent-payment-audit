@@ -8,7 +8,7 @@ from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
 from datetime import datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import httpx
 from fastapi import Cookie, FastAPI, Header, HTTPException, Request, Response, status
@@ -26,10 +26,13 @@ from buyer_audit_api.api.schemas import (
     BuyerWalletResponse,
     ChallengeRequest,
     ChallengeResponse,
+    CheckpointRecordResponse,
     DeliveryRecordRequest,
     DeliveryStageRequest,
     DeliveryStageResponse,
     EventResponse,
+    EvidenceCheckpointRecordRequest,
+    EvidenceCheckpointResponse,
     EvidenceHeadResponse,
     ExternalAnchorRequest,
     InternalAegisAmbiguousSettlementRequest,
@@ -109,6 +112,12 @@ from buyer_audit_api.core.models import (
     ScenarioMetadata,
     TransactionRef,
     transaction_ref_from_payload,
+)
+from buyer_audit_api.core.observer import (
+    ObserverFailureCode,
+    ObserverMode,
+    ObserverPhase,
+    ObserverUnavailable,
 )
 from buyer_audit_api.core.payment import (
     PaymentIntent,
@@ -205,9 +214,7 @@ def _redact(value: object) -> tuple[object, bool]:
 
 _PROJECTIONS = PurchaseProjectionService()
 _AUDIT_READER = AuditReportReader()
-_TRANSACTION_PROOF_EVENT_TYPES = frozenset(
-    {EventType.PAYMENT_SETTLED, EventType.PAYMENT_FAILED}
-)
+_TRANSACTION_PROOF_EVENT_TYPES = frozenset({EventType.PAYMENT_SETTLED, EventType.PAYMENT_FAILED})
 
 
 def _scenario_response(scenario: ScenarioMetadata | None) -> ScenarioResponse | None:
@@ -340,9 +347,7 @@ def _outbox_error(exc: Exception) -> HTTPException:
             status_code=409,
             detail={"reason": exc.reason.value, "message": str(exc)},
         )
-    if isinstance(
-        exc, (PaymentConflictError, EvidenceIntegrityError, EvidenceTransitionError)
-    ):
+    if isinstance(exc, (PaymentConflictError, EvidenceIntegrityError, EvidenceTransitionError)):
         return HTTPException(status_code=409, detail=str(exc))
     if isinstance(exc, (PaymentEvidenceError, PaymentPolicyError, ValueError)):
         return HTTPException(status_code=422, detail=str(exc))
@@ -393,9 +398,7 @@ def _reputation_job_response(job: ReputationPublishJob) -> ReputationJobResponse
         block_number=job.block_number,
         log_index=job.log_index,
         evidence_source=job.evidence_source,
-        confirmed_proof=(
-            None if job.confirmed_proof is None else job.confirmed_proof.to_payload()
-        ),
+        confirmed_proof=(None if job.confirmed_proof is None else job.confirmed_proof.to_payload()),
         created_at=job.created_at,
         updated_at=job.updated_at,
     )
@@ -576,9 +579,7 @@ def create_app(container: AppContainer) -> FastAPI:
         # request that declares a cross-site fetch, so a page on another origin cannot
         # drive the local owner's purchases even with credentials attached.
         @app.middleware("http")
-        async def local_boundary(
-            request: Request, call_next: Any
-        ) -> Response:
+        async def local_boundary(request: Request, call_next: Any) -> Response:
             host = (request.headers.get("host") or "").split(":")[0].strip().lower()
             if host and host not in allowed_hosts:
                 return JSONResponse(status_code=403, content={"detail": "host not allowed"})
@@ -593,9 +594,7 @@ def create_app(container: AppContainer) -> FastAPI:
             if is_legacy_surface(request.url.path):
                 return JSONResponse(
                     status_code=404,
-                    content={
-                        "detail": "endpoint is not part of the aa-three-factor-v1 runtime"
-                    },
+                    content={"detail": "endpoint is not part of the aa-three-factor-v1 runtime"},
                 )
             response: Response = await call_next(request)
             return response
@@ -658,6 +657,197 @@ def create_app(container: AppContainer) -> FastAPI:
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="invalid admin service credential",
             )
+
+    async def observe_phase(purchase_id: str, phase: ObserverPhase) -> None:
+        """Append one advisory outcome, then freeze the prefix that may be anchored.
+
+        This is deliberately best-effort: a local model timeout creates visible evidence
+        rather than being rewritten as a clean observation.  It never changes payment
+        eligibility; the caller decides whether an enabled checkpoint is a hard gate.
+        """
+        if container.observer_mode == ObserverMode.OFF.value:
+            return
+        events = await verified_events(purchase_id)
+        selected = [
+            event
+            for event in events
+            if event.type == EventType.CHECKPOINT_TARGET_SELECTED
+            and event.payload.get("phase") == phase.value
+        ]
+        if selected:
+            return
+        needed = EventType.DECIDED if phase is ObserverPhase.DECISION else EventType.AUDITED
+        if not any(event.type == needed for event in events):
+            raise HTTPException(
+                status_code=409, detail=f"{phase.value} checkpoint prerequisite missing"
+            )
+        prior = [
+            event
+            for event in events
+            if event.type in {EventType.OBSERVER_COMPLETED, EventType.OBSERVER_UNAVAILABLE}
+            and event.payload.get("phase") == phase.value
+        ]
+        if prior:
+            # An interrupted coordinator may have written the observation but not the
+            # target marker. Reuse that exact prefix; never run the observer twice.
+            observed = prior[-1]
+            try:
+                await container.repository.append_event(
+                    purchase_id=purchase_id,
+                    event_type=EventType.CHECKPOINT_TARGET_SELECTED,
+                    occurred_at=container.clock.now(),
+                    actor={"id": "checkpoint-coordinator", "type": "service"},
+                    payload={
+                        "phase": phase.value,
+                        "eventCount": observed.sequence,
+                        "headEventHash": observed.event_hash,
+                    },
+                    evidence_refs=(observed.event_hash,),
+                    expected_event_count=len(events),
+                    expected_head_event_hash=events[-1].event_hash,
+                )
+            except EvidenceTransitionError:
+                raced = await verified_events(purchase_id)
+                if not any(
+                    event.type == EventType.CHECKPOINT_TARGET_SELECTED
+                    and event.payload.get("phase") == phase.value
+                    for event in raced
+                ):
+                    raise
+            return
+        prompt: str | None = None
+        if container.observer_mode == ObserverMode.LOCAL_QWEN.value:
+            requested = events[0]
+            payload_id = requested.payload.get("sensitivePayloadId")
+            if isinstance(payload_id, str):
+                sensitive_payload = await container.repository.get_sensitive_payload(payload_id)
+                if sensitive_payload is not None and sensitive_payload.purchase_id == purchase_id:
+                    raw = container.cipher.decrypt_json(sensitive_payload)
+                    candidate = raw.get("prompt")
+                    prompt = candidate if isinstance(candidate, str) else None
+        current_count, current_hash = len(events), events[-1].event_hash
+        observer_payload: JsonObject
+        if container.observer_mode == ObserverMode.MOCK.value:
+            kind, observer_payload = (
+                EventType.OBSERVER_COMPLETED,
+                {"phase": phase.value, "mode": "mock", "model": "mock-observer-v1", "findings": []},
+            )
+        else:
+            try:
+                if container.evidence_observer is None:
+                    raise ObserverUnavailable(ObserverFailureCode.NOT_CONFIGURED)
+                findings = await container.evidence_observer.observe(
+                    phase=phase, prompt=prompt, events=tuple(events)
+                )
+                kind, observer_payload = (
+                    EventType.OBSERVER_COMPLETED,
+                    {
+                        "phase": phase.value,
+                        "mode": "local-qwen",
+                        "model": container.evidence_observer.model,
+                        "findings": [item.payload() for item in findings],
+                    },
+                )
+            except ObserverUnavailable as exc:
+                kind, observer_payload = (
+                    EventType.OBSERVER_UNAVAILABLE,
+                    {
+                        "phase": phase.value,
+                        "mode": "local-qwen",
+                        "status": "unavailable",
+                        "diagnosticCode": exc.code.value,
+                        "reason": "local observer unavailable",
+                    },
+                )
+        try:
+            observed = await container.repository.append_event(
+                purchase_id=purchase_id,
+                event_type=kind,
+                occurred_at=container.clock.now(),
+                actor={"id": "local-evidence-observer", "type": "service"},
+                payload=observer_payload,
+                evidence_refs=tuple(event.event_id for event in events),
+                expected_event_count=current_count,
+                expected_head_event_hash=current_hash,
+            )
+            await container.repository.append_event(
+                purchase_id=purchase_id,
+                event_type=EventType.CHECKPOINT_TARGET_SELECTED,
+                occurred_at=container.clock.now(),
+                actor={"id": "checkpoint-coordinator", "type": "service"},
+                payload={
+                    "phase": phase.value,
+                    "eventCount": observed.sequence,
+                    "headEventHash": observed.event_hash,
+                },
+                evidence_refs=(observed.event_hash,),
+                expected_event_count=observed.sequence,
+                expected_head_event_hash=observed.event_hash,
+            )
+        except EvidenceTransitionError:
+            # A racing request can only have won by selecting this same immutable phase.
+            raced = await verified_events(purchase_id)
+            if any(
+                event.type == EventType.CHECKPOINT_TARGET_SELECTED
+                and event.payload.get("phase") == phase.value
+                for event in raced
+            ):
+                return
+            raise
+
+    def checkpoint_response(
+        events: list[EvidenceEvent], phase: ObserverPhase
+    ) -> EvidenceCheckpointResponse:
+        targets = [
+            event
+            for event in events
+            if event.type == EventType.CHECKPOINT_TARGET_SELECTED
+            and event.payload.get("phase") == phase.value
+        ]
+        if len(targets) != 1:
+            raise HTTPException(status_code=409, detail=f"{phase.value} checkpoint target missing")
+        target = targets[0].payload
+        count, head_hash = target.get("eventCount"), target.get("headEventHash")
+        if not isinstance(count, int) or count < 1 or not isinstance(head_hash, str):
+            raise HTTPException(status_code=409, detail="checkpoint target is malformed")
+        if count > len(events) or events[count - 1].event_hash != head_hash:
+            raise HTTPException(
+                status_code=409, detail="checkpoint target no longer matches evidence"
+            )
+        records = [
+            event
+            for event in events
+            if event.type == EventType.CHECKPOINT_RECORDED
+            and event.payload.get("phase") == phase.value
+        ]
+        if len(records) > 1:
+            raise HTTPException(status_code=409, detail="multiple checkpoint records")
+        record: CheckpointRecordResponse | None = None
+        if records:
+            value = records[0].payload
+            record = CheckpointRecordResponse(
+                mode=cast(Literal["mock", "live"], value["mode"]),
+                eventCount=int(value["eventCount"]),
+                headEventHash=str(value["headEventHash"]),
+                transactionHash=(
+                    str(value["transactionHash"])
+                    if value.get("transactionHash") is not None
+                    else None
+                ),
+                chainId=int(value["chainId"]) if value.get("chainId") is not None else None,
+                contractAddress=(
+                    str(value["contractAddress"])
+                    if value.get("contractAddress") is not None
+                    else None
+                ),
+            )
+        return EvidenceCheckpointResponse(
+            purchaseId=events[0].purchase_id,
+            phase=phase.value,
+            eventCount=count,
+            headEventHash=head_hash,
+            record=record,
+        )
 
     def payment_error(exc: Exception) -> HTTPException:
         if isinstance(exc, PaymentPolicyError):
@@ -728,9 +918,7 @@ def create_app(container: AppContainer) -> FastAPI:
                 return None
             payload = await container.repository.get_sensitive_payload(payload_id)
             if payload is None or payload.purchase_id != execution.purchase_id:
-                raise HTTPException(
-                    status_code=409, detail="seller execution payload missing"
-                )
+                raise HTTPException(status_code=409, detail="seller execution payload missing")
             return container.cipher.decrypt_json(payload)
 
         prompt_value = await read_value(execution.prompt_payload_id)
@@ -932,9 +1120,7 @@ def create_app(container: AppContainer) -> FastAPI:
             ),
         )
         if stored.provider_attempt_id != body.provider_attempt_id:
-            raise HTTPException(
-                status_code=409, detail="seller provider attempt binding changed"
-            )
+            raise HTTPException(status_code=409, detail="seller provider attempt binding changed")
         return await seller_execution_response(stored)
 
     @app.post(
@@ -1160,9 +1346,7 @@ def create_app(container: AppContainer) -> FastAPI:
                     reason=body.reason,
                     transaction_hash=body.transaction_hash,
                     local_transaction_id=body.local_transaction_id,
-                    scenario=(
-                        body.scenario.to_core() if body.scenario is not None else None
-                    ),
+                    scenario=(body.scenario.to_core() if body.scenario is not None else None),
                 )
             )
         except (
@@ -1291,9 +1475,7 @@ def create_app(container: AppContainer) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> PaymentIntentResponse:
         require_internal(authorization)
-        await terminal_context(
-            body, terminal_state=PaymentIntentState.MISMATCH_CONFIRMED
-        )
+        await terminal_context(body, terminal_state=PaymentIntentState.MISMATCH_CONFIRMED)
         try:
             return _payment_intent_response(
                 await payment_service.confirm_mismatch(
@@ -1320,9 +1502,7 @@ def create_app(container: AppContainer) -> FastAPI:
         authorization: str | None = Header(default=None),
     ) -> PaymentIntentResponse:
         require_internal(authorization)
-        await terminal_context(
-            body, terminal_state=PaymentIntentState.RECONCILED_NO_TRANSFER
-        )
+        await terminal_context(body, terminal_state=PaymentIntentState.RECONCILED_NO_TRANSFER)
         try:
             return _payment_intent_response(
                 await payment_service.reconcile_no_transfer(
@@ -1380,9 +1560,7 @@ def create_app(container: AppContainer) -> FastAPI:
             reason=result.reason,
             audit=None if result.audit is None else _audit_report_response(result.audit),
             decision=(
-                None
-                if result.decision is None
-                else _reputation_decision_response(result.decision)
+                None if result.decision is None else _reputation_decision_response(result.decision)
             ),
             job=None if result.job is None else _reputation_job_response(result.job),
         )
@@ -1390,9 +1568,7 @@ def create_app(container: AppContainer) -> FastAPI:
     def require_outbox() -> ReputationOutboxPort:
         outbox = container.reputation_outbox
         if outbox is None:
-            raise HTTPException(
-                status_code=503, detail="reputation outbox is not configured"
-            )
+            raise HTTPException(status_code=503, detail="reputation outbox is not configured")
         return outbox
 
     @app.post(
@@ -2043,9 +2219,7 @@ def create_app(container: AppContainer) -> FastAPI:
                 EvidenceTransitionError,
             ) as exc:
                 raced = await verified_events(purchase_id)
-                decided = next(
-                    (event for event in raced if event.type == EventType.DECIDED), None
-                )
+                decided = next((event for event in raced if event.type == EventType.DECIDED), None)
                 if decided is not None:
                     return _event_response(decided)
                 raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -2326,6 +2500,18 @@ def create_app(container: AppContainer) -> FastAPI:
         if container.commerce_gateway is None:
             raise HTTPException(status_code=503, detail="payment executor unavailable")
         await decide_purchase(purchase_id, pbl_session)
+        await observe_phase(purchase_id, ObserverPhase.DECISION)
+        # An enabled decision checkpoint is a payment gate.  The gateway independently
+        # fetches this frozen prefix and refuses to execute unless its own record agrees.
+        if container.checkpoint_mode != "off":
+            try:
+                await container.commerce_gateway.checkpoint(
+                    purchase_id=purchase_id, phase=ObserverPhase.DECISION.value
+                )
+            except (httpx.HTTPError, ValueError) as exc:
+                raise HTTPException(
+                    status_code=502, detail="decision evidence checkpoint failed"
+                ) from exc
         events = await verified_events(purchase_id)
         requested = events[0]
         payload_id = requested.payload.get("sensitivePayloadId")
@@ -2346,11 +2532,125 @@ def create_app(container: AppContainer) -> FastAPI:
         except (httpx.HTTPError, ValueError) as exc:
             raise HTTPException(status_code=502, detail=str(exc)) from exc
         report = await audit_service.audit(purchase_id)
+        await observe_phase(purchase_id, ObserverPhase.AUDIT)
+        # Payment already completed. A failed audit anchor is visible/recoverable and
+        # must never trigger a second execution of the payment endpoint.
+        if container.checkpoint_mode != "off":
+            try:
+                await container.commerce_gateway.checkpoint(
+                    purchase_id=purchase_id, phase=ObserverPhase.AUDIT.value
+                )
+            except (httpx.HTTPError, ValueError):
+                pass
         return PurchaseRunResponse(
             purchase_id=purchase_id,
             payment=payment,
             audit=_audit_response(report),
         )
+
+    @app.get(
+        "/internal/evidence/purchases/{purchase_id}/checkpoints/{phase}",
+        response_model=EvidenceCheckpointResponse,
+    )
+    async def evidence_checkpoint(
+        purchase_id: str, phase: ObserverPhase, authorization: str | None = Header(default=None)
+    ) -> EvidenceCheckpointResponse:
+        require_internal(authorization)
+        events = await verified_events(purchase_id)
+        if not events:
+            raise HTTPException(status_code=404, detail="purchase evidence not found")
+        return checkpoint_response(events, phase)
+
+    @app.post(
+        "/internal/evidence/purchases/{purchase_id}/checkpoints/{phase}",
+        response_model=EvidenceCheckpointResponse,
+    )
+    async def record_evidence_checkpoint(
+        purchase_id: str,
+        phase: ObserverPhase,
+        body: EvidenceCheckpointRecordRequest,
+        authorization: str | None = Header(default=None),
+    ) -> EvidenceCheckpointResponse:
+        require_internal(authorization)
+        if container.checkpoint_mode != body.mode:
+            raise HTTPException(
+                status_code=409, detail="checkpoint mode does not match server mode"
+            )
+        if body.mode == "live" and (
+            body.transaction_hash is None or body.chain_id is None or body.contract_address is None
+        ):
+            raise HTTPException(status_code=422, detail="live checkpoint proof is incomplete")
+        if body.mode == "mock" and any(
+            value is not None
+            for value in (body.transaction_hash, body.chain_id, body.contract_address)
+        ):
+            raise HTTPException(
+                status_code=422, detail="mock checkpoint must not claim chain proof"
+            )
+        events = await verified_events(purchase_id)
+        response = checkpoint_response(events, phase)
+        if (
+            body.event_count != response.event_count
+            or body.head_event_hash != response.head_event_hash
+        ):
+            raise HTTPException(
+                status_code=409, detail="checkpoint proof targets a different evidence prefix"
+            )
+        if response.record is not None:
+            existing = response.record.model_dump(exclude_none=True)
+            requested = CheckpointRecordResponse(
+                mode=body.mode,
+                eventCount=body.event_count,
+                headEventHash=body.head_event_hash,
+                transactionHash=body.transaction_hash,
+                chainId=body.chain_id,
+                contractAddress=body.contract_address,
+            ).model_dump(exclude_none=True)
+            if existing != requested:
+                raise HTTPException(
+                    status_code=409, detail="different checkpoint proof already recorded"
+                )
+            return response
+        try:
+            await container.repository.append_event(
+                purchase_id=purchase_id,
+                event_type=EventType.CHECKPOINT_RECORDED,
+                occurred_at=container.clock.now(),
+                actor={"id": "evidence-anchor-gateway", "type": "service"},
+                payload={
+                    "phase": phase.value,
+                    "mode": body.mode,
+                    "eventCount": body.event_count,
+                    "headEventHash": body.head_event_hash,
+                    "transactionHash": body.transaction_hash,
+                    "chainId": body.chain_id,
+                    "contractAddress": body.contract_address,
+                },
+                evidence_refs=(body.head_event_hash,),
+                expected_event_count=len(events),
+                expected_head_event_hash=events[-1].event_hash,
+            )
+        except EvidenceTransitionError:
+            raced = checkpoint_response(await verified_events(purchase_id), phase)
+            if raced.record is None:
+                raise HTTPException(
+                    status_code=409, detail="checkpoint record append conflicted"
+                ) from None
+            existing = raced.record.model_dump(exclude_none=True, by_alias=False)
+            requested = CheckpointRecordResponse(
+                mode=body.mode,
+                eventCount=body.event_count,
+                headEventHash=body.head_event_hash,
+                transactionHash=body.transaction_hash,
+                chainId=body.chain_id,
+                contractAddress=body.contract_address,
+            ).model_dump(exclude_none=True, by_alias=False)
+            if existing != requested:
+                raise HTTPException(
+                    status_code=409, detail="different checkpoint proof already recorded"
+                ) from None
+            return raced
+        return checkpoint_response(await verified_events(purchase_id), phase)
 
     @app.get(
         "/internal/evidence/purchases/{purchase_id}/seller-quotes/{quote_id}",

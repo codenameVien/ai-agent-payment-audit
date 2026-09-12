@@ -1,5 +1,9 @@
 # Project Overview
 
+## Current user override — decision observer and chat
+
+The user now restores decision/audit EvidenceAnchor checkpoints and adds a separate local Qwen evidence observer plus chat-style /request. Follow docs/DECISION_OBSERVER_PLAN.md. The earlier active Anchor exclusion is superseded only for these checkpoints. No new DB deletion, asset transfer or chain deployment/write without the explicit external gate. Chat send never initiates payment. Preserve separate purchase consent and deterministic authorization rules.
+
 ## Current user override — 2026-09-12
 
 Use the newly deployed AEGIS token (decimals 6, EIP-712 version 1) and local Qwen automatic priority classification. Explicit priority bypasses Qwen; weights and scoring remain deterministic. The user explicitly superseded DB history preservation: 48 targeted legacy PBLC documents were deleted, without deleting Git/onchain history. Do not relabel old PBLC transactions as AEGIS. See docs/AEGIS_QWEN_MIGRATION.md. New AEGIS external settlement remains unverified; Mock review blocks only core user-flow errors. AWS/paid Provider calls remain out of scope.

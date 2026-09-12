@@ -1,5 +1,9 @@
 # 로컬 완료 및 외부 실행 인계
 
+> **최신 추가 구현:** 채팅 초안/실행 동의 분리, 별도 Qwen 결정·감사 관찰, 두 checkpoint API·실행 모듈. 아래 기존 Anchor 제외 설명보다 [최신 설계·검증 경계](DECISION_OBSERVER_PLAN.md)가 우선한다. 미리보기는 `npm run aegis:observer:demo` → `http://127.0.0.1:3100/request`. 실제 Anchor 배포/쓰기·신규 AEGIS 정산·AWS·유료 호출은 실행하지 않았다. 기존 실거래 `.env.local`·DB·다른 worktree는 그대로다. preview DB는 종료 때 제거되는 별도 임시 데이터다.
+
+일반 `aegis:live-payment` 환경은 새 기능을 자동 활성화하지 않는다. 적용 시 observer와 checkpoint 모드를 함께 설정하고 Anchor 별도 승인을 받아야 한다. `AEGIS_OBSERVER_MODE=local-qwen`, `AEGIS_OBSERVER_TIMEOUT_SECONDS=30`(상한), `AEGIS_CHECKPOINT_MODE=live`, `AEGIS_ANCHOR_WRITE_APPROVED=yes`, 계약/writer/격리 키가 필요하다. 개인키는 채팅에 붙이지 않으며 기존 안전한 로컬 입력 절차를 따른다.
+
 > **최신 2026-09-12:** [AEGIS/Qwen 전환 기록](AEGIS_QWEN_MIGRATION.md)이 아래 이전 상태보다 우선한다. AEGIS 신규 배포·초기 mint 완료, PBLC 관련 DB 48문서 삭제. 로컬 Qwen 자동 priority와 고정 정책을 연결했다. AEGIS 외부 Facilitator 실결제는 아직 검증하지 않았으며 과거 PBLC 성공과 구분한다. AWS·유료 Provider 호출은 하지 않는다.
 
 > **현재 범위:** 발표용 로컬 데모와 사용자 승인된 Base Sepolia PBLC 실제 결제 경로를 준비한다. Mock Provider E2E, 예산 초과·402 불일치·중복 결제 방지, dashboard build·기본 lint가 기존 검증 범위다. `live` 결제는 별도 서버 모드·`/request` 실행 동의로만 시도하며, 유료 Provider 호출과 AWS 배포는 하지 않는다.

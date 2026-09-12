@@ -17,13 +17,35 @@ const aegisDecisionUrl = new URL(
   import.meta.url,
 );
 
-test("purchase request collects prompt, optional budget and priority with acknowledgement", async () => {
+test("purchase request collects a chat draft, optional budget and priority with acknowledgement", async () => {
   const source = await readFile(requestUrl, "utf8");
   assert.match(source, /name="prompt"/);
+  assert.match(source, /구매 요청 대화/);
+  assert.match(source, /메시지 보내기/);
+  assert.match(source, /메시지를 보내도 구매·서명·결제는 생성되지 않습니다/);
   assert.match(source, /name="budget"/);
   assert.match(source, /name="priority"/);
   assert.match(source, /budgetUnits === null \? \{\} : \{ budget_units: budgetUnits \}/);
   assert.match(source, /disabled=\{!submittable\}/);
+  assert.match(source, /현재 대화 초안과 예산·우선순위를 확인했으며/);
+  assert.match(source, /명시적으로 동의하고 \{buttonLabel\}/);
+  assert.match(source, /초안 도우미: 아래에 요청을 입력해 대화를 시작하세요/);
+  assert.doesNotMatch(source, /DEFAULT_PROMPT/);
+});
+
+test("sending a chat message remains local and draft changes revoke purchase consent", async () => {
+  const source = await readFile(requestUrl, "utf8");
+  const sendMessage = source.slice(source.indexOf("function sendMessage"), source.indexOf("function startNewConversation"));
+  assert.ok(sendMessage.length > 0);
+  assert.doesNotMatch(sendMessage, /api\(|\/purchases|\/run/);
+  assert.match(sendMessage, /revokeConsent\(\)/);
+  assert.match(source, /onChange=\{\(event\) => \{\s*revokeConsent\(\);\s*setBudget/);
+  assert.match(source, /onChange=\{\(event\) => \{\s*revokeConsent\(\);\s*setPriority/);
+  assert.match(source, /const prompt = useMemo/);
+  assert.match(source, /messages\.filter\(\(message\) => message\.role === "user"\)/);
+  assert.match(source, /const hasUnsentMessage = messageDraft\.trim\(\) !== ""/);
+  assert.match(source, /acknowledged && prompt\.trim\(\) !== "" && !hasUnsentMessage/);
+  assert.match(source, /작성 중인 메시지를 먼저 보내거나 지워 주세요/);
 });
 
 test("the request posts an aegis-aa-v1 body and omits priority when it is automatic", async () => {
@@ -64,7 +86,7 @@ test("a stored id is verified before any resume and blocks the run when unverifi
   assert.match(source, /matchesPendingRequest\(resumable, input\)/);
   // One gate decides for both the button and the handler, and it refuses while the
   // lookup is still in flight.
-  assert.match(source, /const submittable = canSubmitRequest\(pending, \{ busy, acknowledged \}\);/);
+  assert.match(source, /acknowledged: acknowledged && prompt\.trim\(\) !== "" && !hasUnsentMessage/);
   assert.match(source, /if \(!submittable\) return;/);
   assert.match(source, /const checking = pending === null;/);
   // A re-check re-enters the checking state instead of running against a stale answer.

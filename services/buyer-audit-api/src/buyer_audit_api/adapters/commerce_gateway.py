@@ -17,9 +17,7 @@ class HttpCommerceGatewayClient:
         self._service_token = service_token
         self._timeout = timeout_seconds
 
-    async def execute(
-        self, *, purchase_id: str, resource_body: dict[str, Any]
-    ) -> dict[str, Any]:
+    async def execute(self, *, purchase_id: str, resource_body: dict[str, Any]) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 f"{self._base_url}/execute",
@@ -30,4 +28,18 @@ class HttpCommerceGatewayClient:
             value = response.json()
         if not isinstance(value, dict):
             raise ValueError("commerce gateway returned a malformed response")
+        return value
+
+    async def checkpoint(self, *, purchase_id: str, phase: str) -> dict[str, Any]:
+        """Ask the protected gateway to anchor the frozen Evidence API prefix."""
+        async with httpx.AsyncClient(timeout=self._timeout) as client:
+            response = await client.post(
+                f"{self._base_url}/evidence-checkpoints",
+                headers={"authorization": f"Bearer {self._service_token}"},
+                json={"purchaseId": purchase_id, "phase": phase},
+            )
+            response.raise_for_status()
+            value = response.json()
+        if not isinstance(value, dict):
+            raise ValueError("commerce gateway returned a malformed checkpoint response")
         return value

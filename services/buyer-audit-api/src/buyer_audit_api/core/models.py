@@ -40,6 +40,20 @@ class EventType(StrEnum):
     EVIDENCE_ANCHORED = "EVIDENCE_ANCHORED"
     SENSITIVE_PAYLOAD_ACCESSED = "SENSITIVE_PAYLOAD_ACCESSED"
     CORRECTION_RECORDED = "CORRECTION_RECORDED"
+    # Auxiliary evidence is intentionally separate from deterministic lifecycle facts.
+    # It may advise a reviewer but can never authorize or reject a payment.
+    OBSERVER_COMPLETED = "OBSERVER_COMPLETED"
+    OBSERVER_UNAVAILABLE = "OBSERVER_UNAVAILABLE"
+    CHECKPOINT_TARGET_SELECTED = "CHECKPOINT_TARGET_SELECTED"
+    CHECKPOINT_RECORDED = "CHECKPOINT_RECORDED"
+
+
+AUXILIARY_EVENT_TYPES: tuple[EventType, ...] = (
+    EventType.OBSERVER_COMPLETED,
+    EventType.OBSERVER_UNAVAILABLE,
+    EventType.CHECKPOINT_TARGET_SELECTED,
+    EventType.CHECKPOINT_RECORDED,
+)
 
 
 TERMINAL_PAYMENT_EVENT_TYPES: tuple[EventType, ...] = (
@@ -151,8 +165,7 @@ class LocalTransactionRef:
         match = LOCAL_TRANSACTION_ID_PATTERN.fullmatch(self.id)
         if match is None:
             raise ValueError(
-                "local transaction id must match "
-                "^localtx:[0-9a-f]{32}:(payment|feedback):[0-9]{6}$"
+                "local transaction id must match ^localtx:[0-9a-f]{32}:(payment|feedback):[0-9]{6}$"
             )
         if match.group("run_id") != self.run_id:
             raise ValueError("local transaction id does not belong to this runId")
@@ -212,9 +225,7 @@ def transaction_ref_from_fields(
 ) -> TransactionRef:
     """Reject type confusion between the EVM hash field and the local identifier field."""
     if transaction_hash is not None and local_transaction_id is not None:
-        raise ValueError(
-            "a payload cannot carry both transactionHash and localTransactionId"
-        )
+        raise ValueError("a payload cannot carry both transactionHash and localTransactionId")
     if transaction_hash is not None:
         if transaction_hash.startswith("localtx:"):
             raise ValueError("a local transaction id cannot be a transactionHash")

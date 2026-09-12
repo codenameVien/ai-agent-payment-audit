@@ -499,6 +499,28 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .experimentForm { display: flex; flex-direction: column; gap: 19px; }
 .experimentForm label { display: flex; flex-direction: column; gap: 8px; }
 .experimentForm label > span { font-weight: 760; font-size: 13px; }
+.requestChat {
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  padding: 16px;
+  border: 1px solid #4a3b70;
+  border-radius: 14px;
+  background: rgba(24, 20, 35, 0.72);
+}
+.requestChatHead, .chatComposerActions { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.requestChatHead > div { display: flex; flex-direction: column; gap: 4px; }
+.requestChatHead span { font-weight: 820; font-size: 14px; }
+.requestChatHead small, .chatComposerActions small { color: var(--muted); font-size: 11px; line-height: 1.45; }
+.chatTranscript { display: flex; flex-direction: column; gap: 10px; max-height: 340px; overflow-y: auto; padding-right: 3px; }
+.chatMessage { max-width: 88%; padding: 12px 14px; border: 1px solid var(--line); border-radius: 13px; background: #121117; }
+.chatMessage.user { align-self: flex-end; border-color: #58467e; background: var(--violet-soft); }
+.chatMessage.assistant { align-self: flex-start; }
+.chatMessage strong { display: block; color: var(--muted); font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.chatMessage p { margin: 6px 0 0; font-size: 13px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.chatEmpty { margin: 6px 0; color: var(--muted); font-size: 13px; text-align: center; }
+.chatComposer { gap: 7px !important; }
+.chatComposer textarea { resize: vertical; }
 .experimentTerms {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));

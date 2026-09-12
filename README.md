@@ -2,6 +2,21 @@
 
 # AEGIS — AI 모델 구매와 감사
 
+> **현재 추가 기능:** 채팅형 구매 초안, 별도 로컬 Qwen 판단/감사 관찰자, 결제 전·감사 후 두 증거 체크포인트. MongoDB 원문에 대응하는 해시를 온체인에 제출하는 코드를 연결했다. 새 Anchor 배포·온체인 쓰기는 승인 전이며 아래 데모에서는 **Mock 체크포인트**다. [설계·검증·배포 경계](docs/DECISION_OBSERVER_PLAN.md).
+
+### 채팅·관찰자 미리보기
+
+```bash
+ollama list # qwen3.5:4b 및 로컬 Ollama 서버 확인
+npm run aegis:observer:demo
+```
+
+`http://127.0.0.1:3100/request`에서 메시지를 보내 초안을 작성한 뒤 구매 실행에 명시적으로 동의한다. **메시지 전송 자체는 구매·결제 API를 호출하지 않는다.** 초안 안내는 로컬 UI 도우미이며 자유 대화 LLM 서비스가 아니다. Qwen은 실행 시 priority 분류 및 두 시점의 별도 증거 관찰에 사용한다.
+
+이 명령은 기존 `.env.local`·실거래 DB를 사용하지 않는다. Qwen 호출만 실제 로컬 실행, AA/Provider/정산/Anchor는 모의이며 임시 DB는 종료 때 정리된다. 실거래 설정은 바꾸지 않는다.
+
+![채팅 초안 — 메시지 전송의 구매 API 쓰기 0건 확인](docs/images/chat-request.png)
+
 > 2026-09-12: 신규 AEGIS 계약 배포·1,000,000 AEGIS 초기 발행 완료. 로컬 Qwen으로 자동 priority를 분류하고 가격·점수·결제 검사는 고정 코드 정책을 유지한다. 기존 PBLC DB 기록은 사용자 지시로 삭제했다. 새 AEGIS 외부 실결제는 아직 검증하지 않았다. [현재 상태·실행·언어별 역할](docs/AEGIS_QWEN_MIGRATION.md). 아래 PBLC 명령명은 호환용이며 과거 실거래 증거는 역사 기록이다.
 
 ## 왜 만들었나
@@ -26,6 +41,11 @@ flowchart LR
   G -->|결과| B
   B -->|결과| R
   B --> E[감사 증거 기록 API]
+  B --> OBS[별도 로컬 Qwen · 결정 및 감사 관찰]
+  OBS --> E
+  E -->|확정된 증거 hash/count 조회| CP[체크포인트 실행 · 격리 키]
+  CP -. live 별도 승인 필요 .-> AN[Solidity EvidenceAnchor]
+  CP -->|Mock 또는 확인된 Anchor 증거| E
   P --> E
   G --> E
   E --> M[(MongoDB)]

@@ -1,5 +1,38 @@
 # AEGIS 단일 구매 구조
 
+## 최신: 채팅·판단 관찰·두 증거 체크포인트
+
+```mermaid
+flowchart TD
+  U[사용자] --> CHAT[채팅 초안 · 메시지는 화면 안에서만 저장]
+  CHAT --> CONSENT[예산/priority 확인 · 명시 실행 동의]
+  CONSENT --> BUY[Python 구매 에이전트 · 요청/AA/고정 정책 결정]
+  BUY --> O1[별도 로컬 Qwen · 결정 증거 관찰]
+  O1 --> E1[감사 증거 API · Mongo hash chain prefix 확정]
+  E1 --> A1[격리된 체크포인트 실행 · 결정 hash/count]
+  A1 --> CHECK{체크포인트 기록 성공?}
+  CHECK -->|아니오| STOP[결제 전 중단]
+  CHECK -->|예| PAY[결제 실행 모듈 · 예산/402/중복 확인]
+  PAY --> F[Gateway 및 Facilitator · ERC3009 결제]
+  F --> OUT[선택 Provider 결과 · 현재 Mock]
+  OUT --> AUD[Python 고정 규칙 감사]
+  AUD --> O2[별도 로컬 Qwen · 결과/감사 관찰]
+  O2 --> E2[감사 증거 API · 다음 prefix 확정]
+  E2 --> A2[감사 체크포인트 · 실패해도 재결제 금지]
+  A1 -. 승인된 live에만 .-> SOL[Solidity EvidenceAnchor]
+  A2 -. 승인된 live에만 .-> SOL
+  E1 --> M[(MongoDB · 원문/이벤트)]
+  E2 --> M
+  M --> API[감사 증거 API · 읽기]
+  API --> DASH[읽기 전용 대시보드 · 규칙/LLM/Anchor 상태 구분]
+```
+
+`AEGIS_CHECKPOINT_MODE=off`는 이전 흐름을 유지한다. 신규 preview는 `mock`, 실제 쓰기는 `live` 및 별도 승인·writer 설정이 필요하다. Qwen은 이벤트 시점 2회 관찰하며 상시 daemon이나 숨겨진 사고과정 감시가 아니다. 사용자의 동의는 실행 전 1회이며 모델 선택 뒤 새로운 승인 단계를 추가하지 않는다. [설계·검증 및 제한](DECISION_OBSERVER_PLAN.md).
+
+Solidity는 AEGIS 토큰과 EvidenceAnchor의 권한·연속성만 처리한다. Python은 요청·점수·Qwen·규칙 감사·Mongo를, TypeScript는 UI와 키 격리된 결제/Anchor 제출을 처리한다. 현재 데모의 Anchor는 Mock이므로 온체인 무결성 검증 완료가 아니다. 이후 실제 Anchor가 있어도 원기록 진실성·완전성·삭제 원문 복구를 보증하지 않는다.
+
+## 이전 결제 기본 경로 — 위 추가 단계를 함께 적용
+
 > 2026-09-12 현재 자산은 신규 AEGIS이며 자동 priority는 로컬 Qwen이다. 아래 09-10 PBLC 설명은 이전 전환 이력이다. 현재 배포/검증 경계와 Solidity·일반 코드 분리는 [전환 기록](AEGIS_QWEN_MIGRATION.md)을 따른다.
 
 2026-09-10 기준: 기본 실행은 세 Provider Mock 응답·AA fixture·Mock Facilitator다. 별도 `live` 서버 모드는 사용자 PBLC 지갑으로 외부 x402 Facilitator의 Base Sepolia `exact + ERC-3009` 정산을 시도한다. Provider 결과는 어느 모드에서도 Mock이다. 실제 PBLC 전송 성공 여부는 Facilitator 응답으로만 기록하며, 독립 RPC Transfer 검증이나 유료 모델 호출을 뜻하지 않는다. [실제 PBLC 요청 흐름](LIVE_PBLC_REQUEST_FLOW.md)을 따른다.

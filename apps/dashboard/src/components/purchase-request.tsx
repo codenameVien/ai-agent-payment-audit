@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useCallback, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 
 import {
   AEGIS_PENDING_PURCHASE_KEY,
@@ -17,9 +17,14 @@ import type { PendingResolution } from "@/lib/aegis";
 import { api, credits, short } from "@/lib/api";
 import type { PurchaseDetail } from "@/lib/types";
 
-const DEFAULT_PROMPT = "사용자 요구에 가장 적합한 AI 모델을 선택해 한 문장으로 응답해줘.";
 /** PBLC V2 is a 6-decimal token, so one unit is 1e-6 nominal USD. */
 const PBLC_UNITS_PER_TOKEN = 1_000_000;
+
+type ChatMessage = {
+  id: number;
+  role: "user" | "assistant";
+  text: string;
+};
 
 type Phase = "ready" | "invalid" | "creating" | "running";
 type RuntimeMode = "checking" | "mock" | "live" | "unavailable";
@@ -48,6 +53,10 @@ function loadPurchase(purchaseId: string): Promise<PurchaseDetail> {
 export function PurchaseRequest() {
   const router = useRouter();
   const [acknowledged, setAcknowledged] = useState(false);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messageDraft, setMessageDraft] = useState("");
+  const [budget, setBudget] = useState("");
+  const [priority, setPriority] = useState("auto");
   const [phase, setPhase] = useState<Phase>("ready");
   const [pending, setPending] = useState<PendingResolution | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -88,19 +97,51 @@ export function PurchaseRequest() {
   const checking = pending === null;
   const blocked = pending?.status === "blocked";
   const resumable = pending?.status === "resume" ? pending.pending : null;
-  const submittable = canSubmitRequest(pending, { busy, acknowledged });
+  const prompt = useMemo(
+    () => messages.filter((message) => message.role === "user").map((message) => message.text).join("\n\n"),
+    [messages],
+  );
+  const hasUnsentMessage = messageDraft.trim() !== "";
+  const submittable = canSubmitRequest(pending, {
+    busy,
+    acknowledged: acknowledged && prompt.trim() !== "" && !hasUnsentMessage,
+  });
+
+  function revokeConsent() {
+    setAcknowledged(false);
+  }
+
+  function sendMessage() {
+    const text = messageDraft.trim();
+    if (text === "" || busy) return;
+    revokeConsent();
+    setMessages((current) => [
+      ...current,
+      { id: Date.now(), role: "user", text },
+      {
+        id: Date.now() + 1,
+        role: "assistant",
+        text: "초안 안내: 이 메시지를 구매 요청 초안에 추가했습니다. 예산·우선순위와 실행 동의를 다시 확인한 뒤에만 구매 실행을 선택할 수 있습니다.",
+      },
+    ]);
+    setMessageDraft("");
+  }
+
+  function startNewConversation() {
+    if (busy) return;
+    revokeConsent();
+    setMessages([]);
+    setMessageDraft("");
+  }
 
   async function run(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!submittable) return;
 
     setError(null);
-    const data = new FormData(event.currentTarget);
-    const prompt = String(data.get("prompt"));
-    const priority = String(data.get("priority"));
     let budgetUnits: number | null;
     try {
-      budgetUnits = toBudgetUnits(data.get("budget"));
+      budgetUnits = toBudgetUnits(budget);
     } catch (reason) {
       setPhase("invalid");
       setError(reason instanceof Error ? reason.message : "예산 입력이 올바르지 않습니다.");
@@ -201,14 +242,47 @@ export function PurchaseRequest() {
         </div>
 
         <form className="experimentForm" onSubmit={run}>
-          <label>
-            <span>사용자 요청</span>
-            <textarea name="prompt" required minLength={1} rows={5} defaultValue={DEFAULT_PROMPT} />
-          </label>
+          <input name="prompt" type="hidden" value={prompt} readOnly />
+
+          <section className="requestChat" aria-label="구매 요청 대화 초안">
+            <div className="requestChatHead">
+              <div>
+                <span>구매 요청 대화</span>
+                <small>메시지를 보내도 구매·서명·결제는 생성되지 않습니다.</small>
+              </div>
+              <button type="button" onClick={startNewConversation} disabled={busy}>새 대화</button>
+            </div>
+            <div className="chatTranscript" aria-live="polite">
+              {messages.length === 0 ? (
+                <p className="chatEmpty">초안 도우미: 아래에 요청을 입력해 대화를 시작하세요. 이 화면은 모델 호출이나 구매를 하지 않습니다.</p>
+              ) : messages.map((message) => (
+                <article className={`chatMessage ${message.role}`} key={message.id}>
+                  <strong>{message.role === "user" ? "나" : "초안 도우미"}</strong>
+                  <p>{message.text}</p>
+                </article>
+              ))}
+            </div>
+            <label className="chatComposer">
+              <span>메시지</span>
+              <textarea
+                value={messageDraft}
+                onChange={(event) => {
+                  revokeConsent();
+                  setMessageDraft(event.target.value);
+                }}
+                rows={3}
+                placeholder="추가 조건이나 원하는 답변 형식을 입력하세요"
+              />
+            </label>
+            <div className="chatComposerActions">
+              <button type="button" onClick={sendMessage} disabled={busy || messageDraft.trim() === ""}>메시지 보내기</button>
+              <small>보내기는 화면의 대화 초안만 갱신합니다.</small>
+            </div>
+          </section>
 
           <label>
             <span>예산({tokenSymbol}, 선택)</span>
-            <input name="budget" type="number" min="0.000001" max="1" step="0.000001" placeholder="비워두면 지갑의 1회 한도 적용" />
+            <input name="budget" type="number" min="0.000001" max="1" step="0.000001" value={budget} onChange={(event) => { revokeConsent(); setBudget(event.target.value); }} placeholder="비워두면 지갑의 1회 한도 적용" />
             <small>
               {tokenSymbol}는 소수점 6자리이고 1 {tokenSymbol}는 명목 1 USD로 환산합니다. 명목 환산값이며 실제
               화폐 가치가 아닙니다.
@@ -217,7 +291,7 @@ export function PurchaseRequest() {
 
           <label>
             <span>우선순위</span>
-            <select name="priority" defaultValue="auto">
+            <select name="priority" value={priority} onChange={(event) => { revokeConsent(); setPriority(event.target.value); }}>
               {AEGIS_PRIORITY_OPTIONS.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label} — {option.note}
@@ -241,7 +315,7 @@ export function PurchaseRequest() {
           <label className="paymentConsent">
             <input type="checkbox" checked={acknowledged} onChange={(event) => setAcknowledged(event.target.checked)} />
             <span>
-              구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
+              현재 대화 초안과 예산·우선순위를 확인했으며, 구매 에이전트가 aa-three-factor-v1 정책으로 고른 모델별 표준 작업 선결제 상한을 x402 exact +
               ERC-3009 승인으로 한 번만 요청하고, 판단·결제·감사 증거를 같은 purchaseId로
               기록하는 것을 확인했습니다. 서버가 <strong>실제 결제 모드</strong>로 구성된 경우에는
               이 실행이 선택된 판매자 지갑에 실제 Base Sepolia {tokenSymbol}를 한 번 전송할 수 있으며,
@@ -249,6 +323,12 @@ export function PurchaseRequest() {
               않습니다.
             </span>
           </label>
+
+          {hasUnsentMessage && (
+            <div className="notice" role="status">
+              작성 중인 메시지를 먼저 보내거나 지워 주세요. 보내지 않은 내용은 구매 요청 초안에 포함되지 않습니다.
+            </div>
+          )}
 
           {error && <div className="notice risk" role="alert">실행이 완료되지 않았습니다: {error}</div>}
 
@@ -312,7 +392,7 @@ export function PurchaseRequest() {
           ))}
 
           <div className="experimentActions">
-            <button className="primary" type="submit" disabled={!submittable}>{buttonLabel}</button>
+            <button className="primary" type="submit" disabled={!submittable}>명시적으로 동의하고 {buttonLabel}</button>
             {resumable && (
               <Link href={`/purchases/${encodeURIComponent(resumable.purchaseId)}`}>
                 현재 거래 상세 보기 →
