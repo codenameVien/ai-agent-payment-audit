@@ -1,5 +1,7 @@
 # 로컬 완료 및 외부 실행 인계
 
+> **채팅 UX 교정:** `/request`는 메시지별 독립 구매 카드·카드 안의 명시 실행 동의·같은 대화 안의 결과/오류를 사용한다. 미전송 경고 및 성공 후 자동 상세 이동을 제거했다. 완료한 뒤 같은 문구를 보내면 새 구매, 실패 카드 재시도는 같은 ID다. 기존 pending 조회 실패는 안전 확인 전 실행을 막는다. 일반 메시지 전송은 여전히 결제하지 않는다. 관련 검증은 `scripts/chat_request_browser_smoke.mjs`와 [검증 기록](DECISION_OBSERVER_VERIFICATION.md)의 UX 교정 절을 따른다.
+
 > **최신 추가 구현:** 채팅 초안/실행 동의 분리, 별도 Qwen 결정·감사 관찰, 두 checkpoint API·실행 모듈. 아래 기존 Anchor 제외 설명보다 [최신 설계·검증 경계](DECISION_OBSERVER_PLAN.md)가 우선한다. 미리보기는 `npm run aegis:observer:demo` → `http://127.0.0.1:3100/request`. 실제 Anchor 배포/쓰기·신규 AEGIS 정산·AWS·유료 호출은 실행하지 않았다. 기존 실거래 `.env.local`·DB·다른 worktree는 그대로다. preview DB는 종료 때 제거되는 별도 임시 데이터다.
 
 일반 `aegis:live-payment` 환경은 새 기능을 자동 활성화하지 않는다. 적용 시 observer와 checkpoint 모드를 함께 설정하고 Anchor 별도 승인을 받아야 한다. `AEGIS_OBSERVER_MODE=local-qwen`, `AEGIS_OBSERVER_TIMEOUT_SECONDS=30`(상한), `AEGIS_CHECKPOINT_MODE=live`, `AEGIS_ANCHOR_WRITE_APPROVED=yes`, 계약/writer/격리 키가 필요하다. 개인키는 채팅에 붙이지 않으며 기존 안전한 로컬 입력 절차를 따른다.

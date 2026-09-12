@@ -1,5 +1,7 @@
 # AI-DLC State
 
+> Current packet (2026-09-12): `/request` chatbot UX and repeat-purchase correction locally verified, branch `fix/chat-purchase-flow`. Design: `docs/DECISION_OBSERVER_PLAN.md` → 채팅 UX 교정. Evidence: `docs/DECISION_OBSERVER_VERIFICATION.md` → latest UX section (38 dashboard tests, 11 browser groups, 2 isolated Mock purchases, lint/build). Existing AEGIS/Qwen/checkpoint implementation is preserved. No chain writes or deployments. Older lifecycle details below are historical, not the active token/runtime status.
+
 - **Lifecycle:** Integration — ERC-3009-only payment runtime
 - **Current stage:** PBLC V2 deploy/verify/settle/receipt/replay evidence captured; active Permit2 path retired; AWS and real provider remain external gates
 - **Requirements:** Approved on 2026-09-02; revised 2026-09-04

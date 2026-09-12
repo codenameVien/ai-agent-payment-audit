@@ -4,8 +4,8 @@
 
 ```mermaid
 flowchart TD
-  U[사용자] --> CHAT[채팅 초안 · 메시지는 화면 안에서만 저장]
-  CHAT --> CONSENT[예산/priority 확인 · 명시 실행 동의]
+  U[사용자] --> CHAT[하단 채팅 입력 · 메시지별 독립 요청]
+  CHAT --> CONSENT[대화 속 카드 · 예산/priority 확인 및 실행 동의]
   CONSENT --> BUY[Python 구매 에이전트 · 요청/AA/고정 정책 결정]
   BUY --> O1[별도 로컬 Qwen · 결정 증거 관찰]
   O1 --> E1[감사 증거 API · Mongo hash chain prefix 확정]
@@ -19,6 +19,8 @@ flowchart TD
   AUD --> O2[별도 로컬 Qwen · 결과/감사 관찰]
   O2 --> E2[감사 증거 API · 다음 prefix 확정]
   E2 --> A2[감사 체크포인트 · 실패해도 재결제 금지]
+  A2 --> RESULT[대화 안 결과 · 거래 상세 링크]
+  RESULT -->|새 메시지로 다음 구매| CHAT
   A1 -. 승인된 live에만 .-> SOL[Solidity EvidenceAnchor]
   A2 -. 승인된 live에만 .-> SOL
   E1 --> M[(MongoDB · 원문/이벤트)]

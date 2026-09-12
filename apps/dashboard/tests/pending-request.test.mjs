@@ -168,6 +168,24 @@ test("a stored id proven to be another policy is never resumed", { skip }, async
   assert.equal(resolution.pending.isAegis, false);
 });
 
+test("a not-started budget failure permits a corrected independent request", { skip }, async () => {
+  const resolution = await aegis.resolvePendingRequest(
+    store({ [NEW_KEY]: "aegis-budget-failed" }),
+    recordingLoad(detail({ paymentStatus: "PAYMENT_NOT_STARTED" })).load,
+  );
+  assert.equal(resolution.status, "resume");
+  assert.equal(aegis.allowsIndependentRequest(resolution.pending), true);
+});
+
+test("an unknown payment confirmation blocks a different request", { skip }, async () => {
+  const resolution = await aegis.resolvePendingRequest(
+    store({ [NEW_KEY]: "aegis-unknown" }),
+    recordingLoad(detail({ paymentStatus: "PAYMENT_CONFIRMATION_UNKNOWN" })).load,
+  );
+  assert.equal(resolution.status, "resume");
+  assert.equal(aegis.allowsIndependentRequest(resolution.pending), false);
+});
+
 test("a finished purchase is not re-run from a stale pending key", { skip }, async () => {
   const settled = await aegis.resolvePendingRequest(
     store({ [NEW_KEY]: "aegis-purchase" }),
@@ -176,7 +194,7 @@ test("a finished purchase is not re-run from a stale pending key", { skip }, asy
   assert.equal(settled.status, "resume");
   const audited = await aegis.resolvePendingRequest(
     store({ [NEW_KEY]: "aegis-purchase" }),
-    recordingLoad(detail({ audit: { report_id: "rep-1", severity: "NORMAL", findings: [] } }))
+    recordingLoad(detail({ paymentStatus: "PAYMENT_SETTLED", audit: { report_id: "rep-1", severity: "NORMAL", findings: [] } }))
       .load,
   );
   assert.equal(audited.status, "completed");
