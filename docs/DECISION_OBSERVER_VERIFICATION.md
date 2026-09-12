@@ -1,8 +1,28 @@
 # Decision 관찰·채팅·체크포인트 검증 (2026-09-12)
 
+## 최신: 채팅 UX 교정 검증
+
+기존 폼 속 대화 초안을 단일 채팅으로 교정했다. 미전송 문구 경고와 자동 상세 이동을 제거하고, 메시지별 독립 확인 카드 → 명시 동의 → 같은 대화의 결과/오류를 제공한다. 예산·우선순위는 보내는 순간 고정되며 이전 요청의 문구를 합산하지 않는다. 완료 후 다시 보내기는 새 구매, 실패 재시도는 같은 purchaseId다.
+
+| 이번 실행 범위 | 결과 |
+|---|---|
+| 브라우저 응답 가로채기 기반 핵심 경계 11개 묶음 | 모두 통과: 전송 쓰기 0·IME/줄바꿈·미전송 문구·이중 클릭·반복 요청·동일 ID 재시도·완료된 저장 ID·연결 미확인·HTTP200 미정산 3종·결제 전 실패 후 변경 요청·미확정 정산 우회 차단·live 표시 |
+| 실제 격리 HTTP/Mongo + 로컬 Qwen + Mock 정산에서 같은 문구 연속 구매 | 2건 완료, create/run POST 총 4건, 각 `PAYMENT_SETTLED` 1개·checkpoint 2개·감사 기록 확인, `/request` 유지 |
+| dashboard 단위/정적 경계 | Node26에서 38/38, skipped 0 |
+| 전체 lint·타입 검사 / dashboard production build | 통과 |
+| 390×844 화면 | 가로 overflow 없음, 설정을 펼쳐도 입력창 하단 727px로 화면 안에 위치 |
+
+실제 Mock 구매 ID: `295f16f2-9ba3-4c1c-85fc-1671e2adc3cb`, `2603f095-5338-47e4-b059-912d65c53711`. `npm run aegis:observer:demo`의 별도 임시 DB에 남겨 두었으며 데모 종료 시 해당 임시 DB가 정리된다. 기존 사용자 거래 DB는 변경하지 않았다. 가로채기 테스트의 ID는 메모리 fixture이며 MongoDB에 저장하지 않는다.
+
+코드와 별도의 핵심 흐름 리뷰에서 “결제 전 실패도 모든 다음 요청을 막음”을 blocker로 발견해 수정했다. PAYMENT_NOT_STARTED/PAYMENT_FAILED/RECONCILED_NO_TRANSFER만 변경된 새 요청을 허용하고 진행/미확정은 보호한다. 최종 핵심 blocker 없음. HTTP200이라도 settled 상태가 아니면 성공으로 표시하거나 pending ID를 없애지 않는다.
+
+재현: `PLAYWRIGHT_MODULE=<로컬 Playwright 모듈 경로> node scripts/chat_request_browser_smoke.mjs`는 응답 가로채기 테스트만 실행한다. `--execute-mock`는 3100의 Mock 모드를 확인한 뒤 임시 DB 구매 2건을 추가하므로 실제 결제 환경에서는 실행하지 않는다.
+
+이번 검증에서 생략: backend/계약 광범위 재검증, 탐지 정확도 평가, 부하·보안 강화, 실제 Facilitator 정산, 새 체인 Anchor, 유료 Provider 및 AWS. 아래 표는 앞선 기능 구현 당시의 결과이며 이번에 전부 재실행한 것이 아니다.
+
 ## 구현 상태
 
-- 채팅 초안은 브라우저 안에서만 갱신된다. 빈 대화 또는 미전송 메시지가 있으면 실행 불가. 편집 시 동의 해제. 동의와 실행 버튼 이후에만 purchaseId/구매 실행 API를 호출한다.
+- 채팅 메시지는 브라우저 안에서만 갱신된다. 메시지별 고정 확인 카드에 명시적으로 동의한 경우에만 purchaseId/구매 실행 API를 호출한다. 다음 메시지를 입력 중이어도 기존 확인 카드를 실행할 수 있다.
 - Python이 DECIDED/AUDITED 각각에 별도 Qwen 관찰을 기록하고 해당 event prefix를 고정한다. 관찰자는 자문이며 실패는 OBSERVER_UNAVAILABLE로 기록한다. 고정 정책·결제 권한은 바꾸지 않는다.
 - protected Evidence API GET은 읽기 전용. POST checkpoint는 동일 phase/hash/count/mode의 재실행만 허용한다. TypeScript는 MongoDB에 직접 접근하지 않는다.
 - 결정 checkpoint가 필요한 모드에서는 결제 서명 전에 확인한다. 감사 checkpoint 실패는 이미 완료된 결제를 다시 만들지 않는다. Mock proof에는 transaction hash를 만들지 않는다.

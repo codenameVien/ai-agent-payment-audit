@@ -561,6 +561,26 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
   border-bottom: 1px solid var(--line);
 }
 .experimentSteps li:last-child { border-bottom: 0; }
+.requestMain { max-width: 960px; height: calc(100dvh - 150px); min-height: 620px; display: flex; flex-direction: column; }
+.requestChatSurface { display: flex; flex: 1; min-height: 0; flex-direction: column; border: 1px solid var(--line); border-radius: 20px; background: linear-gradient(145deg, var(--card), #121117); overflow: hidden; }
+.requestChatHeader { display: flex; justify-content: space-between; gap: 20px; align-items: start; padding: 27px 28px 20px; border-bottom: 1px solid var(--line); }
+.requestChatHeader h1 { margin: 0 0 8px; font-size: 27px; letter-spacing: -.035em; }.requestChatHeader p:last-child { margin: 0; color: var(--muted); font-size: 13px; }
+.requestChatActions { display: flex; align-items: center; gap: 10px; }
+.chatTurn { min-width: 0; flex-shrink: 0; }
+.chatBubble p, .purchase-confirmation-card { overflow-wrap: anywhere; }
+.purchase-confirmation-card pre {
+  margin: 14px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+}
+.chatComposerBar { flex-shrink: 0; }
+.chatComposerBar textarea { max-height: 160px; }
+.chatThread { flex: 1; min-height: 0; display: flex; flex-direction: column; gap: 18px; padding: 24px; overflow: auto; }.chatWelcome { margin: auto; color: var(--muted); text-align: center; font-size: 14px; }.chatTurn { display: flex; flex-direction: column; gap: 10px; }.chatBubble { max-width: 78%; border-radius: 16px; padding: 13px 15px; }.chatBubble.user { align-self: flex-end; background: var(--violet-soft); border: 1px solid #58467e; }.chatBubble span { display:block; font-size: 10px; color: var(--muted); font-weight: 800; }.chatBubble p { white-space: pre-wrap; margin: 5px 0 0; line-height: 1.55; }
+.purchase-confirmation-card { align-self: flex-start; width: min(580px, 100%); padding: 16px; border: 1px solid var(--line-strong); border-radius: 14px; background: #121117; }.purchase-confirmation-card.running { border-color: var(--amber); }.purchase-confirmation-card.success { border-color: #28533f; }.purchase-confirmation-card.error { border-color: #71333d; }.purchase-confirmation-card > p { font-size: 13px; line-height: 1.5; }.purchase-confirmation-card dl { display:grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 8px; margin: 14px 0; }.purchase-confirmation-card dl div { border-top: 1px solid var(--line); padding-top: 8px; }.purchase-confirmation-card dt { font-size: 10px; }.purchase-confirmation-card dd { font-family: inherit; margin-top: 4px; }
+.chatComposerBar { display: grid; grid-template-columns: minmax(0,1fr) auto; gap: 10px; padding: 14px 18px 18px; border-top: 1px solid var(--line); background: rgba(15,14,19,.94); }.chatComposerBar textarea { min-height: 52px; resize: vertical; }.chatComposerBar .primary { min-width: 90px; }.chatSettings { grid-column: 1 / -1; color: var(--muted); font-size: 12px; }.chatSettings summary { cursor: pointer; }.chatSettings > div { display:flex; gap: 12px; margin-top: 10px; }.chatSettings label { display:flex; align-items:center; gap: 7px; }.chatSettings input,.chatSettings select { width:auto; padding: 7px; }
 .experimentSteps li::before {
   content: counter(experiment-step);
   display: grid;
@@ -634,4 +654,12 @@ footer {
   .auditMetrics article:last-child { border-bottom: 0; }
   .auditSidebar { display: flex; }
   .pageHead h1 { font-size: 31px; }
+  .requestMain { height: calc(100dvh - 120px); min-height: 0; }
+  .requestChatHeader { padding: 17px; gap: 12px; flex-direction: column; }
+  .requestChatActions { width: 100%; justify-content: space-between; }
+  .chatThread { padding: 16px; }
+  .chatComposerBar { padding: 10px 12px 12px; }
+  .chatSettings > div { flex-direction: column; }
+  .chatSettings label { flex-wrap: wrap; }
+  .chatSettings input, .chatSettings select { width: 100%; min-width: 0; }
 }

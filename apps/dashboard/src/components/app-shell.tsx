@@ -19,10 +19,6 @@ export function AppShell({ children }: Readonly<{ children: React.ReactNode }>) 
           <Link href="/">감사 대시보드로 돌아가기 →</Link>
         </header>
         {children}
-        <footer>
-          구매 요청 전용 화면 · 감사 대시보드와 실행 책임을 분리했습니다 · Mock Provider ·
-          결제 모드는 요청 화면과 거래 증거에서 확인
-        </footer>
       </>
     );
   }

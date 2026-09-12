@@ -88,6 +88,7 @@ export interface StoredRequestFacts {
   originalPriority: string | null;
   effectivePriority: string | null;
   budgetUnits: number | null;
+  paymentStatus: string;
   settled: boolean;
   audited: boolean;
 }
@@ -116,9 +117,17 @@ export function readStoredRequestFacts(detail: PurchaseDetail): StoredRequestFac
     effectivePriority: text(summary.effective_priority),
     budgetUnits:
       requested === undefined ? null : integer((requested.payload as Json).budgetUnits),
+    paymentStatus: typeof detail.summary.payment_status === "string" ? detail.summary.payment_status : "unknown",
     settled: detail.summary.payment_status === "PAYMENT_SETTLED",
     audited: detail.audit !== null,
   };
+}
+
+/** A terminal no-transfer outcome cannot spend the old purchase, so it must not block
+ * a corrected, independent request. Confirmation-unknown and in-flight states stay
+ * fail-closed until their existing purchase is reconciled. */
+export function allowsIndependentRequest(facts: StoredRequestFacts): boolean {
+  return ["PAYMENT_NOT_STARTED", "PAYMENT_FAILED", "RECONCILED_NO_TRANSFER"].includes(facts.paymentStatus);
 }
 
 export async function resolvePendingRequest(
@@ -149,7 +158,7 @@ export async function resolvePendingRequest(
   // A recovered live settlement can exist before the Mock Provider result and audit have
   // been written. Keep that exact purchase resumable: the executor sees SETTLED and only
   // requests delivery, never signs or calls the Facilitator again.
-  if (facts.audited) {
+  if (facts.settled && facts.audited) {
     return { status: "completed", purchaseId: pendingId, pending: facts, historical };
   }
   return { status: "resume", purchaseId: pendingId, pending: facts, historical };

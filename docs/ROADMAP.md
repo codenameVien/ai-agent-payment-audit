@@ -1,5 +1,7 @@
 # 구현 로드맵
 
+> **채팅 UX 교정 완료:** 단일 대화·하단 입력창·요청별 실행 동의·결과 유지·반복 요청 및 실패 재시도 구분. dashboard 38 tests, 브라우저 핵심 경계 11개 묶음, 격리 Mock 연속 구매 2건, lint/build 통과. [검증 원본](DECISION_OBSERVER_VERIFICATION.md#최신-채팅-ux-교정-검증).
+
 > **최신 추가:** 채팅형 구매와 별도 Qwen 결정/감사 관찰 및 두 checkpoint 구현. [설계/체크리스트](DECISION_OBSERVER_PLAN.md), [검증/외부 승인](DECISION_OBSERVER_VERIFICATION.md). 신규 Anchor 배포·체인 쓰기는 아직 실행하지 않았다. 이전의 신규 Anchor 제외는 이 기능에 한해 대체된다.
 
 > **2026-09-12 우선 상태:** AEGIS 신규 배포·초기 발행, 지정 PBLC DB 48문서 삭제 완료. 로컬 Qwen 자동 priority 및 AEGIS Mock E2E 검증은 [최신 전환 기록](AEGIS_QWEN_MIGRATION.md)을 따른다. 아래 PBLC 상태는 과거 단계다. AEGIS 외부 실결제는 아직 미검증이며 AWS는 진행하지 않는다.

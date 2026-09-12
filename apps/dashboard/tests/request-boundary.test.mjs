@@ -17,49 +17,40 @@ const aegisDecisionUrl = new URL(
   import.meta.url,
 );
 
-test("purchase request collects a chat draft, optional budget and priority with acknowledgement", async () => {
+test("purchase request sends a local chat card with immutable settings", async () => {
   const source = await readFile(requestUrl, "utf8");
   assert.match(source, /name="prompt"/);
-  assert.match(source, /구매 요청 대화/);
-  assert.match(source, /메시지 보내기/);
-  assert.match(source, /메시지를 보내도 구매·서명·결제는 생성되지 않습니다/);
+  assert.match(source, /aria-label="메시지"/);
+  assert.match(source, /aria-label="메시지 보내기"/);
+  assert.match(source, /data-testid="purchase-card"/);
+  assert.match(source, /동의하고 구매 실행/);
   assert.match(source, /name="budget"/);
   assert.match(source, /name="priority"/);
-  assert.match(source, /budgetUnits === null \? \{\} : \{ budget_units: budgetUnits \}/);
-  assert.match(source, /disabled=\{!submittable\}/);
-  assert.match(source, /현재 대화 초안과 예산·우선순위를 확인했으며/);
-  assert.match(source, /명시적으로 동의하고 \{buttonLabel\}/);
-  assert.match(source, /초안 도우미: 아래에 요청을 입력해 대화를 시작하세요/);
-  assert.doesNotMatch(source, /DEFAULT_PROMPT/);
+  assert.match(source, /input\.budgetUnits === null \? \{\} : \{ budget_units: input\.budgetUnits \}/);
+  assert.match(source, /state: "superseded"/);
+  assert.match(source, /data-purchase-confirm/);
 });
 
-test("sending a chat message remains local and draft changes revoke purchase consent", async () => {
+test("sending a chat message remains local and confirm owns purchase execution", async () => {
   const source = await readFile(requestUrl, "utf8");
-  const sendMessage = source.slice(source.indexOf("function sendMessage"), source.indexOf("function startNewConversation"));
-  assert.ok(sendMessage.length > 0);
-  assert.doesNotMatch(sendMessage, /api\(|\/purchases|\/run/);
-  assert.match(sendMessage, /revokeConsent\(\)/);
-  assert.match(source, /onChange=\{\(event\) => \{\s*revokeConsent\(\);\s*setBudget/);
-  assert.match(source, /onChange=\{\(event\) => \{\s*revokeConsent\(\);\s*setPriority/);
-  assert.match(source, /const prompt = useMemo/);
-  assert.match(source, /messages\.filter\(\(message\) => message\.role === "user"\)/);
-  assert.match(source, /const hasUnsentMessage = messageDraft\.trim\(\) !== ""/);
-  assert.match(source, /acknowledged && prompt\.trim\(\) !== "" && !hasUnsentMessage/);
-  assert.match(source, /작성 중인 메시지를 먼저 보내거나 지워 주세요/);
+  const send = source.slice(source.indexOf("function send("), source.indexOf("function onComposerKeyDown("));
+  assert.doesNotMatch(send, /api\(|\/purchases|\/run/);
+  assert.match(source, /executionLock\.current = true/);
+  assert.match(source, /event\.nativeEvent\.isComposing/);
+  assert.doesNotMatch(source, /router\.push/);
 });
 
 test("the request posts an aegis-aa-v1 body and omits priority when it is automatic", async () => {
   const source = await readFile(requestUrl, "utf8");
   assert.match(source, /requestSchema: AEGIS_REQUEST_SCHEMA_VERSION/);
   assert.match(source, /input\.priority === null \? \{\} : \{ priority: input\.priority \}/);
-  assert.match(source, /priority === "auto" \? null : priority/);
+  assert.match(source, /card\.priority === "auto" \? null : card\.priority/);
   assert.match(source, /policy: \{\}/);
-  assert.match(source, /결제 토큰 1개 이하여야 합니다/);
+  assert.match(source, /AEGIS 1개 이하/);
   // The new surface never asks for a SIWE login and never sends the user to MetaMask.
   assert.doesNotMatch(source, /MetaMask|\/login|siwe/i);
-  assert.match(source, /실제 \$\{tokenSymbol\} 결제 · Mock Provider/);
-  assert.match(source, /실제 x402 Facilitator 정산/);
-  assert.match(source, /실제 Base Sepolia \{tokenSymbol\}를 한 번 전송할 수 있으며/);
+  assert.match(source, /실제 Base Sepolia \$\{symbol\} 결제 · Mock Provider/);
+  assert.match(source, /실제 Base Sepolia \$\{symbol\} 전송이 한 번 발생할 수 있으며 Provider 응답은 Mock입니다/);
 });
 
 test("the request surface only ever writes its own aegis pending key", async () => {
@@ -78,21 +69,19 @@ test("the request surface only ever writes its own aegis pending key", async () 
 
 test("a stored id is verified before any resume and blocks the run when unverified", async () => {
   const source = await readFile(requestUrl, "utf8");
-  assert.match(source, /resolvePendingRequest\(window\.localStorage, loadPurchase\)/);
+  assert.match(source, /resolvePendingRequest\(window\.localStorage, detail\)/);
   assert.match(source, /pending\?\.status === "blocked"/);
-  assert.match(source, /pending\?\.status === "resume" \? pending\.pending : null/);
+  assert.match(source, /pending\.status === "resume" \? pending\.pending : null/);
   // Reuse is bound to the stored request: a changed prompt, priority or budget creates
   // a new purchase instead of silently re-running the stored one.
-  assert.match(source, /matchesPendingRequest\(resumable, input\)/);
+  assert.match(source, /let purchaseId = card\.purchaseId/);
+  assert.match(source, /if \(!purchaseId && resumable && matchesPendingRequest\(resumable, input\)\)/);
   // One gate decides for both the button and the handler, and it refuses while the
   // lookup is still in flight.
-  assert.match(source, /acknowledged: acknowledged && prompt\.trim\(\) !== "" && !hasUnsentMessage/);
-  assert.match(source, /if \(!submittable\) return;/);
-  assert.match(source, /const checking = pending === null;/);
+  assert.match(source, /pending\.status === "blocked"/);
+  assert.match(source, /pending === null/);
   // A re-check re-enters the checking state instead of running against a stale answer.
-  assert.match(source, /setPending\(null\);\n\s*setPending\(await resolvePendingRequest/);
-  assert.match(source, /pending\?\.historical\.map/);
-  assert.match(source, /과거 거래 상세 보기/);
+  assert.match(source, /setPending\(null\);\s*const resolution = await resolvePendingRequest/);
 });
 
 test("audit dashboard is read-only and legacy experiments redirects to request", async () => {
