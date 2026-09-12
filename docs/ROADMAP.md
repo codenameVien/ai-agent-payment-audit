@@ -1,5 +1,7 @@
 # 구현 로드맵
 
+> **실행 버튼 복구 완료:** 연결/저장 요청 실패 사유·읽기 전용 재확인·8초 조회 제한 추가. 브라우저 15개 묶음, dashboard 38 tests, lint/build 통과. 실제 3100 Mock 화면의 활성 버튼을 확인했으며 신규 결제는 실행하지 않았다. [이번 검증](DECISION_OBSERVER_VERIFICATION.md#최신-구매-버튼-연결-복구).
+
 > **채팅 UX 교정 완료:** 단일 대화·하단 입력창·요청별 실행 동의·결과 유지·반복 요청 및 실패 재시도 구분. dashboard 38 tests, 브라우저 핵심 경계 11개 묶음, 격리 Mock 연속 구매 2건, lint/build 통과. [검증 원본](DECISION_OBSERVER_VERIFICATION.md#최신-채팅-ux-교정-검증).
 
 > **최신 추가:** 채팅형 구매와 별도 Qwen 결정/감사 관찰 및 두 checkpoint 구현. [설계/체크리스트](DECISION_OBSERVER_PLAN.md), [검증/외부 승인](DECISION_OBSERVER_VERIFICATION.md). 신규 Anchor 배포·체인 쓰기는 아직 실행하지 않았다. 이전의 신규 Anchor 제외는 이 기능에 한해 대체된다.

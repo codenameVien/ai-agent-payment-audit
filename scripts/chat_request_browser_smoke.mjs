@@ -44,14 +44,15 @@ function detail(id, body, completed = false) {
       findings: [], evidence_head_event_hash: hash("head"), audit_bundle_hash: hash("audit") } : null,
   };
 }
-async function fixture({ mode = "mock", failures = 0, stored = null, lookupFails = false, healthFails = false, paymentStatus = "settled" } = {}) {
+async function fixture({ mode = "mock", failures = 0, stored = null, lookupFails = false, healthFails = false, hangs = null, paymentStatus = "settled" } = {}) {
   const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
   if (stored) await context.addInitScript(({ key, id }) => localStorage.setItem(key, id), { key, id: stored.id });
   const page = await context.newPage();
   page.on("pageerror", e => errors.push(e.message));
   const records = new Map(stored ? [[stored.id, { body: stored.body, completed: stored.completed, paymentStatus: stored.paymentStatus }]] : []);
   const calls = [];
-  const state = { lookupFails, healthFails, failures };
+  const reads = [];
+  const state = { lookupFails, healthFails, failures, hangs };
   await page.route("**/*", async route => {
     const request = route.request();
     const url = new URL(request.url());
@@ -61,6 +62,10 @@ async function fixture({ mode = "mock", failures = 0, stored = null, lookupFails
       if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) return route.abort();
       return route.continue();
     }
+    if (request.method() === "GET") reads.push(path);
+    // Intentionally unanswered GET: the UI must time out, not unlock payment or hang forever.
+    if (state.hangs === "health" && path === "/health") return;
+    if (state.hangs === "pending" && /^\/purchases\/[^/]+$/.test(path)) return;
     if (path === "/health") return reply(state.healthFails ? {} : { execution_mode: mode, token_symbol: "AEGIS" }, state.healthFails ? 503 : 200);
     if (request.method() === "POST") {
       calls.push({ path, body: request.postData() ? request.postDataJSON() : null });
@@ -92,7 +97,7 @@ async function fixture({ mode = "mock", failures = 0, stored = null, lookupFails
     return reply({}, 404);
   });
   await page.goto(origin + "/request");
-  return { context, page, calls, records, state };
+  return { context, page, calls, reads, records, state };
 }
 try {
   {
@@ -157,14 +162,94 @@ try {
     await context.close();
   }
   for (const scenario of ["pending", "health"]) {
-    const { context, page, calls } = await fixture(scenario === "pending" ? {
-      stored: { id: randomUUID(), body: { request: { prompt } }, completed: false }, lookupFails: true,
+    const oldId = randomUUID();
+    const { context, page, calls, reads, state } = await fixture(scenario === "pending" ? {
+      stored: { id: oldId, body: { request: { prompt } }, completed: false }, lookupFails: true,
     } : { healthFails: true });
     await send(page);
+    await composer(page).fill("복구 중에도 보존할 다음 초안");
     await confirm(page).waitFor();
+    const notice = cards(page).last().getByTestId("purchase-readiness");
+    const retry = notice.getByRole("button", { name: "연결 다시 확인", exact: true });
+    await retry.waitFor();
     assert.equal(await confirm(page).isDisabled(), true);
+    assert.ok((await notice.innerText()).length > 20, "reason is beside the blocked button");
+    assert.equal(await confirm(page).getAttribute("aria-describedby"), await notice.getAttribute("id"));
+    if (scenario === "health") assert.equal(await page.getByText("Mock 결제에서는 토큰을 전송하지 않습니다.", { exact: true }).count(), 0, "unknown mode is never disclosed as Mock");
     assert.equal(calls.length, 0);
-    console.log("ok - unresolved " + scenario + " blocks payment (fixture)");
+    state.lookupFails = false;
+    state.healthFails = false;
+    const before = reads.length;
+    await retry.evaluate(button => { button.click(); button.click(); });
+    await page.waitForFunction(() => !document.querySelector("[data-purchase-confirm]").disabled);
+    assert.equal(reads.slice(before).filter(path => path === "/health").length, 1, "double retry coalesces health reads");
+    assert.equal(await cards(page).count(), 1, "recovery keeps sent card");
+    assert.equal(await composer(page).inputValue(), "복구 중에도 보존할 다음 초안");
+    assert.equal(calls.length, 0, "readiness recovery never auto-creates/runs");
+    if (scenario === "pending") assert.equal(await page.evaluate(key => localStorage.getItem(key), key), oldId);
+    await confirm(page).click();
+    await result(page, 1);
+    assert.equal(calls.filter(c => c.path === "/purchases").length, scenario === "pending" ? 0 : 1);
+    if (scenario === "pending") assert.equal(calls[0].path, `/purchases/${oldId}/run`);
+    console.log("ok - " + scenario + " failure -> read-only recovery -> explicit purchase, card/draft/id preserved (fixture)");
+    await context.close();
+  }
+  for (const hangs of ["health", "pending"]) {
+    const { context, page, calls, state } = await fixture({ hangs, stored: hangs === "pending" ? { id: randomUUID(), body: { request: { prompt } }, completed: false } : null });
+    await send(page);
+    const notice = cards(page).last().getByTestId("purchase-readiness");
+    await notice.waitFor();
+    assert.equal(await confirm(page).isDisabled(), true);
+    const retry = notice.getByRole("button", { name: "연결 다시 확인", exact: true });
+    await retry.waitFor({ timeout: 12000 });
+    await page.waitForFunction(() => {
+      const button = [...document.querySelectorAll("button")].find(b => b.textContent === "연결 다시 확인");
+      return button && !button.disabled;
+    }, null, { timeout: 12000 });
+    assert.equal(await confirm(page).isDisabled(), true, "timeout stays fail-closed");
+    state.hangs = null;
+    await retry.click();
+    await page.waitForFunction(() => !document.querySelector("[data-purchase-confirm]").disabled);
+    assert.equal(calls.length, 0);
+    console.log("ok - hanging " + hangs + " GET times out and recovers without payment (fixture)");
+    await context.close();
+  }
+  {
+    const oldId = randomUUID();
+    const { context, page, records, calls } = await fixture({ stored: { id: oldId, body: { request: { prompt } }, completed: false }, lookupFails: true });
+    records.delete(oldId);
+    await send(page);
+    const notice = cards(page).last().getByTestId("purchase-readiness");
+    await notice.getByRole("button", { name: "연결 다시 확인", exact: true }).click();
+    await notice.getByRole("link").waitFor();
+    assert.equal(await confirm(page).isDisabled(), true, "404 is not permission to forget an unknown payment");
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), key), oldId);
+    assert.ok((await notice.getByRole("link").getAttribute("href")).includes(oldId));
+    assert.equal(calls.length, 0);
+    console.log("ok - missing stored purchase stays visible/preserved, not silently bypassed (fixture)");
+    await context.close();
+  }
+  {
+    const { context, page, calls } = await fixture();
+    await page.addInitScript(() => {
+      window.blockDemoStorage = true;
+      const getItem = Storage.prototype.getItem;
+      Storage.prototype.getItem = function(key) {
+        if (window.blockDemoStorage) throw new DOMException("Storage disabled for test", "SecurityError");
+        return getItem.call(this, key);
+      };
+    });
+    await page.reload();
+    await send(page);
+    const notice = cards(page).last().getByTestId("purchase-readiness");
+    const retry = notice.getByRole("button", { name: "연결 다시 확인", exact: true });
+    await retry.waitFor();
+    assert.equal(await confirm(page).isDisabled(), true);
+    await page.evaluate(() => { window.blockDemoStorage = false; });
+    await retry.click();
+    await page.waitForFunction(() => !document.querySelector("[data-purchase-confirm]").disabled);
+    assert.equal(calls.length, 0);
+    console.log("ok - storage access failure becomes recoverable without dropping records (fixture)");
     await context.close();
   }
   for (const paymentStatus of ["unknown", "failed", "settled_delivery_failed"]) {

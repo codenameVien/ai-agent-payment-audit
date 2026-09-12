@@ -81,7 +81,14 @@ test("a stored id is verified before any resume and blocks the run when unverifi
   assert.match(source, /pending\.status === "blocked"/);
   assert.match(source, /pending === null/);
   // A re-check re-enters the checking state instead of running against a stale answer.
-  assert.match(source, /setPending\(null\);\s*const resolution = await resolvePendingRequest/);
+  const readiness = source.slice(source.indexOf("const refreshReadiness"), source.indexOf("const patch ="));
+  assert.match(readiness, /setPending\(null\)/);
+  assert.match(readiness, /Promise\.allSettled\(\[pendingResult, healthResult\]\)/);
+  assert.doesNotMatch(readiness, /method: "POST"|\/run/);
+  assert.match(source, /data-testid="purchase-readiness"/);
+  assert.match(source, /연결 다시 확인/);
+  assert.match(source, /aria-describedby=/);
+  assert.equal([...source.matchAll(/AbortSignal\.timeout\(8_000\)/g)].length, 2);
 });
 
 test("audit dashboard is read-only and legacy experiments redirects to request", async () => {

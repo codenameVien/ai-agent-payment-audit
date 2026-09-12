@@ -1,6 +1,6 @@
 # AI-DLC State
 
-> Current packet (2026-09-12): `/request` chatbot UX and repeat-purchase correction locally verified, branch `fix/chat-purchase-flow`. Design: `docs/DECISION_OBSERVER_PLAN.md` → 채팅 UX 교정. Evidence: `docs/DECISION_OBSERVER_VERIFICATION.md` → latest UX section (38 dashboard tests, 11 browser groups, 2 isolated Mock purchases, lint/build). Existing AEGIS/Qwen/checkpoint implementation is preserved. No chain writes or deployments. Older lifecycle details below are historical, not the active token/runtime status.
+> Current packet (2026-09-12): `/request` disabled-button readiness recovery verified, branch `fix/purchase-readiness-retry`. Design: `docs/DECISION_OBSERVER_PLAN.md` → 구매 실행 버튼 연결 복구. Evidence: `docs/DECISION_OBSERVER_VERIFICATION.md` → latest recovery section (38 dashboard tests, 15 browser groups, lint/build, actual preview readiness with zero purchase writes). Existing AEGIS/Qwen/checkpoint implementation and transaction storage are preserved. No chain writes or deployments. Earlier chatbot UX shipped in PR #15; older lifecycle details below are historical, not the active token/runtime status.
 
 - **Lifecycle:** Integration — ERC-3009-only payment runtime
 - **Current stage:** PBLC V2 deploy/verify/settle/receipt/replay evidence captured; active Permit2 path retired; AWS and real provider remain external gates

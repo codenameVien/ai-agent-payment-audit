@@ -6,6 +6,8 @@
 
 Send a message from the bottom composer, then explicitly confirm execution on its in-chat request card. Results stay in the conversation. After completion, sending the same message again creates a new intentional request; retrying a failed run preserves its purchaseId. Unsent text does not block an already sent card. Set optional budget/priority before sending via the collapsible settings. Confirmation cards are local UI, not a free-conversation LLM. Qwen classifies priority and reviews evidence during execution; Provider answer text remains Mock.
 
+If execution is disabled, the card shows the connection/stored-request reason. Keep the demo terminal running, then use **연결 다시 확인** (recheck connection) after the server recovers. This only reads readiness, preserves the card/draft/pending ID, and never starts a purchase. Readiness GETs time out after 8 seconds with a retry action. Missing stored purchases remain blocked with a detail link rather than being silently discarded.
+
 ![Chat request with inline consent](docs/images/chat-request.png)
 
 > 2026-09-12: A new AEGIS contract and initial 1,000,000 supply are deployed. Local Qwen classifies automatic priority; fixed code retains weights, pricing and payment checks. Legacy PBLC database records were deleted at the user's request. New AEGIS external settlement is not yet verified. See [current migration and validation boundaries](docs/AEGIS_QWEN_MIGRATION.md). Older PBLC command names are compatibility names; historical payment evidence is not AEGIS evidence.
