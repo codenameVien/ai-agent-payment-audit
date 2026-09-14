@@ -162,6 +162,16 @@ export class AegisPaymentExecutor {
   readonly #window: number;
   readonly #timeoutMs: number;
   readonly #nowSeconds: () => number;
+  /**
+   * Runs still in flight, by purchase.
+   *
+   * A second execute for a running purchase joins that run instead of starting its own.
+   * Two runs would present the one single-use authorization twice, and a live Facilitator
+   * refuses the second presentation once the first has consumed the nonce. Treated as a
+   * payment refusal, that would release the reservation and record FAILED for a payment
+   * the first run is still settling.
+   */
+  readonly #pending = new Map<string, Promise<AegisExecutionResult>>();
 
   constructor(options: AegisPaymentExecutorOptions) {
     this.#evidence = options.evidence;
@@ -293,7 +303,15 @@ export class AegisPaymentExecutor {
     };
   }
 
-  async execute(args: {
+  execute(args: { purchaseId: string; resourceBody: unknown }): Promise<AegisExecutionResult> {
+    const running = this.#pending.get(args.purchaseId);
+    if (running) return running;
+    const promise = this.#execute(args).finally(() => this.#pending.delete(args.purchaseId));
+    this.#pending.set(args.purchaseId, promise);
+    return promise;
+  }
+
+  async #execute(args: {
     purchaseId: string;
     resourceBody: unknown;
   }): Promise<AegisExecutionResult> {

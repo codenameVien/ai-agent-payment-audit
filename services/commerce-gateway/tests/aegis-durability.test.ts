@@ -222,6 +222,83 @@ test("a second nonce is refused while the reserved attempt is still awaiting set
   }
 });
 
+test("two concurrent executes of one purchase sign and settle it once", async () => {
+  // The first settlement is held open, as a live Facilitator's is while the chain confirms
+  // it. A second run that started on its own would present the consumed nonce, be refused
+  // with a 402 and record FAILED before the first run could record its settlement.
+  let enterSettle!: () => void;
+  const settling = new Promise<void>((done) => (enterSettle = done));
+  let releaseSettle!: () => void;
+  const released = new Promise<void>((done) => (releaseSettle = done));
+  const facilitator = new MockFacilitator({
+    beforeSettle: async () => {
+      enterSettle();
+      await released;
+    },
+  });
+  const calls = { sign: 0, verify: 0, settle: 0 };
+  const verify = facilitator.verify.bind(facilitator);
+  facilitator.verify = (context) => {
+    calls.verify += 1;
+    return verify(context);
+  };
+  const settle = facilitator.settle.bind(facilitator);
+  facilitator.settle = (context) => {
+    calls.settle += 1;
+    return settle(context);
+  };
+  const stack = await startStack({ facilitator });
+  const sign = stack.signer.sign.bind(stack.signer);
+  stack.signer.sign = (args) => {
+    calls.sign += 1;
+    return sign(args);
+  };
+  let grace: NodeJS.Timeout | undefined;
+  try {
+    const gateway = await stack.newGateway();
+    const executor = stack.newExecutor({ openai: gateway.url });
+    const body = { prompt: "동시 실행 검증" };
+    const first = executor.execute({ purchaseId: PURCHASE, resourceBody: body });
+    await settling;
+    const second = executor.execute({ purchaseId: PURCHASE, resourceBody: body });
+    // The hold ends once the second call returns, or after a grace period while it waits.
+    void second.then(releaseSettle, releaseSettle);
+    grace = setTimeout(releaseSettle, 300);
+    const outcomes = await Promise.allSettled([first, second]);
+
+    assert.equal(calls.sign, 1, "one purchase is signed once");
+    assert.equal(calls.verify, 1, "one purchase is verified once");
+    assert.equal(calls.settle, 1, "one purchase is settled once");
+    const [one, two] = outcomes.map((outcome) => {
+      if (outcome.status === "rejected") throw outcome.reason;
+      return outcome.value;
+    });
+    for (const result of [one!, two!]) {
+      assert.equal(result.payment_status, "settled");
+      assert.equal(result.state, "SETTLED");
+    }
+    assert.match(String(one!.settlement_reference), /^x402mock:/);
+    assert.equal(two!.settlement_reference, one!.settlement_reference);
+    assert.equal(stack.evidence.intents.get(PURCHASE)?.state, "SETTLED");
+    assert.equal(stack.evidence.settlements.length, 1);
+    assert.equal(stack.evidence.deliveries.length, 1);
+    assert.equal(stack.evidence.failures.length, 0);
+    assert.equal(stack.evidence.reconciliations.length, 0);
+    assert.equal(stack.evidence.ambiguous.length, 0);
+
+    // Once the run is over, a later execute runs again and recovers the settled result.
+    const later = await executor.execute({ purchaseId: PURCHASE, resourceBody: body });
+    assert.equal(later.payment_status, "settled");
+    assert.deepEqual(calls, { sign: 1, verify: 1, settle: 1 });
+    assert.equal(stack.evidence.settlements.length, 1);
+    assert.equal(stack.evidence.deliveries.length, 2);
+  } finally {
+    clearTimeout(grace);
+    releaseSettle();
+    await stack.close();
+  }
+});
+
 test("a settled purchase is delivered after a gateway and facilitator restart", async () => {
   const stack = await startStack();
   try {
