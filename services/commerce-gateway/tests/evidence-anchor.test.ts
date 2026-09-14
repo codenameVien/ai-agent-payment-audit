@@ -3,7 +3,7 @@ import test from "node:test";
 
 import type { Address, Hex } from "viem";
 
-import { EvidenceAnchorService } from "../src/index.js";
+import { EvidenceAnchorService } from "../src/evidence-anchor.js";
 
 const ZERO = `0x${"00".repeat(32)}` as Hex;
 const HEAD = `0x${"11".repeat(32)}` as Hex;
