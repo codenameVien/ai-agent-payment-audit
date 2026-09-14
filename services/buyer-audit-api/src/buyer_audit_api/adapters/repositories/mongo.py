@@ -289,12 +289,16 @@ class MongoEvidenceRepository:
         self._payment_intents = self._database["paymentIntents"]
 
     async def ensure_indexes(self) -> None:
-        """Create the indexes the AEGIS runtime relies on; never drop or rewrite others.
+        """Create the indexes the AEGIS runtime relies on; leave every other index alone.
 
         Every spec below is unchanged from earlier releases, so an existing database that
         already holds them - together with indexes earlier releases created for the
-        superseded flows - starts without an index conflict. Those older indexes are left
-        in place: this method only ever creates.
+        superseded flows - starts without an index conflict, and those older indexes are
+        left in place. The one exception is `unique_wallet_policy_day`: a database from
+        before per-token wallet policies holds it on (buyerWalletAddress, policyDate)
+        only, so an index under that name with different keys is dropped and recreated
+        on (buyerWalletAddress, policyDate, token). That is the only index this method
+        ever drops.
         """
         await self._client.admin.command({"ping": 1})
         await self._users.create_index([("ownerAddress", ASCENDING)], unique=True)
@@ -908,7 +912,8 @@ class MongoEvidenceRepository:
                 except DuplicateKeyError as exc:
                     if event_type == EventType.PAYMENT_SETTLED:
                         raise PaymentConflictError(
-                            "settlement transaction is already bound"
+                            "settlement collides with this purchase's recorded settlement, "
+                            "terminal outcome or event sequence"
                         ) from exc
                     # Per-purchase unique indexes are the second guard behind the
                     # payment-intent CAS. A loser must re-read so an identical transition

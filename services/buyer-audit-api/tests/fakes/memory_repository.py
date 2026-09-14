@@ -179,6 +179,7 @@ class InMemoryEvidenceRepository:
         )
         singleton_types = {
             EventType.DECIDED,
+            EventType.AA_SNAPSHOT_RECORDED,
             EventType.PAYMENT_INTENT_CLAIMED,
             EventType.PAYMENT_AUTHORIZED,
             EventType.PAYMENT_RECONCILIATION_REQUIRED,

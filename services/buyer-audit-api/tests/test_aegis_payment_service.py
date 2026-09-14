@@ -1,8 +1,9 @@
-"""Wallet budget policy and the authorize transition, driven by a real AEGIS reservation.
+"""Wallet budget policy, authorization and release, driven by a real AEGIS reservation.
 
 Ported from the superseded seller-quote payment tests: the budget guards, the per-token
-wallet policy and the authorization idempotency are shared by the AEGIS runtime, so they
-are exercised here against a real `aa-three-factor-v1` decision instead of a quote.
+wallet policy, the authorization idempotency and the release of a failed attempt's
+reservation are shared by the AEGIS runtime, so they are exercised here against a real
+`aa-three-factor-v1` decision instead of a quote.
 """
 
 from __future__ import annotations
@@ -94,6 +95,30 @@ async def bind_and_configure(
             spent_units=spent_units,
         )
     )
+
+
+async def authorized_purchase(
+    repository: InMemoryEvidenceRepository, clock: FrozenClock
+) -> tuple[str, int, AegisPaymentService]:
+    """A decided purchase whose single attempt is reserved and then authorized."""
+    purchase_id, amount_units = await decided_purchase(repository, clock)
+    await bind_and_configure(repository, clock)
+    aegis = AegisPaymentService(repository=repository, clock=clock)
+    await aegis.reserve(purchase_id)
+    await PaymentService(repository=repository, clock=clock).authorize(
+        purchase_id=purchase_id, authorization_hash="0x" + "ab" * 32, signature="0xsig"
+    )
+    return purchase_id, amount_units, aegis
+
+
+async def wallet_policy(
+    repository: InMemoryEvidenceRepository, clock: FrozenClock
+) -> WalletPolicy:
+    policy = await repository.get_wallet_policy(
+        buyer_wallet_address=BUYER, policy_date=clock.now().date().isoformat(), token=TOKEN
+    )
+    assert policy is not None
+    return policy
 
 
 async def test_wallet_policies_for_two_tokens_can_coexist_on_same_day() -> None:
@@ -210,6 +235,99 @@ async def test_a_parked_attempt_cannot_be_authorized_again() -> None:
     )
     assert policy is not None
     assert (policy.reserved_units, policy.spent_units) == (amount_units, 0)
+
+
+async def test_a_failed_attempt_releases_its_reservation_without_spending() -> None:
+    clock = FrozenClock()
+    repository = InMemoryEvidenceRepository()
+    purchase_id, amount_units, aegis = await authorized_purchase(repository, clock)
+    held = await wallet_policy(repository, clock)
+    assert (held.reserved_units, held.spent_units) == (amount_units, 0)
+
+    failed = await aegis.fail(purchase_id=purchase_id, reason="facilitator refused the payment")
+
+    assert failed.state is PaymentIntentState.FAILED
+    assert failed.failure_reason == "facilitator refused the payment"
+    assert await repository.get_payment_intent(purchase_id) == failed
+    # A refused attempt moved no money: the whole reservation returns and nothing is spent.
+    released = await wallet_policy(repository, clock)
+    assert (released.reserved_units, released.spent_units) == (0, 0)
+    events = await repository.list_events(purchase_id)
+    assert [event.type for event in events][-3:] == [
+        EventType.PAYMENT_INTENT_CLAIMED,
+        EventType.PAYMENT_AUTHORIZED,
+        EventType.PAYMENT_FAILED,
+    ]
+    assert events[-1].payload["reason"] == "facilitator refused the payment"
+
+
+async def test_repeating_the_same_failure_is_idempotent() -> None:
+    clock = FrozenClock()
+    repository = InMemoryEvidenceRepository()
+    purchase_id, _, aegis = await authorized_purchase(repository, clock)
+    first = await aegis.fail(purchase_id=purchase_id, reason="facilitator refused the payment")
+    events = await repository.list_events(purchase_id)
+    policy = await wallet_policy(repository, clock)
+
+    # A retried failure record neither errors nor releases the reservation a second time.
+    again = await aegis.fail(purchase_id=purchase_id, reason="facilitator refused the payment")
+
+    assert again == first
+    assert await repository.list_events(purchase_id) == events
+    assert await wallet_policy(repository, clock) == policy
+    assert (policy.reserved_units, policy.spent_units) == (0, 0)
+
+
+async def test_a_different_failure_reason_conflicts_and_changes_nothing() -> None:
+    clock = FrozenClock()
+    repository = InMemoryEvidenceRepository()
+    purchase_id, _, aegis = await authorized_purchase(repository, clock)
+    await aegis.fail(purchase_id=purchase_id, reason="facilitator refused the payment")
+    events = await repository.list_events(purchase_id)
+    policy = await wallet_policy(repository, clock)
+
+    with pytest.raises(PaymentConflictError, match="different failure reason"):
+        await aegis.fail(purchase_id=purchase_id, reason="authorization expired")
+
+    assert await repository.list_events(purchase_id) == events
+    assert await wallet_policy(repository, clock) == policy
+    stored = await repository.get_payment_intent(purchase_id)
+    assert stored is not None
+    assert stored.failure_reason == "facilitator refused the payment"
+
+
+@pytest.mark.parametrize("parked_by", ["require_reconciliation", "ambiguous_settlement"])
+async def test_a_parked_attempt_cannot_fail_and_keeps_its_reservation(parked_by: str) -> None:
+    clock = FrozenClock()
+    repository = InMemoryEvidenceRepository()
+    purchase_id, amount_units, aegis = await authorized_purchase(repository, clock)
+    if parked_by == "require_reconciliation":
+        await PaymentService(repository=repository, clock=clock).require_reconciliation(
+            purchase_id=purchase_id, reason="facilitator outcome unknown"
+        )
+    else:
+        await aegis.record_ambiguous_settlement(
+            purchase_id=purchase_id,
+            mismatch_reason="facilitator settlement did not name the payer it debited",
+            success=True,
+            network="eip155:84532",
+            transaction="x402mock:" + "1" * 32,
+            payer=None,
+            amount=str(amount_units),
+        )
+    events = await repository.list_events(purchase_id)
+
+    # Money may already have moved, so a later refusal must not free the reservation.
+    with pytest.raises(PaymentConflictError, match="cannot fail from current state"):
+        await aegis.fail(purchase_id=purchase_id, reason="facilitator refused the payment")
+
+    stored = await repository.get_payment_intent(purchase_id)
+    assert stored is not None
+    assert stored.state is PaymentIntentState.RECONCILIATION_REQUIRED
+    assert await repository.list_events(purchase_id) == events
+    assert EventType.PAYMENT_FAILED not in {event.type for event in events}
+    held = await wallet_policy(repository, clock)
+    assert (held.reserved_units, held.spent_units) == (amount_units, 0)
 
 
 @pytest.mark.parametrize(

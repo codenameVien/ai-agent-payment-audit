@@ -3,7 +3,9 @@
 Ported from the superseded repository tests: rollback when the immutable head write
 fails, BSON millisecond round trips, wallet binding uniqueness, the per-token wallet
 policy index, the atomic reservation and authorization (now driven by the AEGIS
-reservation), hash-chain tamper detection and ciphertext-only storage.
+reservation), the release of a failed attempt's reservation, the hold of a parked one,
+a race between different terminal outcomes, hash-chain tamper detection and
+ciphertext-only storage.
 
 It also pins the index set: an existing database already holds every index earlier
 releases created, so `ensure_indexes` must succeed there without changing any of them.
@@ -16,7 +18,7 @@ from __future__ import annotations
 import asyncio
 import os
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -30,10 +32,15 @@ from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.aegis_payment import AegisPaymentService
 from buyer_audit_api.core.domain_registry import DomainRegistry
-from buyer_audit_api.core.errors import EvidenceIntegrityError
+from buyer_audit_api.core.errors import EvidenceIntegrityError, PaymentConflictError
 from buyer_audit_api.core.events import verify_event_chain
 from buyer_audit_api.core.models import EventType
-from buyer_audit_api.core.payment import PaymentIntentState, PaymentService, WalletPolicy
+from buyer_audit_api.core.payment import (
+    PaymentIntent,
+    PaymentIntentState,
+    PaymentService,
+    WalletPolicy,
+)
 from buyer_audit_api.core.purchase_service import PurchaseService
 from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
 from buyer_audit_api.domains.ai_inference.aa_catalog import (
@@ -115,6 +122,39 @@ async def _decided(repository: MongoEvidenceRepository, clock: FrozenClock) -> t
         ),
     ).decide(purchase_id=created.purchase_id)
     return created.purchase_id, decision.amount_units
+
+
+async def _authorized(
+    repository: MongoEvidenceRepository, clock: FrozenClock
+) -> tuple[str, int]:
+    """A decided purchase whose single attempt is reserved and then authorized."""
+    purchase_id, amount_units = await _decided(repository, clock)
+    await repository.bind_buyer_wallet(
+        owner_address=OWNER, buyer_wallet_address=BUYER, bound_at=clock.now()
+    )
+    await repository.put_wallet_policy(
+        WalletPolicy(
+            buyer_wallet_address=BUYER,
+            policy_date=clock.now().date().isoformat(),
+            token=TOKEN,
+            per_transaction_limit_units=100_000,
+            daily_limit_units=1_000_000,
+        )
+    )
+    await AegisPaymentService(repository=repository, clock=clock).reserve(purchase_id)
+    await PaymentService(repository=repository, clock=clock).authorize(
+        purchase_id=purchase_id, authorization_hash="0xauth", signature="0xsig"
+    )
+    return purchase_id, amount_units
+
+
+async def _budget(repository: MongoEvidenceRepository, clock: FrozenClock) -> tuple[int, int]:
+    """The stored `(reserved_units, spent_units)` of today's AEGIS wallet policy."""
+    policy = await repository.get_wallet_policy(
+        buyer_wallet_address=BUYER, policy_date=clock.now().date().isoformat(), token=TOKEN
+    )
+    assert policy is not None
+    return policy.reserved_units, policy.spent_units
 
 
 def _converged(outcomes: list[Any]) -> list[Any]:
@@ -501,6 +541,169 @@ async def test_reserve_and_authorize_roll_back_atomically_and_serialize(
         ]
     finally:
         await failing.close()
+
+
+# --------------------------------------------------------------------------------------
+# Leaving the authorized state: release, hold, and a race between different outcomes
+# --------------------------------------------------------------------------------------
+
+
+async def test_a_failed_attempt_releases_its_whole_reservation(store: Store) -> None:
+    clock = FrozenClock()
+    repository = store.repository
+    await repository.ensure_indexes()
+    purchase_id, amount_units = await _authorized(repository, clock)
+    assert await _budget(repository, clock) == (amount_units, 0)
+
+    failed = await AegisPaymentService(repository=repository, clock=clock).fail(
+        purchase_id=purchase_id, reason="facilitator refused the payment"
+    )
+
+    assert failed.state is PaymentIntentState.FAILED
+    stored = await repository.get_payment_intent(purchase_id)
+    assert stored is not None
+    assert stored.state is PaymentIntentState.FAILED
+    # The release commits with the FAILED record: nothing stays reserved, nothing is spent.
+    assert await _budget(repository, clock) == (0, 0)
+    assert [event.type for event in await repository.list_events(purchase_id)][-2:] == [
+        EventType.PAYMENT_AUTHORIZED,
+        EventType.PAYMENT_FAILED,
+    ]
+
+
+async def test_an_attempt_parked_for_reconciliation_holds_its_reservation(
+    store: Store,
+) -> None:
+    clock = FrozenClock()
+    repository = store.repository
+    await repository.ensure_indexes()
+    purchase_id, amount_units = await _authorized(repository, clock)
+
+    parked = await PaymentService(repository=repository, clock=clock).require_reconciliation(
+        purchase_id=purchase_id, reason="facilitator outcome unknown"
+    )
+
+    assert parked.state is PaymentIntentState.RECONCILIATION_REQUIRED
+    # The outcome is unknown and money may have moved: the budget stays reserved, unspent.
+    assert await _budget(repository, clock) == (amount_units, 0)
+    with pytest.raises(PaymentConflictError, match="cannot fail from current state"):
+        await AegisPaymentService(repository=repository, clock=clock).fail(
+            purchase_id=purchase_id, reason="late refusal"
+        )
+    assert await _budget(repository, clock) == (amount_units, 0)
+    types = [event.type for event in await repository.list_events(purchase_id)]
+    assert types.count(EventType.PAYMENT_RECONCILIATION_REQUIRED) == 1
+    assert EventType.PAYMENT_FAILED not in types
+
+
+_RACERS = ("settle", "fail", "ambiguous", "require_reconciliation")
+
+
+@pytest.mark.parametrize("first", _RACERS)
+async def test_different_outcomes_racing_on_one_authorized_attempt_commit_only_one(
+    store: Store, first: str
+) -> None:
+    """settle, fail and both ways of parking race on one AUTHORIZED attempt.
+
+    Exactly one may commit, and the wallet budget must follow that one: spent for a
+    settlement, released for a failure, still reserved for a parked attempt. Rotating
+    which racer starts first lets each outcome be the likely winner in turn; the
+    assertions hold for whichever one actually wins.
+    """
+    clock = FrozenClock()
+    repository = store.repository
+    await repository.ensure_indexes()
+    purchase_id, amount_units = await _authorized(repository, clock)
+    before = await repository.list_events(purchase_id)
+    aegis = AegisPaymentService(repository=repository, clock=clock)
+    payments = PaymentService(repository=repository, clock=clock)
+    calls: dict[str, Callable[[], Awaitable[PaymentIntent]]] = {
+        "settle": lambda: aegis.settle(
+            purchase_id=purchase_id,
+            facilitator_transaction="x402mock:" + "9" * 32,
+            facilitator_network="eip155:84532",
+            facilitator_payer=BUYER,
+        ),
+        "fail": lambda: aegis.fail(
+            purchase_id=purchase_id, reason="facilitator refused the payment"
+        ),
+        "ambiguous": lambda: aegis.record_ambiguous_settlement(
+            purchase_id=purchase_id,
+            mismatch_reason="facilitator settlement did not name the payer it debited",
+            success=True,
+            network="eip155:84532",
+            transaction="x402mock:" + "8" * 32,
+            payer=None,
+            amount=str(amount_units),
+        ),
+        "require_reconciliation": lambda: payments.require_reconciliation(
+            purchase_id=purchase_id, reason="facilitator outcome unknown"
+        ),
+    }
+    start = _RACERS.index(first)
+    order = _RACERS[start:] + _RACERS[:start]
+
+    results = await asyncio.gather(*(calls[name]() for name in order), return_exceptions=True)
+    outcomes = dict(zip(order, results, strict=True))
+
+    # A late caller is refused a different outcome and writes nothing. Any other failure
+    # must be the torn-head refusal `_converged` already allows for a racing reader.
+    _converged([item for item in results if not isinstance(item, PaymentConflictError)])
+
+    after = await repository.list_events(purchase_id)
+    head = await repository.get_event_head(purchase_id)
+    assert head is not None
+    verify_event_chain(
+        after,
+        expected_event_count=head.event_count,
+        expected_head_event_hash=head.head_event_hash,
+    )
+    assert after[: len(before)] == before
+    # Exactly one transition committed, and it is the only outcome event in the chain.
+    committed = after[len(before) :]
+    assert len(committed) == 1, [event.type for event in committed]
+    outcome_types = {
+        EventType.PAYMENT_SETTLED,
+        EventType.PAYMENT_FAILED,
+        EventType.PAYMENT_RECONCILIATION_REQUIRED,
+    }
+    assert [event.type for event in after if event.type in outcome_types] == [
+        committed[0].type
+    ]
+    if committed[0].type is EventType.PAYMENT_SETTLED:
+        winner = "settle"
+    elif committed[0].type is EventType.PAYMENT_FAILED:
+        winner = "fail"
+    elif "mismatchReason" in committed[0].payload:
+        winner = "ambiguous"
+    else:
+        winner = "require_reconciliation"
+    successes = {
+        name: item for name, item in outcomes.items() if not isinstance(item, BaseException)
+    }
+    assert winner in successes, outcomes
+    # `require_reconciliation` hands back an attempt that is already parked instead of
+    # writing again, so it is the only other call that may return, and only when the
+    # attempt was parked by the ambiguous answer.
+    allowed_extra = {"require_reconciliation"} if winner == "ambiguous" else set()
+    assert set(successes) - {winner} <= allowed_extra, outcomes
+
+    stored = await repository.get_payment_intent(purchase_id)
+    assert stored is not None
+    assert all(item == stored for item in successes.values())
+    expected_state, expected_budget = {
+        "settle": (PaymentIntentState.SETTLED, (0, amount_units)),
+        "fail": (PaymentIntentState.FAILED, (0, 0)),
+        "ambiguous": (PaymentIntentState.RECONCILIATION_REQUIRED, (amount_units, 0)),
+        "require_reconciliation": (
+            PaymentIntentState.RECONCILIATION_REQUIRED,
+            (amount_units, 0),
+        ),
+    }[winner]
+    assert stored.state is expected_state
+    budget = await _budget(repository, clock)
+    assert budget in {(0, amount_units), (0, 0), (amount_units, 0)}
+    assert budget == expected_budget, (winner, budget)
 
 
 # --------------------------------------------------------------------------------------
