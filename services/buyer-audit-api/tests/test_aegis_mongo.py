@@ -99,8 +99,8 @@ async def test_real_mongo_aa_snapshot_round_trip_and_immutability(mongo_uri) -> 
             {**stored.payload, "snapshotId": stored.document_id}
         )
         assert [str(model.input_price_per_million) for model in restored.models] == [
-            "0.15",
-            "0.8",
+            "0.4",
+            "1",
             "0.3",
         ]
         assert restored.raw_pages == tuple(

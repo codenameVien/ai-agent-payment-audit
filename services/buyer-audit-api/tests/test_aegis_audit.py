@@ -4,6 +4,7 @@ import copy
 from collections.abc import Callable, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import pytest
@@ -199,10 +200,12 @@ async def test_an_over_budget_candidate_smuggled_into_eligible_is_detected() -> 
 async def test_a_rewritten_component_score_is_detected() -> None:
     events, documents = await _decided_events()
 
-    def inflate(payload: dict[str, Any]) -> None:
-        payload["eligible"][0]["scores"]["intelligence"] = "100"
+    def rewrite(payload: dict[str, Any]) -> None:
+        # Shift the stored score so the rewrite always differs from the computed value.
+        scores = payload["eligible"][0]["scores"]
+        scores["intelligence"] = str(Decimal(scores["intelligence"]) - 1)
 
-    assert "AUD-AA-SCORE-MISMATCH" in _rule_ids(_tamper(events, inflate), documents)
+    assert "AUD-AA-SCORE-MISMATCH" in _rule_ids(_tamper(events, rewrite), documents)
 
 
 async def test_a_rewritten_normalization_denominator_is_detected() -> None:

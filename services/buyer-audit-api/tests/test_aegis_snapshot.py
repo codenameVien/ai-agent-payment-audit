@@ -87,7 +87,12 @@ def test_capture_collects_every_page_and_pins_one_index_version(
 
 def test_capture_hash_binds_the_captured_bytes(pages: list[str]) -> None:
     original = validate_capture(pages, field_paths=AaFieldPaths())
-    mutated = [pages[0].replace("0.15", "9.99"), pages[1]]
+    mutated = [
+        pages[0].replace('"price_1m_input_tokens": 0.4,', '"price_1m_input_tokens": 9.99,'),
+        pages[1],
+    ]
+    # Guard against a silent no-op: the mutation must change the captured bytes.
+    assert mutated[0] != pages[0]
     assert (
         validate_capture(mutated, field_paths=AaFieldPaths()).raw_response_hash
         != original.raw_response_hash
@@ -157,8 +162,8 @@ def test_snapshot_maps_every_catalog_model_exactly_once(
         entry.key for entry in catalog.entries
     ]
     alpha = snapshot.metrics("openai:fixture-openai-alpha:fixture-2026-09-09")
-    assert alpha.input_price_per_million == Decimal("0.15")
-    assert alpha.output_price_per_million == Decimal("0.6")
+    assert alpha.input_price_per_million == Decimal("0.4")
+    assert alpha.output_price_per_million == Decimal("1.6")
     assert alpha.median_end_to_end_seconds == Decimal("8.4")
     assert alpha.intelligence_index == Decimal("41.5")
     # The unmapped AA model is counted in the capture but never becomes a candidate.
