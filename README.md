@@ -2,7 +2,7 @@
 
 # AEGIS — AI 모델 구매와 감사
 
-> **현재 추가 기능:** 채팅형 구매 요청, 별도 로컬 Qwen 판단/감사 관찰자, 결제 전·감사 후 두 증거 체크포인트. MongoDB 원문에 대응하는 해시를 온체인에 제출하는 코드를 연결했다. 새 Anchor 배포·온체인 쓰기는 승인 전이며 아래 데모에서는 **Mock 체크포인트**다. [설계·검증·배포 경계](docs/DECISION_OBSERVER_PLAN.md).
+> **현재 추가 기능:** 채팅형 구매 요청, 별도 로컬 Qwen 판단/감사 관찰자, 결제 전·감사 후 두 증거 체크포인트. MongoDB 원문에 대응하는 해시를 온체인에 제출하는 코드를 연결했다. 새 Anchor 배포·온체인 쓰기는 승인 전이며 아래 데모에서는 **Mock 체크포인트**다.
 
 ### 채팅·관찰자 미리보기
 
@@ -19,9 +19,9 @@ npm run aegis:observer:demo
 
 이 명령은 기존 `.env.local`·실거래 DB를 사용하지 않는다. Qwen 호출만 실제 로컬 실행, AA/Provider/정산/Anchor는 모의이며 임시 DB는 종료 때 정리된다. 실거래 설정은 바꾸지 않는다.
 
-![채팅 요청 — 대화 안에서 실행 동의](docs/images/chat-request.png)
+![채팅 요청 — 대화 안에서 실행 동의](assets/images/chat-request.png)
 
-> 2026-09-12: 신규 AEGIS 계약 배포·1,000,000 AEGIS 초기 발행 완료. 로컬 Qwen으로 자동 priority를 분류하고 가격·점수·결제 검사는 고정 코드 정책을 유지한다. 기존 PBLC DB 기록은 사용자 지시로 삭제했다. 새 AEGIS 외부 실결제는 아직 검증하지 않았다. [현재 상태·실행·언어별 역할](docs/AEGIS_QWEN_MIGRATION.md). 아래 PBLC 명령명은 호환용이며 과거 실거래 증거는 역사 기록이다.
+> 2026-09-12: 신규 AEGIS 계약 배포·1,000,000 AEGIS 초기 발행 완료. 로컬 Qwen으로 자동 priority를 분류하고 가격·점수·결제 검사는 고정 코드 정책을 유지한다. 기존 PBLC DB 기록은 사용자 지시로 삭제했다. 새 AEGIS 외부 실결제는 아직 검증하지 않았다. 아래 PBLC 명령명은 호환용이며 과거 실거래 증거는 역사 기록이다.
 
 ## 왜 만들었나
 
@@ -59,7 +59,7 @@ flowchart LR
 
 OpenAI·Anthropic Claude·Google Gemini Gateway는 선택된 모델의 결과를 반환하는 일반 코드입니다. 구매 에이전트가 요청 분석, AA 데이터 조회, 가격 계산, 필터·비교·선택을 담당합니다. 별도 프로세스의 **결제 실행 모듈**이 키를 격리하고 x402 v2 exact + ERC-3009 승인에 서명하며, Gateway가 Facilitator의 verify/settle 확인 후 결과를 제공합니다.
 
-기본 실행은 Provider·Facilitator 모두 Mock입니다. `live` 모드는 사용자 소유 PBLC로 외부 x402 Facilitator 정산을 시도하며, Provider 결과는 명확히 Mock으로 유지합니다. 서버에 `AA_API_KEY`와 정확한 `AA_MODEL_CATALOG_PATH`를 함께 설정할 때만 실제 Artificial Analysis snapshot을 조회합니다. [구조도와 책임 경계](docs/AEGIS_ARCHITECTURE.md) · [실제 PBLC 요청 흐름](docs/LIVE_PBLC_REQUEST_FLOW.md)
+기본 실행은 Provider·Facilitator 모두 Mock입니다. `live` 모드는 사용자 소유 PBLC로 외부 x402 Facilitator 정산을 시도하며, Provider 결과는 명확히 Mock으로 유지합니다. 서버에 `AA_API_KEY`와 정확한 `AA_MODEL_CATALOG_PATH`를 함께 설정할 때만 실제 Artificial Analysis snapshot을 조회합니다.
 
 ## 시작하기
 
@@ -112,7 +112,7 @@ ok 5 - two concurrent runs of one purchase settle exactly once
 
 markup 없이 6-decimal 정수 단위로 올림합니다. 최대 출력량을 반영한 사전 고정 결제액이며 사용량 사후 정산이 아닙니다. **1 PBLC = 1 USD는 명목 환산이고 달러 담보·상환 약속이 아닙니다.**
 
-현재 표준 작업은 최대 출력 8,000 tokens를 결제 전에 고정합니다. 모델 ID·seller 수신 지갑·단가와 짧은 요청 기준 0.01~0.04 PBLC 예시는 [모델별 표준 작업 결제 조건](docs/MODEL_TASK_PRICING.md)을 참고하세요.
+현재 표준 작업은 최대 출력 8,000 tokens를 결제 전에 고정합니다.
 
 데이터 계약 출처는 [Artificial Analysis](https://artificialanalysis.ai/data-api/docs)입니다. 완료시간은 기본 500 answer tokens 조건의 벤치마크 참고값이며 실제 완료 보장이 아닙니다. snapshot·정확한 mapping·필수 값 검증에 실패하면 결제 전 중단합니다.
 
@@ -130,15 +130,11 @@ npm run build --workspace @pbl/dashboard
 
 집중 E2E 5건·402 불일치 2건, dashboard build·기본 lint가 통과했습니다. Python 전체 outbound 계측, 과거 증거 광범위 zero-write 회귀, Mongo 실패 정리 스트레스, 전체 테스트 반복 및 추가 보안·성능 강화는 후속 과제입니다. 이를 완료하거나 운영 보안을 보장한다고 주장하지 않습니다.
 
-## 로드맵
-
-[작업 상태](docs/ROADMAP.md)와 [검증 기록](docs/AEGIS_VERIFICATION.md)에서 남은 구현과 검증을 추적합니다.
-
 ### 과거 기록과 외부 게이트
 
-과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다. [과거 증거와 인계](docs/HANDOFF.md)
+과거 PBLC·Permit2·ERC-3009 거래, 평판·Anchor·독립 RPC 증거는 당시 이름과 주소 그대로 보존합니다.
 
-신규 기본 Mock 실행은 사용자 소유 PBLC ERC-3009 계약([`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8), Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 사용자 지갑이 owner이며 초기 `1,000,000 PBLC` mint는 완료됐습니다. 과거 PBLC V2와 거래는 읽기 전용으로 보존합니다. `npm run pblc:live:enable` 뒤 `npm run aegis:live-payment`을 사용하면 `/request` 동의 한 건에서 실제 x402 결제를 시도합니다. 실행 전 절차·제약은 [실제 PBLC 요청 흐름](docs/LIVE_PBLC_REQUEST_FLOW.md)을 따르세요. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
+신규 기본 Mock 실행은 사용자 소유 PBLC ERC-3009 계약([`0xe75013d333bebb90b321dd658440c10b5a0face8`](https://base-sepolia.blockscout.com/address/0xe75013d333bebb90b321dd658440c10b5a0face8), Base Sepolia, 6 decimals)을 결제 조건으로 사용합니다. 사용자 지갑이 owner이며 초기 `1,000,000 PBLC` mint는 완료됐습니다. 과거 PBLC V2와 거래는 읽기 전용으로 보존합니다. `npm run pblc:live:enable` 뒤 `npm run aegis:live-payment`을 사용하면 `/request` 동의 한 건에서 실제 x402 결제를 시도합니다. AA 무료 목록에는 현재 세 Provider 정확 모델 mapping이 없어 fixture AA를 유지합니다. **AWS 배포는 진행하지 않습니다.**
 
 현재 로컬 실행 catalog의 수신 지갑은 OpenAI→seller1 `0xF00E…97a0`, Anthropic→seller2 `0xC774…26d8`, Google→seller3 `0x5363…80E4`로 설정했다. 기본 Mock 모드에서는 이 매핑을 증거로만 기록하고, live 모드에서는 선택된 수신자에게 고정 PBLC 금액을 지급 조건으로 제시한다.
 

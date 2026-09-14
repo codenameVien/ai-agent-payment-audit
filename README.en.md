@@ -2,15 +2,15 @@
 
 # AEGIS — AI Model Purchasing and Audit
 
-> **New:** chat-style purchase requests (sending a message never starts a purchase), a separate local Qwen advisory observer at decision/audit checkpoints, and an isolated Anchor writer. `npm run aegis:observer:demo` opens a preview at `http://127.0.0.1:3100/request` with local Qwen but fixture AA, Mock Providers, settlement and checkpoints. It uses disposable storage, never `.env.local` or existing transaction data. New on-chain deployment/writes remain approval-gated. See [design and verification boundaries](docs/DECISION_OBSERVER_PLAN.md).
+> **New:** chat-style purchase requests (sending a message never starts a purchase), a separate local Qwen advisory observer at decision/audit checkpoints, and an isolated Anchor writer. `npm run aegis:observer:demo` opens a preview at `http://127.0.0.1:3100/request` with local Qwen but fixture AA, Mock Providers, settlement and checkpoints. It uses disposable storage, never `.env.local` or existing transaction data. New on-chain deployment/writes remain approval-gated.
 
 Send a message from the bottom composer, then explicitly confirm execution on its in-chat request card. Results stay in the conversation. After completion, sending the same message again creates a new intentional request; retrying a failed run preserves its purchaseId. Unsent text does not block an already sent card. Set optional budget/priority before sending via the collapsible settings. Confirmation cards are local UI, not a free-conversation LLM. Qwen classifies priority and reviews evidence during execution; Provider answer text remains Mock.
 
 If execution is disabled, the card shows the connection/stored-request reason. Keep the demo terminal running, then use **연결 다시 확인** (recheck connection) after the server recovers. This only reads readiness, preserves the card/draft/pending ID, and never starts a purchase. Readiness GETs time out after 8 seconds with a retry action. Missing stored purchases remain blocked with a detail link rather than being silently discarded.
 
-![Chat request with inline consent](docs/images/chat-request.png)
+![Chat request with inline consent](assets/images/chat-request.png)
 
-> 2026-09-12: A new AEGIS contract and initial 1,000,000 supply are deployed. Local Qwen classifies automatic priority; fixed code retains weights, pricing and payment checks. Legacy PBLC database records were deleted at the user's request. New AEGIS external settlement is not yet verified. See [current migration and validation boundaries](docs/AEGIS_QWEN_MIGRATION.md). Older PBLC command names are compatibility names; historical payment evidence is not AEGIS evidence.
+> 2026-09-12: A new AEGIS contract and initial 1,000,000 supply are deployed. Local Qwen classifies automatic priority; fixed code retains weights, pricing and payment checks. Legacy PBLC database records were deleted at the user's request. New AEGIS external settlement is not yet verified. Older PBLC command names are compatibility names; historical payment evidence is not AEGIS evidence.
 
 ## Why
 
@@ -41,7 +41,7 @@ flowchart LR
 
 OpenAI, Anthropic Claude, and Google Gemini Gateways are ordinary code modules. The buyer analyzes the request, reads AA data, calculates prices, filters candidates, and selects a model. An isolated payment execution module signs x402 v2 exact + ERC-3009 authorizations; the Gateway releases the result after Facilitator verify/settle confirmation.
 
-The default uses Mock Providers and a Mock Facilitator. The server-side `live` mode can settle PBLC through an external x402 Facilitator after a consented request, while Provider output remains explicitly Mock. AA uses fixtures by default; only a server-side `AA_API_KEY` plus an exact configured `AA_MODEL_CATALOG_PATH` enables a live Artificial Analysis snapshot. See the [architecture](docs/AEGIS_ARCHITECTURE.md) and [live PBLC request flow](docs/LIVE_PBLC_REQUEST_FLOW.md).
+The default uses Mock Providers and a Mock Facilitator. The server-side `live` mode can settle PBLC through an external x402 Facilitator after a consented request, while Provider output remains explicitly Mock. AA uses fixtures by default; only a server-side `AA_API_KEY` plus an exact configured `AA_MODEL_CATALOG_PATH` enables a live Artificial Analysis snapshot.
 
 ## Getting Started
 
@@ -94,7 +94,7 @@ Explicit priority wins; otherwise request wording selects the preset. Budget, ca
 
 There is no markup. The amount is rounded up to integer 6-decimal units. This is fixed prepayment based on maximum output, not actual-usage settlement. **1 PBLC = 1 USD is a nominal conversion rule, not dollar backing or redemption value.**
 
-The current standard task reserves a maximum 8,000 output tokens before payment. Exact model IDs, seller recipients, rates, and short-request examples in the 0.01–0.04 PBLC range are documented in [model task pricing](docs/MODEL_TASK_PRICING.md).
+The current standard task reserves a maximum 8,000 output tokens before payment.
 
 The data contract comes from [Artificial Analysis](https://artificialanalysis.ai/data-api/docs). Completion time is a benchmark reference, normally based on 500 answer tokens, not a completion guarantee. Invalid snapshots, missing required values, or failed exact mapping stop purchasing before payment.
 
@@ -112,15 +112,11 @@ npm run build --workspace @pbl/dashboard
 
 Five focused E2Es, two 402-mismatch checks, dashboard build, and basic lint passed. Full Python outbound instrumentation, broad historical zero-write regression, Mongo failure-cleanup stress, repeated full suites, and additional security/performance hardening remain follow-up work. This demo does not claim those checks or production security are complete.
 
-## Roadmap
-
-The [roadmap](docs/ROADMAP.md) and [verification record](docs/AEGIS_VERIFICATION.md) track remaining implementation and validation.
-
 ### History and external gates
 
-Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses. See the [handoff and historical evidence](docs/HANDOFF.md).
+Historical PBLC, Permit2, ERC-3009, reputation, Anchor, and independent RPC evidence retains its original token names and contract addresses.
 
-The default Mock path uses the user-owned ERC-3009 PBLC at `0xe75013d333bebb90b321dd658440c10b5a0face8` (Base Sepolia, 6 decimals). Its owner wallet received the initial 1,000,000 PBLC mint. After explicit enablement, the local `live` path can submit one consented `/request` through an external x402 Facilitator; Provider output remains Mock. See the [live PBLC request flow](docs/LIVE_PBLC_REQUEST_FLOW.md). **AWS deployment is not being performed.**
+The default Mock path uses the user-owned ERC-3009 PBLC at `0xe75013d333bebb90b321dd658440c10b5a0face8` (Base Sepolia, 6 decimals). Its owner wallet received the initial 1,000,000 PBLC mint. After explicit enablement, the local `live` path can submit one consented `/request` through an external x402 Facilitator; Provider output remains Mock. **AWS deployment is not being performed.**
 
 The current local-run catalog maps recipients as OpenAI → seller1 `0xF00E…97a0`, Anthropic → seller2 `0xC774…26d8`, and Google → seller3 `0x5363…80E4`. Mock mode records this mapping only; live mode offers the selected recipient the exact fixed PBLC amount.
 

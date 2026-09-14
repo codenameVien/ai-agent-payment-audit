@@ -20,3 +20,11 @@ infra/contracts/cache/
 .agent-coder-guard
 .aegis-live-mongo/
 .aegis-live-runtime.env
+
+# Local-only project records and agent instructions. Never pushed to GitHub.
+AGENTS.md
+CLAUDE.md
+/docs/
+/aidlc-docs/
+/.agent/
+/work-orders/
