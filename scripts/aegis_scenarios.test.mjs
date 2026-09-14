@@ -5,7 +5,7 @@
 // →Mock Facilitator. 저장소는 이 실행이 소유한 임시 replica set 이며 기존 DB는 열지도
 // 쓰지도 않는다. 모든 카운터는 실측값이며 고정 0이 아니다.
 //
-// 실행: node --test --require ./scripts/aegis_outbound_guard.cjs scripts/aegis_phase6_scenarios.test.mjs
+// 실행: node --test --require ./scripts/aegis_outbound_guard.cjs scripts/aegis_scenarios.test.mjs
 
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
