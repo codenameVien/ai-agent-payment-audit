@@ -5,6 +5,8 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
+from eth_utils import is_address
+
 from buyer_audit_api.adapters.artificial_analysis import (
     FixtureArtificialAnalysisSource,
     HttpArtificialAnalysisSource,
@@ -118,8 +120,8 @@ def build_container(settings: Settings) -> AppContainer:
     # No chain reader is constructed, so this composition cannot reach an RPC even by
     # accident.
     local_owner = settings.aegis_local_owner_address.strip().lower()
-    if not local_owner:
-        raise ConfigurationError("AEGIS_LOCAL_OWNER_ADDRESS is required")
+    if not local_owner or not is_address(local_owner):
+        raise ConfigurationError("AEGIS_LOCAL_OWNER_ADDRESS must be an Ethereum address")
     repository = MongoEvidenceRepository(
         uri=settings.mongodb_uri,
         database=settings.mongodb_database,

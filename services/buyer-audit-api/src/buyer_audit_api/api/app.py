@@ -8,6 +8,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal, cast
 
 import httpx
+from eth_utils import is_address
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -321,8 +322,8 @@ def create_app(container: AppContainer) -> FastAPI:
     # aa-three-factor-v1 runs as a single-user local demo: the owner identity is server
     # configuration, never a browser-selected value. There is no login surface.
     local_owner = container.local_owner_address.strip().lower()
-    if not local_owner:
-        raise ConfigurationError("local owner address is required")
+    if not local_owner or not is_address(local_owner):
+        raise ConfigurationError("local owner address must be an Ethereum address")
     allowed_origins = frozenset(
         origin.strip().lower().rstrip("/")
         for origin in container.local_allowed_origins
