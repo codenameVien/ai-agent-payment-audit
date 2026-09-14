@@ -144,6 +144,19 @@ def test_a_reservation_is_derived_from_evidence_and_claimed_once(
         intent = first.json()["intent"]
         assert intent["state"] == "CLAIMED"
         assert intent["quote_id"] == terms["terms_binding_hash"]
+        # Exactly the fields the payment execution module reads (evidence-client.ts).
+        assert set(intent) == {
+            "purchase_id",
+            "buyer_wallet_address",
+            "state",
+            "amount_units",
+            "token",
+            "pay_to",
+            "authorization_nonce",
+            "decision_authorization_hash",
+            "claimed_at",
+            "quote_id",
+        }
 
         # A repeated reservation returns the same attempt instead of opening a second one.
         again = client.post(
@@ -330,6 +343,12 @@ def test_a_live_facilitator_evm_reference_is_recorded_without_chain_verification
         assert record["payload"]["executionMode"] == "live"
         assert record["payload"]["settlementReference"] == "0x" + "ef" * 32
         assert record["payload"]["verificationBasis"] == "facilitator_response"
+        # The Facilitator's hash is never promoted to an application-verified reference.
+        assert record["transaction_ref"] is None
+        summary = client.get(f"/purchases/{purchase_id}").json()["summary"]
+        assert summary["payment_status"] == "PAYMENT_SETTLED"
+        assert summary["transaction_ref"] is None
+        assert "transaction_hash" not in summary
 
 
 def test_a_settled_purchase_is_never_paid_or_failed_again(
@@ -693,7 +712,6 @@ def test_the_local_composition_has_no_siwe_and_no_phase6_surface(
             ("/internal/evidence/seller-executions/claim", 404),
             ("/internal/evidence/payment-intents/settle", 405),
             ("/internal/evidence/payment-intents/reconcile-no-transfer", 405),
-            ("/internal/evidence/reputation-outbox/claim", 404),
         ):
             response = client.post(path, json={}, headers=INTERNAL_HEADERS)
             assert response.status_code == expected, path

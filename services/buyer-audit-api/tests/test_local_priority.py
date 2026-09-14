@@ -5,13 +5,13 @@ import json
 
 import httpx
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.local_priority import (
     LocalQwenPriorityClassifier,
     PriorityClassificationError,
 )
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.aa_audit import _priority_issues
 from buyer_audit_api.core.aa_policy import (
     LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD,

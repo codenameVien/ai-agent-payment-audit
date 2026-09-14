@@ -21,7 +21,6 @@ from buyer_audit_api.core.errors import (
 )
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
-    TERMINAL_PAYMENT_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceHead,
@@ -30,42 +29,43 @@ from buyer_audit_api.core.models import (
     JsonObject,
     SensitivePayload,
     WalletBinding,
-    transaction_ref_from_payload,
 )
 from buyer_audit_api.core.payment import (
-    ActualTransfer,
-    ConfirmedOutflow,
     PaymentIntent,
     PaymentIntentState,
-    ReconciliationVerifierOutcome,
     ReservationAction,
     WalletPolicy,
 )
 
-# M2: the per-purchase singleton unique indexes this packet introduces. One declaration
-# feeds both the read-only collision preflight and index creation, so coverage cannot drift.
-_PHASE6_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
-    (EventType.PAYMENT_MISMATCH_CONFIRMED, "unique_payment_mismatch_per_purchase"),
-    (
-        EventType.PAYMENT_RECONCILED_NO_TRANSFER,
-        "unique_payment_no_transfer_per_purchase",
-    ),
-    (EventType.REPUTATION_DECIDED, "unique_reputation_decision_per_purchase"),
-)
-
-# Singleton indexes that already existed before this packet; unchanged behaviour.
-_EXISTING_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
+# Per-purchase singleton events, each guarded by a partial unique index on `purchaseId`.
+_SINGLETON_INDEXES: tuple[tuple[EventType, str], ...] = (
     (EventType.PAYMENT_AUTHORIZED, "unique_payment_authorized_per_purchase"),
     (
         EventType.PAYMENT_RECONCILIATION_REQUIRED,
         "unique_payment_reconciliation_per_purchase",
     ),
     (EventType.PAYMENT_FAILED, "unique_payment_failed_per_purchase"),
-    (EventType.EVIDENCE_ANCHORED, "unique_evidence_anchor_per_purchase"),
-    (EventType.REPUTATION_RECORDED, "unique_reputation_per_purchase"),
     (EventType.DELIVERED, "unique_delivery_per_purchase"),
     (EventType.AUDITED, "unique_audit_per_purchase"),
 )
+
+#: One terminal payment outcome per purchase, across every terminal event type.
+_TERMINAL_OUTCOME_INDEX_NAME = "unique_phase6_terminal_outcome"
+#: Frozen on purpose. Existing databases already hold this index, and MongoDB refuses to
+#: create an index under an existing name with a different partial filter, so the list is
+#: kept byte-for-byte as earlier releases created it - including two terminal types that
+#: can no longer be written. Never derive it from `TERMINAL_PAYMENT_EVENT_TYPES`.
+_TERMINAL_OUTCOME_INDEX_FILTER: dict[str, Any] = {
+    "type": {
+        "$in": [
+            "PAYMENT_SETTLED",
+            "PAYMENT_FAILED",
+            "PAYMENT_MISMATCH_CONFIRMED",
+            "PAYMENT_RECONCILED_NO_TRANSFER",
+        ]
+    },
+    "payload.terminalOutcomeKey": {"$type": "string"},
+}
 
 
 def _event_document(event: EvidenceEvent) -> dict[str, Any]:
@@ -191,7 +191,6 @@ def _payment_intent_document(intent: PaymentIntent) -> dict[str, Any]:
         "amountUnits": intent.amount_units,
         "token": intent.token,
         "payTo": intent.pay_to,
-        "permit2Nonce": intent.permit2_nonce,
         "transferMethod": intent.transfer_method,
         "authorizationNonce": intent.authorization_nonce,
         "state": intent.state.value,
@@ -200,37 +199,24 @@ def _payment_intent_document(intent: PaymentIntent) -> dict[str, Any]:
         "decisionAuthorizationSignature": intent.decision_authorization_signature,
         "authorizedAt": intent.authorized_at,
         "reconciliationReason": intent.reconciliation_reason,
-        "transactionHash": intent.transaction_hash,
-        "blockNumber": intent.block_number,
-        "transferLogIndex": intent.transfer_log_index,
         "settlementVerifiedAt": intent.settlement_verified_at,
         "failureReason": intent.failure_reason,
         "failedAt": intent.failed_at,
-        "reconciliation": {
-            "attemptCount": intent.reconciliation_attempt_count,
-            "firstCheckedAt": intent.reconciliation_first_checked_at,
-            "lastCheckedAt": intent.reconciliation_last_checked_at,
-            "lastOutcome": (
-                intent.reconciliation_last_outcome.value
-                if intent.reconciliation_last_outcome is not None
-                else None
-            ),
-        },
-        "actualTransfer": (
-            intent.actual_transfer.to_payload() if intent.actual_transfer is not None else None
-        ),
-        "mismatchedFields": list(intent.mismatched_fields),
         "terminalOutcomeKey": intent.terminal_outcome_key,
         "terminalProofRef": intent.terminal_proof_ref,
-        "terminalProofFingerprint": intent.terminal_proof_fingerprint,
         "terminalEvidenceSource": (
             intent.terminal_evidence_source.value
             if intent.terminal_evidence_source is not None
             else None
         ),
-        "localTransactionId": intent.local_transaction_id,
-        "noTransferReasonCode": intent.no_transfer_reason_code,
     }
+
+
+def _transfer_method(document: dict[str, Any]) -> Literal["eip3009"]:
+    """An AEGIS intent is always an ERC-3009 authorization; anything else fails closed."""
+    if document.get("transferMethod") != "eip3009":
+        raise EvidenceIntegrityError("stored payment intent is not an ERC-3009 authorization")
+    return "eip3009"
 
 
 def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
@@ -243,12 +229,9 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         amount_units=int(document["amountUnits"]),
         token=str(document["token"]),
         pay_to=str(document["payTo"]),
-        permit2_nonce=cast(str | None, document.get("permit2Nonce")),
         state=PaymentIntentState(str(document["state"])),
         claimed_at=cast(datetime, document["claimedAt"]),
-        transfer_method=cast(
-            Literal["permit2", "eip3009"], document.get("transferMethod", "permit2")
-        ),
+        transfer_method=_transfer_method(document),
         authorization_nonce=cast(str | None, document.get("authorizationNonce")),
         decision_authorization_hash=cast(
             str | None, document.get("decisionAuthorizationHash")
@@ -260,86 +243,18 @@ def _payment_intent_from_document(document: dict[str, Any]) -> PaymentIntent:
         reconciliation_reason=cast(
             str | None, document.get("reconciliationReason")
         ),
-        transaction_hash=cast(str | None, document.get("transactionHash")),
-        block_number=cast(int | None, document.get("blockNumber")),
-        transfer_log_index=cast(int | None, document.get("transferLogIndex")),
         settlement_verified_at=cast(
             datetime | None, document.get("settlementVerifiedAt")
         ),
         failure_reason=cast(str | None, document.get("failureReason")),
         failed_at=cast(datetime | None, document.get("failedAt")),
-        reconciliation_attempt_count=int(_reconciliation(document).get("attemptCount", 0) or 0),
-        reconciliation_first_checked_at=cast(
-            datetime | None, _reconciliation(document).get("firstCheckedAt")
-        ),
-        reconciliation_last_checked_at=cast(
-            datetime | None, _reconciliation(document).get("lastCheckedAt")
-        ),
-        reconciliation_last_outcome=(
-            ReconciliationVerifierOutcome(str(_reconciliation(document)["lastOutcome"]))
-            if _reconciliation(document).get("lastOutcome") is not None
-            else None
-        ),
-        actual_transfer=_actual_transfer_from_document(document.get("actualTransfer")),
-        mismatched_fields=tuple(
-            str(item) for item in (document.get("mismatchedFields") or [])
-        ),
         terminal_outcome_key=cast(str | None, document.get("terminalOutcomeKey")),
         terminal_proof_ref=cast(str | None, document.get("terminalProofRef")),
-        terminal_proof_fingerprint=cast(
-            str | None, document.get("terminalProofFingerprint")
-        ),
         terminal_evidence_source=(
             EvidenceSource(str(document["terminalEvidenceSource"]))
             if document.get("terminalEvidenceSource") is not None
             else None
         ),
-        local_transaction_id=cast(str | None, document.get("localTransactionId")),
-        no_transfer_reason_code=cast(str | None, document.get("noTransferReasonCode")),
-    )
-
-
-def _reconciliation(document: dict[str, Any]) -> dict[str, Any]:
-    raw = document.get("reconciliation")
-    return cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
-
-
-def _actual_transfer_from_document(value: object) -> ActualTransfer | None:
-    if not isinstance(value, dict):
-        return None
-    return ActualTransfer(
-        amount_units=int(value["amountUnits"]),
-        token=str(value["token"]),
-        from_address=str(value["from"]),
-        to_address=str(value["to"]),
-    )
-
-
-def _confirmed_outflow_document(outflow: ConfirmedOutflow) -> dict[str, Any]:
-    return {
-        "amountUnits": outflow.amount_units,
-        "buyerWallet": outflow.buyer_wallet,
-        "policyDate": outflow.policy_date,
-        "proofRef": outflow.proof_ref,
-        "purchaseId": outflow.purchase_id,
-        "recipient": outflow.recipient,
-        "terminalOutcomeKey": outflow.terminal_outcome_key,
-        "token": outflow.token,
-        "transactionRef": outflow.transaction_ref.to_payload(),
-    }
-
-
-def _confirmed_outflow_from_document(document: dict[str, Any]) -> ConfirmedOutflow:
-    return ConfirmedOutflow(
-        terminal_outcome_key=str(document["terminalOutcomeKey"]),
-        purchase_id=str(document["purchaseId"]),
-        buyer_wallet=str(document["buyerWallet"]),
-        policy_date=str(document["policyDate"]),
-        token=str(document["token"]),
-        amount_units=int(document["amountUnits"]),
-        recipient=str(document["recipient"]),
-        transaction_ref=transaction_ref_from_payload(document["transactionRef"]),
-        proof_ref=str(document["proofRef"]),
     )
 
 
@@ -353,7 +268,6 @@ def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bo
         and left.amount_units == right.amount_units
         and left.token == right.token
         and left.pay_to == right.pay_to
-        and left.permit2_nonce == right.permit2_nonce
         and left.transfer_method == right.transfer_method
     )
 
@@ -373,152 +287,15 @@ class MongoEvidenceRepository:
         self._documents = self._database["immutableDocuments"]
         self._wallet_policies = self._database["walletPolicies"]
         self._payment_intents = self._database["paymentIntents"]
-        self._confirmed_outflows = self._database["confirmedOutflows"]
-        # Read only by the unchanged Phase 6 collision preflight. The repository no
-        # longer writes or indexes these historical collections.
-        self._reputation_outbox = self._database["reputationOutbox"]
-        self._reputation_snapshots = self._database["reputationSnapshots"]
-
-    async def phase6_index_collision_report(self) -> list[dict[str, Any]]:
-        """Read-only duplicate report covering every unique index this packet introduces.
-
-        It aggregates existing documents that already carry the new fields and reports
-        every key that would violate a new unique index, including the two per-purchase
-        terminal singletons. It never writes, backfills or deletes.
-        """
-        specs: list[tuple[str, Any, dict[str, Any], list[str]]] = [
-            (
-                "unique_phase6_terminal_outcome",
-                self._events,
-                {
-                    "type": {"$in": [item.value for item in TERMINAL_PAYMENT_EVENT_TYPES]},
-                    "payload.terminalOutcomeKey": {"$type": "string"},
-                },
-                ["payload.terminalOutcomeKey"],
-            ),
-            (
-                "unique_phase6_reconciliation_attempt",
-                self._events,
-                {
-                    "type": EventType.PAYMENT_RECONCILIATION_CHECKED.value,
-                    "payload.attemptNumber": {"$type": "number"},
-                },
-                ["purchaseId", "type", "payload.attemptNumber"],
-            ),
-            (
-                "unique_phase6_rejected_attempt",
-                self._events,
-                {
-                    "type": EventType.PAYMENT_ATTEMPT_REJECTED.value,
-                    "payload.attemptId": {"$type": "string"},
-                },
-                ["purchaseId", "type", "payload.attemptId"],
-            ),
-            (
-                "unique_confirmed_outflow_terminal",
-                self._confirmed_outflows,
-                {"terminalOutcomeKey": {"$type": "string"}},
-                ["terminalOutcomeKey"],
-            ),
-            (
-                "unique_confirmed_outflow_transaction",
-                self._confirmed_outflows,
-                {
-                    "transactionRef.kind": "EVM",
-                    "transactionRef.hash": {"$type": "string"},
-                },
-                ["transactionRef.hash"],
-            ),
-            (
-                "unique_confirmed_outflow_transaction_local",
-                self._confirmed_outflows,
-                {
-                    "transactionRef.kind": "LOCAL",
-                    "transactionRef.id": {"$type": "string"},
-                },
-                ["transactionRef.runId", "transactionRef.id"],
-            ),
-            (
-                "unique_reputation_conflict_key",
-                self._events,
-                {
-                    "type": EventType.REPUTATION_PUBLICATION_CONFLICT.value,
-                    "payload.conflictKey": {"$type": "string"},
-                },
-                ["payload.conflictKey"],
-            ),
-            (
-                "unique_reputation_publish_identity",
-                self._reputation_outbox,
-                {"publishIdentityHash": {"$type": "string"}},
-                ["publishIdentityHash"],
-            ),
-            (
-                "unique_reputation_evm_transaction",
-                self._reputation_outbox,
-                {
-                    "transactionRef.kind": "EVM",
-                    "transactionRef.hash": {"$type": "string"},
-                },
-                ["transactionRef.hash"],
-            ),
-            (
-                "unique_reputation_local_transaction",
-                self._reputation_outbox,
-                {
-                    "transactionRef.kind": "LOCAL",
-                    "transactionRef.id": {"$type": "string"},
-                },
-                ["transactionRef.runId", "transactionRef.id"],
-            ),
-            (
-                "unique_reputation_snapshot_query",
-                self._reputation_snapshots,
-                {"queryFingerprint": {"$type": "string"}},
-                ["queryFingerprint", "scope.toBlock"],
-            ),
-            (
-                "unique_reputation_job_id",
-                self._reputation_outbox,
-                {"jobId": {"$type": "string"}},
-                ["jobId"],
-            ),
-            (
-                "unique_reputation_snapshot",
-                self._reputation_snapshots,
-                {"snapshotId": {"$type": "string"}},
-                ["snapshotId"],
-            ),
-        ]
-        specs.extend(
-            (name, self._events, {"type": event_type.value}, ["purchaseId"])
-            for event_type, name in _PHASE6_SINGLETON_INDEXES
-        )
-        report: list[dict[str, Any]] = []
-        for name, collection, match, keys in specs:
-            group_id = {
-                key.replace(".", "_"): f"${key}" for key in keys
-            }
-            cursor = await collection.aggregate(
-                [
-                    {"$match": match},
-                    {"$group": {"_id": group_id, "count": {"$sum": 1}}},
-                    {"$match": {"count": {"$gt": 1}}},
-                    {"$sort": {"count": DESCENDING}},
-                    {"$limit": 32},
-                ]
-            )
-            async for document in cursor:
-                report.append(
-                    {
-                        "index": name,
-                        "key": document["_id"],
-                        "count": int(document["count"]),
-                    }
-                )
-        return report
 
     async def ensure_indexes(self) -> None:
+        """Create the indexes the AEGIS runtime relies on; never drop or rewrite others.
+
+        Every spec below is unchanged from earlier releases, so an existing database that
+        already holds them - together with indexes earlier releases created for the
+        superseded flows - starts without an index conflict. Those older indexes are left
+        in place: this method only ever creates.
+        """
         await self._client.admin.command({"ping": 1})
         await self._users.create_index([("ownerAddress", ASCENDING)], unique=True)
         await self._users.create_index(
@@ -531,12 +308,6 @@ class MongoEvidenceRepository:
         await self._events.create_index(
             [("purchaseId", ASCENDING), ("sequence", ASCENDING)],
             unique=True,
-        )
-        await self._events.create_index(
-            [("purchaseId", ASCENDING)],
-            unique=True,
-            name="unique_quoted_per_purchase",
-            partialFilterExpression={"type": EventType.QUOTED.value},
         )
         await self._events.create_index(
             [("purchaseId", ASCENDING)],
@@ -562,34 +333,7 @@ class MongoEvidenceRepository:
             name="unique_payment_settled_per_purchase",
             partialFilterExpression={"type": EventType.PAYMENT_SETTLED.value},
         )
-        await self._events.create_index(
-            [("payload.transactionHash", ASCENDING)],
-            unique=True,
-            name="unique_settlement_transaction_hash",
-            partialFilterExpression={
-                "type": EventType.PAYMENT_SETTLED.value,
-                "payload.transactionHash": {"$type": "string"},
-            },
-        )
-        for event_type, name in _EXISTING_SINGLETON_INDEXES:
-            await self._events.create_index(
-                [("purchaseId", ASCENDING)],
-                unique=True,
-                name=name,
-                partialFilterExpression={"type": event_type.value},
-            )
-        # M2 / design 18.15.7: the read-only preflight runs before creating ANY unique index
-        # this packet introduces, including the two per-purchase terminal singletons below.
-        # Historical rows are never modified, backfilled or deleted to make them fit.
-        collisions = await self.phase6_index_collision_report()
-        if collisions:
-            raise EvidenceIntegrityError(
-                "Phase 6 unique index preflight found existing collisions: "
-                + "; ".join(
-                    f"{item['index']} {item['key']} x{item['count']}" for item in collisions
-                )
-            )
-        for event_type, name in _PHASE6_SINGLETON_INDEXES:
+        for event_type, name in _SINGLETON_INDEXES:
             await self._events.create_index(
                 [("purchaseId", ASCENDING)],
                 unique=True,
@@ -599,73 +343,8 @@ class MongoEvidenceRepository:
         await self._events.create_index(
             [("payload.terminalOutcomeKey", ASCENDING)],
             unique=True,
-            name="unique_phase6_terminal_outcome",
-            partialFilterExpression={
-                "type": {"$in": [item.value for item in TERMINAL_PAYMENT_EVENT_TYPES]},
-                "payload.terminalOutcomeKey": {"$type": "string"},
-            },
-        )
-        await self._events.create_index(
-            [("payload.conflictKey", ASCENDING)],
-            unique=True,
-            name="unique_reputation_conflict_key",
-            partialFilterExpression={
-                "type": EventType.REPUTATION_PUBLICATION_CONFLICT.value,
-                "payload.conflictKey": {"$type": "string"},
-            },
-        )
-        await self._events.create_index(
-            [
-                ("purchaseId", ASCENDING),
-                ("type", ASCENDING),
-                ("payload.attemptNumber", ASCENDING),
-            ],
-            unique=True,
-            name="unique_phase6_reconciliation_attempt",
-            partialFilterExpression={
-                "type": EventType.PAYMENT_RECONCILIATION_CHECKED.value,
-                "payload.attemptNumber": {"$type": "number"},
-            },
-        )
-        await self._events.create_index(
-            [
-                ("purchaseId", ASCENDING),
-                ("type", ASCENDING),
-                ("payload.attemptId", ASCENDING),
-            ],
-            unique=True,
-            name="unique_phase6_rejected_attempt",
-            partialFilterExpression={
-                "type": EventType.PAYMENT_ATTEMPT_REJECTED.value,
-                "payload.attemptId": {"$type": "string"},
-            },
-        )
-        await self._confirmed_outflows.create_index(
-            [("terminalOutcomeKey", ASCENDING)],
-            unique=True,
-            name="unique_confirmed_outflow_terminal",
-        )
-        await self._confirmed_outflows.create_index(
-            [("transactionRef.hash", ASCENDING)],
-            unique=True,
-            name="unique_confirmed_outflow_transaction",
-            partialFilterExpression={
-                "transactionRef.kind": "EVM",
-                "transactionRef.hash": {"$type": "string"},
-            },
-        )
-        await self._confirmed_outflows.create_index(
-            [("transactionRef.runId", ASCENDING), ("transactionRef.id", ASCENDING)],
-            unique=True,
-            name="unique_confirmed_outflow_transaction_local",
-            partialFilterExpression={
-                "transactionRef.kind": "LOCAL",
-                "transactionRef.id": {"$type": "string"},
-            },
-        )
-        await self._confirmed_outflows.create_index(
-            [("purchaseId", ASCENDING)],
-            name="confirmed_outflow_purchase",
+            name=_TERMINAL_OUTCOME_INDEX_NAME,
+            partialFilterExpression=_TERMINAL_OUTCOME_INDEX_FILTER,
         )
         await self._heads.create_index(
             [("purchaseId", ASCENDING), ("eventCount", ASCENDING)], unique=True
@@ -1111,18 +790,12 @@ class MongoEvidenceRepository:
         expected_event_count: int,
         expected_head_event_hash: str,
         reservation_action: ReservationAction,
-        confirmed_outflow: ConfirmedOutflow | None = None,
     ) -> PaymentIntent:
         normalized_next = replace(
             next_intent,
             buyer_wallet_address=next_intent.buyer_wallet_address.lower(),
             token=next_intent.token.lower(),
             pay_to=next_intent.pay_to.lower(),
-            transaction_hash=(
-                next_intent.transaction_hash.lower()
-                if next_intent.transaction_hash is not None
-                else None
-            ),
         )
         immutable_fields = (
             "buyer_wallet_address",
@@ -1132,7 +805,6 @@ class MongoEvidenceRepository:
             "amount_units",
             "token",
             "pay_to",
-            "permit2_nonce",
             "transfer_method",
             "authorization_nonce",
             "claimed_at",
@@ -1150,25 +822,7 @@ class MongoEvidenceRepository:
                     if existing_document is None:
                         raise PaymentConflictError("payment intent is missing")
                     existing = _payment_intent_from_document(existing_document)
-                    same_state_submission_binding = (
-                        event_type == EventType.PAYMENT_SUBMISSION_IDENTIFIED
-                        and existing.state == PaymentIntentState.RECONCILIATION_REQUIRED
-                        and normalized_next.state
-                        == PaymentIntentState.RECONCILIATION_REQUIRED
-                        and existing.transaction_hash is None
-                        and normalized_next.transaction_hash is not None
-                    )
-                    same_state_reconciliation_check = (
-                        event_type == EventType.PAYMENT_RECONCILIATION_CHECKED
-                        and existing.state == PaymentIntentState.RECONCILIATION_REQUIRED
-                        and normalized_next.state
-                        == PaymentIntentState.RECONCILIATION_REQUIRED
-                        and normalized_next.reconciliation_attempt_count
-                        == existing.reconciliation_attempt_count + 1
-                    )
-                    if existing.state == normalized_next.state and not (
-                        same_state_submission_binding or same_state_reconciliation_check
-                    ):
+                    if existing.state == normalized_next.state:
                         _, events = await self._load_verified_chain(
                             purchase_id=normalized_next.purchase_id,
                             session=active_session,
@@ -1209,20 +863,11 @@ class MongoEvidenceRepository:
                         "token": existing.token,
                     }
                     policy_update: dict[str, Any] | None = None
-                    if reservation_action in ("settle", "release", "replace_with_actual"):
+                    if reservation_action in ("settle", "release"):
                         policy_filter["reservedUnits"] = {"$gte": existing.amount_units}
                         increments = {"reservedUnits": -existing.amount_units}
                         if reservation_action == "settle":
                             increments["spentUnits"] = existing.amount_units
-                        elif reservation_action == "replace_with_actual":
-                            if (
-                                confirmed_outflow is None
-                                or confirmed_outflow.token != existing.token
-                            ):
-                                raise PaymentConflictError(
-                                    "replace_with_actual requires a same-token confirmed outflow"
-                                )
-                            increments["spentUnits"] = confirmed_outflow.amount_units
                         policy_update = {"$inc": increments}
                     if policy_update is not None:
                         updated_policy = await self._wallet_policies.find_one_and_update(
@@ -1239,11 +884,6 @@ class MongoEvidenceRepository:
                         {
                             "_id": existing_document["_id"],
                             "state": existing.state.value,
-                            "reconciliation.attemptCount": (
-                                existing.reconciliation_attempt_count
-                                if isinstance(existing_document.get("reconciliation"), dict)
-                                else {"$exists": False}
-                            ),
                         },
                         _payment_intent_document(normalized_next),
                         session=active_session,
@@ -1261,56 +901,21 @@ class MongoEvidenceRepository:
                         anchored_at=occurred_at,
                         session=active_session,
                     )
-                    if confirmed_outflow is not None:
-                        await self._confirmed_outflows.insert_one(
-                            _confirmed_outflow_document(confirmed_outflow),
-                            session=active_session,
-                        )
                     return normalized_next
 
                 try:
                     return await session.with_transaction(transition_once)
                 except DuplicateKeyError as exc:
-                    index_name = str((exc.details or {}).get("errmsg", ""))
                     if event_type == EventType.PAYMENT_SETTLED:
                         raise PaymentConflictError(
                             "settlement transaction is already bound"
                         ) from exc
-                    if (
-                        "unique_confirmed_outflow_transaction" in index_name
-                        and confirmed_outflow is not None
-                        and await self._transaction_ref_belongs_elsewhere(confirmed_outflow)
-                    ):
-                        raise PaymentConflictError(
-                            "confirmed outflow transaction is already recorded"
-                        ) from exc
-                    # Same-purchase Phase 6 unique indexes are the second guard behind the
-                    # payment-intent CAS. A loser must re-read so an identical proof still
-                    # returns the committed result and a different proof still conflicts.
+                    # Per-purchase unique indexes are the second guard behind the
+                    # payment-intent CAS. A loser must re-read so an identical transition
+                    # still returns the committed result and a different one still conflicts.
                     await asyncio.sleep(min(0.001 * (2**attempt), 0.025))
                     continue
         raise PaymentConflictError("payment transition contention exceeded retries")
-
-    async def _transaction_ref_belongs_elsewhere(self, outflow: ConfirmedOutflow) -> bool:
-        """True when another purchase already recorded this exact transaction reference."""
-        reference = outflow.transaction_ref
-        query: dict[str, Any] = (
-            {"transactionRef.kind": "EVM", "transactionRef.hash": reference.hash}
-            if reference.kind == "EVM"
-            else {
-                "transactionRef.kind": "LOCAL",
-                "transactionRef.runId": reference.run_id,
-                "transactionRef.id": reference.id,
-            }
-        )
-        document = await self._confirmed_outflows.find_one(query, {"purchaseId": 1})
-        return document is not None and str(document["purchaseId"]) != outflow.purchase_id
-
-    async def list_confirmed_outflows(self, purchase_id: str) -> list[ConfirmedOutflow]:
-        cursor = self._confirmed_outflows.find({"purchaseId": purchase_id}).sort(
-            "terminalOutcomeKey", ASCENDING
-        )
-        return [_confirmed_outflow_from_document(document) async for document in cursor]
 
     async def list_events(self, purchase_id: str) -> list[EvidenceEvent]:
         cursor = self._events.find({"purchaseId": purchase_id}).sort("sequence", ASCENDING)

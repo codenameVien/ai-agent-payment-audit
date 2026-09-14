@@ -18,7 +18,6 @@ export interface PurchaseSummary {
   status: string;
   amount_units: number | null;
   token: string | null;
-  transaction_hash: string | null;
   audit_severity: "NORMAL" | "CAUTION" | "RISK" | null;
   finding_count: number;
   lifecycle_status: string;

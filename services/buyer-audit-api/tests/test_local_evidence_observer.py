@@ -5,8 +5,8 @@ from typing import Any
 
 import httpx
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.models import EventType, EvidenceEvent
 from buyer_audit_api.core.observer import (
     LocalQwenEvidenceObserver,

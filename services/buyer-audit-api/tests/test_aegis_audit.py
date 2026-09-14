@@ -8,10 +8,10 @@ from decimal import Decimal
 from typing import Any
 
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.audit import AuditEvaluator, AuditSeverity
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import EventType, EvidenceEvent

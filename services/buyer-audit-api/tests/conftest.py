@@ -5,9 +5,9 @@ from datetime import UTC, datetime
 from typing import Any
 
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.composition import AppContainer
 from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry

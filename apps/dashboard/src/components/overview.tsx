@@ -192,18 +192,7 @@ export function Overview() {
                           <SeverityBadge value={item.audit_severity} />
                         </td>
                         <td>
-                          {item.transaction_hash ? (
-                            <a
-                              className="chainLink"
-                              href={`https://sepolia.basescan.org/tx/${item.transaction_hash}`}
-                              target="_blank"
-                              rel="noreferrer"
-                            >
-                              {short(item.transaction_hash, 5)} ↗
-                            </a>
-                          ) : (
-                            <span className="muted">Facilitator 응답 기준</span>
-                          )}
+                          <span className="muted">Facilitator 응답 기준</span>
                         </td>
                       </tr>
                     ))}

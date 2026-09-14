@@ -11,7 +11,6 @@ from buyer_audit_api.core.models import (
     EvmTransactionRef,
     JsonObject,
     LocalTransactionRef,
-    ScenarioMetadata,
     TransactionRef,
 )
 
@@ -19,25 +18,6 @@ EVM_TRANSACTION_HASH_REGEX = r"^0x[0-9a-f]{64}$"
 LOCAL_TRANSACTION_ID_REGEX = r"^localtx:[0-9a-f]{32}:(payment|feedback):[0-9]{6}$"
 SCENARIO_RUN_ID_REGEX = r"^[0-9a-f]{32}$"
 SHA256_REGEX = r"^sha256:[0-9a-f]{64}$"
-
-
-class ScenarioRefModel(BaseModel):
-    """Attested synthetic-run provenance; never present on production evidence."""
-
-    model_config = ConfigDict(extra="forbid")
-
-    run_id: str = Field(pattern=SCENARIO_RUN_ID_REGEX)
-    scenario_id: str = Field(min_length=1)
-    catalog_version: str = Field(min_length=1)
-    catalog_hash: str = Field(min_length=1)
-
-    def to_core(self) -> ScenarioMetadata:
-        return ScenarioMetadata(
-            run_id=self.run_id,
-            scenario_id=self.scenario_id,
-            catalog_version=self.catalog_version,
-            catalog_hash=self.catalog_hash,
-        )
 
 
 class ScenarioResponse(BaseModel):
@@ -236,46 +216,24 @@ class InternalPaymentAuthorizeRequest(InternalPaymentClaimRequest):
 
 class InternalPaymentReconciliationRequest(InternalPaymentClaimRequest):
     reason: str = Field(min_length=1)
-    transaction_hash: str | None = Field(default=None, pattern=EVM_TRANSACTION_HASH_REGEX)
-    local_transaction_id: str | None = Field(default=None, pattern=LOCAL_TRANSACTION_ID_REGEX)
-    scenario: ScenarioRefModel | None = None
 
 
 class PaymentIntentResponse(BaseModel):
+    """The intent fields the payment execution module reads, and nothing more.
+
+    `quote_id` carries the decision's terms binding hash; the new runtime has no quote.
+    """
+
     purchase_id: str
     buyer_wallet_address: str
-    policy_date: str
-    quote_id: str
-    decision_event_hash: str
+    state: str
     amount_units: int
     token: str
     pay_to: str
-    permit2_nonce: str | None
-    transfer_method: str
     authorization_nonce: str | None
-    state: str
-    claimed_at: datetime
     decision_authorization_hash: str | None
-    decision_authorization_signature: str | None
-    authorized_at: datetime | None
-    reconciliation_reason: str | None
-    transaction_hash: str | None
-    block_number: int | None
-    transfer_log_index: int | None
-    settlement_verified_at: datetime | None
-    failure_reason: str | None
-    failed_at: datetime | None
-    reconciliation_attempt_count: int = 0
-    reconciliation_first_checked_at: datetime | None = None
-    reconciliation_last_checked_at: datetime | None = None
-    reconciliation_last_outcome: str | None = None
-    actual_transfer: dict[str, Any] | None = None
-    mismatched_fields: list[str] = Field(default_factory=list)
-    terminal_outcome_key: str | None = None
-    terminal_proof_ref: str | None = None
-    terminal_evidence_source: EvidenceSource | None = None
-    local_transaction_id: str | None = None
-    no_transfer_reason_code: str | None = None
+    claimed_at: datetime
+    quote_id: str
 
 
 class AuditFindingResponse(BaseModel):
@@ -322,7 +280,6 @@ class PurchaseSummaryResponse(BaseModel):
     status: str
     amount_units: int | None
     token: str | None
-    transaction_hash: str | None
     audit_severity: str | None
     finding_count: int
     audit_covers_head: bool = False
@@ -331,8 +288,6 @@ class PurchaseSummaryResponse(BaseModel):
     audit_status: str
     evidence_source: EvidenceSource | None = None
     transaction_ref: EvmTransactionRefModel | LocalTransactionRefModel | None = None
-    scenario: ScenarioResponse | None = None
-    mismatched_fields: list[str] = Field(default_factory=list)
 
 
 class PurchaseDetailResponse(BaseModel):
@@ -356,7 +311,6 @@ class AuditAlertResponse(BaseModel):
     observed: dict[str, Any] | None = None
     mismatched_fields: list[str] = Field(default_factory=list)
     evidence_source: EvidenceSource | None = None
-    scenario: ScenarioResponse | None = None
 
 
 class AegisDecisionEvidenceResponse(BaseModel):

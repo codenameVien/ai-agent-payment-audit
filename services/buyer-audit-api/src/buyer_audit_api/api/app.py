@@ -128,7 +128,6 @@ def _redact(value: object) -> tuple[object, bool]:
 
 _PROJECTIONS = PurchaseProjectionService()
 _AUDIT_READER = AuditReportReader()
-_TRANSACTION_PROOF_EVENT_TYPES = frozenset({EventType.PAYMENT_SETTLED, EventType.PAYMENT_FAILED})
 
 
 def _scenario_response(scenario: ScenarioMetadata | None) -> ScenarioResponse | None:
@@ -154,25 +153,10 @@ def _event_evidence_source(event: EvidenceEvent) -> EvidenceSource | None:
 def _event_transaction_ref(event: EvidenceEvent) -> TransactionRef | None:
     """Only validated unions reach the response; raw payload strings are never promoted."""
     raw = event.payload.get("transactionRef")
-    if raw is not None:
-        try:
-            return transaction_ref_from_payload(raw)
-        except ValueError:
-            return None
-    if event.type not in _TRANSACTION_PROOF_EVENT_TYPES:
-        return None
-    legacy_hash = event.payload.get("transactionHash")
-    if not isinstance(legacy_hash, str):
+    if raw is None:
         return None
     try:
-        return transaction_ref_from_payload(
-            {
-                "kind": "EVM",
-                "hash": legacy_hash.lower(),
-                "chainId": 84532,
-                "evidenceSource": EvidenceSource.BASE_SEPOLIA_VERIFIED.value,
-            }
-        )
+        return transaction_ref_from_payload(raw)
     except ValueError:
         return None
 
@@ -246,7 +230,6 @@ def _summary_response(projection: PurchaseProjection) -> PurchaseSummaryResponse
         status=projection.lifecycle_status,
         amount_units=projection.amount_units,
         token=projection.token,
-        transaction_hash=projection.legacy_transaction_hash,
         audit_severity=projection.audit_severity,
         finding_count=projection.finding_count,
         audit_covers_head=projection.audit_covers_head,
@@ -255,8 +238,6 @@ def _summary_response(projection: PurchaseProjection) -> PurchaseSummaryResponse
         audit_status=projection.audit_status.value,
         evidence_source=projection.evidence_source,
         transaction_ref=transaction_ref_response(projection.transaction_ref),
-        scenario=_scenario_response(projection.scenario),
-        mismatched_fields=list(projection.mismatched_fields),
     )
 
 
@@ -265,47 +246,18 @@ def _summary(events: list[EvidenceEvent]) -> PurchaseSummaryResponse:
 
 
 def _payment_intent_response(intent: PaymentIntent) -> PaymentIntentResponse:
+    """Exactly what the payment execution module reads; the signature itself never leaves."""
     return PaymentIntentResponse(
         purchase_id=intent.purchase_id,
         buyer_wallet_address=intent.buyer_wallet_address,
-        policy_date=intent.policy_date,
-        quote_id=intent.quote_id,
-        decision_event_hash=intent.decision_event_hash,
+        state=intent.state.value,
         amount_units=intent.amount_units,
         token=intent.token,
         pay_to=intent.pay_to,
-        permit2_nonce=intent.permit2_nonce,
-        transfer_method=intent.transfer_method,
         authorization_nonce=intent.authorization_nonce,
-        state=intent.state.value,
-        claimed_at=intent.claimed_at,
         decision_authorization_hash=intent.decision_authorization_hash,
-        decision_authorization_signature=intent.decision_authorization_signature,
-        authorized_at=intent.authorized_at,
-        reconciliation_reason=intent.reconciliation_reason,
-        transaction_hash=intent.transaction_hash,
-        block_number=intent.block_number,
-        transfer_log_index=intent.transfer_log_index,
-        settlement_verified_at=intent.settlement_verified_at,
-        failure_reason=intent.failure_reason,
-        failed_at=intent.failed_at,
-        reconciliation_attempt_count=intent.reconciliation_attempt_count,
-        reconciliation_first_checked_at=intent.reconciliation_first_checked_at,
-        reconciliation_last_checked_at=intent.reconciliation_last_checked_at,
-        reconciliation_last_outcome=(
-            intent.reconciliation_last_outcome.value
-            if intent.reconciliation_last_outcome is not None
-            else None
-        ),
-        actual_transfer=(
-            intent.actual_transfer.to_payload() if intent.actual_transfer is not None else None
-        ),
-        mismatched_fields=list(intent.mismatched_fields),
-        terminal_outcome_key=intent.terminal_outcome_key,
-        terminal_proof_ref=intent.terminal_proof_ref,
-        terminal_evidence_source=intent.terminal_evidence_source,
-        local_transaction_id=intent.local_transaction_id,
-        no_transfer_reason_code=intent.no_transfer_reason_code,
+        claimed_at=intent.claimed_at,
+        quote_id=intent.quote_id,
     )
 
 
@@ -726,9 +678,6 @@ def create_app(container: AppContainer) -> FastAPI:
                 await payment_service.require_reconciliation(
                     purchase_id=body.purchase_id,
                     reason=body.reason,
-                    transaction_hash=body.transaction_hash,
-                    local_transaction_id=body.local_transaction_id,
-                    scenario=(body.scenario.to_core() if body.scenario is not None else None),
                 )
             )
         except (
@@ -850,7 +799,6 @@ def create_app(container: AppContainer) -> FastAPI:
                     observed=finding.observed,
                     mismatched_fields=list(finding.mismatched_fields),
                     evidence_source=projection.evidence_source,
-                    scenario=_scenario_response(projection.scenario),
                 )
                 for finding in report.findings
             )
