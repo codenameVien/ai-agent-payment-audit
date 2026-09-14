@@ -1,5 +1,5 @@
 /**
- * Server-side guardrails for the opt-in live PBLC path.
+ * Server-side guardrails for the opt-in live AEGIS path.
  *
  * These tests never contact a Facilitator or a chain. They prove that a browser cannot
  * turn on settlement: the process must hold both an explicit approval flag and the key
@@ -23,8 +23,8 @@ function liveEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
   return {
     AEGIS_EXECUTION_MODE: "live",
     AEGIS_REAL_PAYMENT_APPROVED: "yes",
-    PBLC_USER_PRIVATE_KEY: PRIVATE_KEY,
-    PBLC_USER_ADDRESS: ACCOUNT.address,
+    AEGIS_USER_PRIVATE_KEY: PRIVATE_KEY,
+    AEGIS_USER_ADDRESS: ACCOUNT.address,
     INTERNAL_SERVICE_TOKEN: "internal-test-token",
     GATEWAY_SERVICE_TOKEN: "gateway-test-token",
     EVIDENCE_API_URL: "http://127.0.0.1:1",
@@ -41,12 +41,26 @@ test("live executor requires the explicit approval gate and configured wallet ke
     /AEGIS_REAL_PAYMENT_APPROVED=yes/,
   );
   assert.throws(
-    () => createPaymentExecutor(liveEnv({ PBLC_USER_ADDRESS: "0x0000000000000000000000000000000000000001" })),
-    /does not match PBLC_USER_ADDRESS/,
+    () => createPaymentExecutor(liveEnv({ AEGIS_USER_ADDRESS: "0x0000000000000000000000000000000000000001" })),
+    /does not match AEGIS_USER_ADDRESS/,
   );
 
   const executor = createPaymentExecutor(liveEnv());
   assert.equal(executor.buyerAddress.toLowerCase(), ACCOUNT.address.toLowerCase());
+});
+
+test("live executor never falls back to the mock key or a pre-AEGIS key name", () => {
+  assert.throws(
+    () =>
+      createPaymentExecutor(
+        liveEnv({
+          AEGIS_USER_PRIVATE_KEY: "",
+          AEGIS_SIGNER_PRIVATE_KEY: PRIVATE_KEY,
+          PBLC_USER_PRIVATE_KEY: PRIVATE_KEY,
+        }),
+      ),
+    /AEGIS_USER_PRIVATE_KEY is required/,
+  );
 });
 
 test("live Provider Gateway reports its server-side execution mode", async () => {

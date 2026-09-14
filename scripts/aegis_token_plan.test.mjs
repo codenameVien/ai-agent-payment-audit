@@ -234,7 +234,7 @@ test("the plan is marked plan-only, approval pending, with a suggestion-only tes
     status: "SUGGESTION_ONLY_NOT_EXECUTED",
   });
   assert.match(result.notes.join("\n"), /nominal accounting conversion/);
-  assert.match(result.notes.join("\n"), /PBLC V1\/V2 contracts, addresses and transactions/);
+  assert.match(result.notes.join("\n"), /Existing token contracts, addresses and transactions/);
   assert.match(result.deployment.method, /no factory, no CREATE2/);
 });
 

@@ -695,7 +695,7 @@ def test_the_local_composition_has_no_siwe_and_no_phase6_surface(
 def test_the_legacy_composition_still_serves_its_historical_surfaces(
     container: AppContainer,
 ) -> None:
-    """With no local owner configured, the PBLC history composition is untouched."""
+    """With no local owner configured, the pre-AEGIS history composition is untouched."""
     with TestClient(create_app(container)) as client:
         challenge = client.post(
             "/auth/siwe/challenge",

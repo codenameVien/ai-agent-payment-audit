@@ -103,7 +103,7 @@ class AppContainer:
     local_allowed_hosts: tuple[str, ...] = ("localhost", "127.0.0.1")
     #: Server-fixed settlement execution mode. A request can never label its own record.
     aegis_execution_mode: str = "mock"
-    payment_token_symbol: str = "PBLC"
+    payment_token_symbol: str = "AEGIS"
     token_balance_reader: TokenBalanceReader | None = None
     ai_inference_workflow: AiInferenceDecisionWorkflow | None = None
     aegis_workflow: AegisDecisionWorkflow | None = None
@@ -318,9 +318,9 @@ def build_container(settings: Settings) -> AppContainer:
             name=settings.payment_token_name,
             symbol=settings.payment_token_symbol,
             decimals=6,
-            address=settings.pblc_token_address.lower(),
+            address=settings.aegis_token_address.lower(),
             chain_id=settings.siwe_chain_id,
-            status=settings.pblc_token_status,
+            status=settings.aegis_token_status,
         ),
     )
     return AppContainer(

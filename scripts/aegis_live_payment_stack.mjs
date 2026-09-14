@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 /**
- * Local runtime for a real Base Sepolia PBLC payment with Mock Provider output.
+ * Local runtime for a real Base Sepolia AEGIS payment with Mock Provider output.
  *
  * It deliberately does not create a purchase, sign an authorization, call a Facilitator,
  * or broadcast a transaction at startup.  Those actions occur only after the user checks
@@ -185,8 +185,8 @@ if (env.AEGIS_EXECUTION_MODE !== "live") {
 if (env.AEGIS_REAL_PAYMENT_APPROVED !== "yes") {
   throw new Error("Refusing to start: set AEGIS_REAL_PAYMENT_APPROVED=yes in .env.local");
 }
-required(env, "PBLC_USER_ADDRESS");
-required(env, "PBLC_USER_PRIVATE_KEY");
+required(env, "AEGIS_USER_ADDRESS");
+required(env, "AEGIS_USER_PRIVATE_KEY");
 required(env, "MONGODB_URI");
 ensureEphemeralServiceToken(env, "INTERNAL_SERVICE_TOKEN");
 ensureEphemeralServiceToken(env, "ADMIN_SERVICE_TOKEN");
@@ -285,8 +285,8 @@ try {
   });
   if (!addressResponse.ok) throw new Error("payment executor did not disclose its configured payer address");
   const { buyerWalletAddress } = await addressResponse.json();
-  if (String(buyerWalletAddress).toLowerCase() !== env.PBLC_USER_ADDRESS.toLowerCase()) {
-    throw new Error("payment executor payer does not match PBLC_USER_ADDRESS");
+  if (String(buyerWalletAddress).toLowerCase() !== env.AEGIS_USER_ADDRESS.toLowerCase()) {
+    throw new Error("payment executor payer does not match AEGIS_USER_ADDRESS");
   }
 
   const headers = {
@@ -305,7 +305,7 @@ try {
     body: JSON.stringify({
       buyer_wallet_address: buyerWalletAddress,
       policy_date: new Date().toISOString().slice(0, 10),
-      token: env.PBLC_TOKEN_ADDRESS,
+      token: env.AEGIS_TOKEN_ADDRESS,
       per_transaction_limit_units: Number(env.AEGIS_PER_TRANSACTION_LIMIT_UNITS || "100000"),
       daily_limit_units: Number(env.AEGIS_DAILY_LIMIT_UNITS || "1000000"),
     }),
@@ -325,8 +325,8 @@ try {
     executor: executorUrl,
     facilitator: facilitatorUrl.toString(),
     payer: buyerWalletAddress,
-    token: env.PBLC_TOKEN_ADDRESS,
-    tokenSymbol: env.PAYMENT_TOKEN_SYMBOL || "PBLC",
+    token: env.AEGIS_TOKEN_ADDRESS,
+    tokenSymbol: env.PAYMENT_TOKEN_SYMBOL || "AEGIS",
     priorityClassifier: env.AEGIS_PRIORITY_CLASSIFIER || "deterministic",
     evidenceMongo: "project-local replica set",
     providerOutput: "mock",

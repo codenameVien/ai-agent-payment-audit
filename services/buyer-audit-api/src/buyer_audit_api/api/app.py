@@ -543,7 +543,7 @@ def create_app(container: AppContainer) -> FastAPI:
     # aa-three-factor-v1 runs as a single-user local demo: the owner identity is server
     # configuration, never a browser-selected value, and SIWE is absent from this
     # composition rather than hidden behind the UI. An empty value keeps the historical
-    # SIWE login surface for reading PBLC history.
+    # SIWE login surface for reading pre-AEGIS history.
     local_owner = (container.local_owner_address or "").strip().lower()
     allowed_origins = frozenset(
         origin.strip().lower().rstrip("/")

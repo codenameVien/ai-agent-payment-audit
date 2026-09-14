@@ -42,7 +42,7 @@ const ALLOWED_OPTIONS = new Set([
 const PROVIDERS = ["openai", "anthropic", "google"];
 const NETWORK = "eip155:84532";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
-const PBLC_V2_ADDRESS = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b";
+const AEGIS_TOKEN_ADDRESS = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b";
 const LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -367,8 +367,8 @@ export async function startAegisStack(options = {}) {
         COMMERCE_GATEWAY_URL: executorUrl,
         AEGIS_LOCAL_OWNER_ADDRESS: LOCAL_OWNER,
         AEGIS_LOCAL_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:3100",
-        PBLC_TOKEN_ADDRESS: PBLC_V2_ADDRESS,
-        PBLC_TOKEN_STATUS: "deployed-base-sepolia",
+        AEGIS_TOKEN_ADDRESS,
+        AEGIS_TOKEN_STATUS: "deployed-base-sepolia",
         PAYMENT_TOKEN_NAME: "AEGIS",
         PAYMENT_TOKEN_SYMBOL: "AEGIS",
         AEGIS_PRIORITY_CLASSIFIER: options.priorityClassifier || "deterministic",
@@ -467,7 +467,7 @@ export async function startAegisStack(options = {}) {
         policy_date: new Date().toISOString().slice(0, 10),
         // The wallet policy must use the identical asset configured in the decision;
         // otherwise the Evidence API correctly refuses reservation before signing.
-        token: PBLC_V2_ADDRESS,
+        token: AEGIS_TOKEN_ADDRESS,
         per_transaction_limit_units: options.perTransactionLimitUnits ?? 100_000,
         daily_limit_units: options.dailyLimitUnits ?? 1_000_000,
       }),

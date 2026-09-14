@@ -50,15 +50,15 @@ class Settings(BaseSettings):
     aegis_observer_mode: str = "off"
     aegis_observer_timeout_seconds: float = 30.0
     aegis_checkpoint_mode: str = "off"
-    # User-owned six-decimal ERC-3009 PBLC on Base Sepolia. Whether a request can
+    # User-owned six-decimal ERC-3009 AEGIS token on Base Sepolia. Whether a request can
     # settle is controlled only by the server-side execution mode and approval gate.
-    pblc_token_address: str = "0xe75013d333bebb90b321dd658440c10b5a0face8"
-    pblc_token_status: str = "deployed-base-sepolia"
-    payment_token_name: str = "PBL Agent Credit"
-    payment_token_symbol: str = "PBLC"
+    aegis_token_address: str = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b"
+    aegis_token_status: str = "deployed-base-sepolia"
+    payment_token_name: str = "AEGIS"
+    payment_token_symbol: str = "AEGIS"
     # Single-user local demo identity. This is server configuration, not a login: the
     # browser can never choose it. Clearing it restores the historical SIWE composition
-    # for reading PBLC history, and that legacy mode is manual only.
+    # for reading pre-AEGIS history, and that legacy mode is manual only.
     aegis_local_owner_address: str = "0x00000000000000000000000000000000000a6e15"
     aegis_local_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     aegis_local_allowed_hosts: str = "localhost,127.0.0.1"
