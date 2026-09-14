@@ -150,7 +150,7 @@ export function Overview() {
             </div>
             {purchases.length === 0 ? (
               <Empty>
-                이 로그인 계정에 연결된 거래가 아직 없습니다. 다른 사용자의
+                이 소유자에 연결된 거래가 아직 없습니다. 다른 사용자의
                 테스트 거래는 섞어서 표시하지 않습니다.
               </Empty>
             ) : (

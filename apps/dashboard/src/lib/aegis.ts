@@ -61,7 +61,7 @@ export function isAegisRequest(requestSummary: unknown): boolean {
 
 /**
  * Storage key of a pending `aegis-aa-v1` request. It is deliberately not one of the
- * keys the superseded PBLC runtime wrote: an id left behind by that runtime must never
+ * keys an earlier runtime wrote: an id left behind by that runtime must never
  * become the target of a new run.
  */
 export const AEGIS_PENDING_PURCHASE_KEY = "aegis:token-v1:purchase-request-id";
