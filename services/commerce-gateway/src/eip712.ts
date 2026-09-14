@@ -1,24 +1,7 @@
-import { hashTypedData, type Address, type Hex, type TypedDataDomain } from "viem";
+import type { Address, Hex } from "viem";
 import { privateKeyToAccount } from "viem/accounts";
 
-import type {
-  DecisionSigner,
-  Erc3009DecisionAuthorization,
-  Erc3009Authorization,
-  Erc3009Signer,
-} from "./contracts.js";
-
-export const ERC3009_DECISION_AUTHORIZATION_TYPES = {
-  Erc3009DecisionAuthorization: [
-    { name: "purchaseId", type: "string" },
-    { name: "decisionEventHash", type: "bytes32" },
-    { name: "quoteId", type: "string" },
-    { name: "amount", type: "uint256" },
-    { name: "token", type: "address" },
-    { name: "payTo", type: "address" },
-    { name: "authorizationNonce", type: "bytes32" },
-  ],
-} as const;
+import type { Erc3009Authorization, Erc3009Signer } from "./contracts.js";
 
 export const TRANSFER_WITH_AUTHORIZATION_TYPES = {
   TransferWithAuthorization: [
@@ -30,48 +13,6 @@ export const TRANSFER_WITH_AUTHORIZATION_TYPES = {
     { name: "nonce", type: "bytes32" },
   ],
 } as const;
-
-export interface DecisionDomainConfig {
-  chainId: number;
-  verifyingContract: Address;
-}
-
-function decisionDomain(config: DecisionDomainConfig): TypedDataDomain {
-  return {
-    name: "PBL Decision Authorization",
-    version: "1",
-    chainId: config.chainId,
-    verifyingContract: config.verifyingContract,
-  };
-}
-
-export class LocalDecisionSigner implements DecisionSigner {
-  readonly #account;
-  readonly #domain: TypedDataDomain;
-
-  constructor(privateKey: Hex, config: DecisionDomainConfig) {
-    this.#account = privateKeyToAccount(privateKey);
-    this.#domain = decisionDomain(config);
-  }
-
-  async signErc3009(
-    message: Erc3009DecisionAuthorization,
-  ): Promise<{ hash: Hex; signature: Hex }> {
-    const hash = hashTypedData({
-      domain: this.#domain,
-      types: ERC3009_DECISION_AUTHORIZATION_TYPES,
-      primaryType: "Erc3009DecisionAuthorization",
-      message,
-    });
-    const signature = await this.#account.signTypedData({
-      domain: this.#domain,
-      types: ERC3009_DECISION_AUTHORIZATION_TYPES,
-      primaryType: "Erc3009DecisionAuthorization",
-      message,
-    });
-    return { hash, signature };
-  }
-}
 
 export class LocalErc3009Signer implements Erc3009Signer {
   readonly #account;
