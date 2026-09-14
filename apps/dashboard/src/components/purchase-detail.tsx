@@ -3,7 +3,6 @@
 import { useEffect, useState } from "react";
 
 import { AegisPurchaseDecision } from "@/features/ai-inference/aegis-decision";
-import { AiInferencePurchaseEvidence } from "@/features/ai-inference/purchase-evidence";
 import { EvidenceCheckpoints } from "./evidence-checkpoints";
 import { isAegisRequest, readAegisSettlement } from "@/lib/aegis";
 import { api, short, paymentTokenSymbol } from "@/lib/api";
@@ -30,8 +29,8 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
 
   const paymentNeedsReview =
     detail.summary.status === "PAYMENT_RECONCILIATION_REQUIRED";
-  // The stored request schema decides which policy this purchase was judged under.
-  // Historical purchases keep their signed-quote evidence exactly as it was recorded.
+  // The stored request schema decides whether the aegis-aa-v1 decision and settlement
+  // readers apply to this purchase's evidence.
   const aegis = isAegisRequest(detail.summary.request_summary);
   const settlement = aegis ? readAegisSettlement(detail.events) : null;
 
@@ -45,22 +44,11 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
           <SeverityBadge value={detail.summary.audit_severity} />
           <PaymentAmount
             amountUnits={detail.summary.amount_units}
-            transactionHash={detail.summary.transaction_hash}
             status={detail.summary.status}
-            policy={aegis ? "aegis" : "legacy"}
             paymentStatus={detail.summary.payment_status}
             executionMode={settlement?.executionMode}
             tokenAddress={detail.summary.token}
           />
-          {detail.summary.transaction_hash && (
-            <a
-              href={`https://sepolia.basescan.org/tx/${detail.summary.transaction_hash}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              BaseScan 거래 ↗
-            </a>
-          )}
         </div>
       </div>
       <section className="twoCol">
@@ -104,10 +92,8 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
           )}
         </article>
       </section>
-      {detail.summary.domain !== "ai_inference" ? null : aegis ? (
+      {detail.summary.domain === "ai_inference" && aegis && (
         <AegisPurchaseDecision events={detail.events} />
-      ) : (
-        <AiInferencePurchaseEvidence events={detail.events} />
       )}
       <EvidenceCheckpoints events={detail.events} />
       {aegis && settlement !== null && (

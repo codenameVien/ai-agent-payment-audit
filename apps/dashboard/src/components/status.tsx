@@ -1,32 +1,27 @@
 import { credits, paymentTokenSymbol } from "@/lib/api";
 
 /**
- * `aegis` purchases use a Facilitator response as their settlement basis. A live
- * settlement may carry the transaction reference the Facilitator submitted; that is
- * intentionally distinct from application-side receipt verification.
+ * Purchases use a Facilitator response as their settlement basis. A live settlement
+ * may carry the transaction reference the Facilitator submitted; that is intentionally
+ * distinct from application-side receipt verification.
  */
-export type PurchasePolicy = "legacy" | "aegis";
 
 const purchaseStatusLabels: Record<string, string> = {
   REQUESTED: "요청 접수",
-  QUOTED: "견적 수집",
   DECIDED: "선택 완료",
   PAYMENT_INTENT_CLAIMED: "결제 준비",
   PAYMENT_AUTHORIZED: "결제 승인됨",
-  PAYMENT_SUBMISSION_IDENTIFIED: "거래 확인 중",
   PAYMENT_SETTLED: "결제 완료",
   PAYMENT_RECONCILIATION_REQUIRED: "결제 확인 필요",
   PAYMENT_FAILED: "결제 실패",
-  DELIVERY_STAGED: "응답 전달 준비",
   DELIVERED: "응답 완료",
   AUDITED: "처리 완료",
-  REPUTATION_RECORDED: "평판 기록 완료",
 };
 
 function purchaseStatusTone(value: string): string {
   if (value === "PAYMENT_RECONCILIATION_REQUIRED") return "caution";
   if (value === "PAYMENT_FAILED") return "risk";
-  if (["PAYMENT_SETTLED", "DELIVERED", "AUDITED", "REPUTATION_RECORDED"].includes(value)) {
+  if (["PAYMENT_SETTLED", "DELIVERED", "AUDITED"].includes(value)) {
     return "normal";
   }
   return "pending";
@@ -55,65 +50,39 @@ export function SeverityBadge({ value }: { value: string | null }) {
 
 export function PaymentAmount({
   amountUnits,
-  transactionHash,
   status,
-  policy = "legacy",
   paymentStatus,
   executionMode,
   tokenAddress,
 }: {
   amountUnits: number | null;
-  transactionHash: string | null;
   status: string;
-  policy?: PurchasePolicy;
   paymentStatus?: string;
   executionMode?: string | null;
   tokenAddress?: string | null;
 }) {
   if (amountUnits === null) return <span className="muted">—</span>;
-  if (policy === "aegis") {
-    const settled = (paymentStatus ?? status) === "PAYMENT_SETTLED";
-    const live = executionMode === "live";
-    const mock = executionMode === "mock";
-    return (
-      <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
-        <strong>
-          {settled ? "" : "예정 "}
-          {credits(amountUnits)} {paymentTokenSymbol(tokenAddress)}
-        </strong>
-        <small>
-          {settled
-            ? live
-              ? "Facilitator 응답 기준 정산 · 실제 토큰 전송 제출"
-              : mock
-                ? "Facilitator 응답 기준 정산 · Mock 결제"
-                : "Facilitator 응답 기준 정산"
-            : live
-              ? "정산 미확정 · 실제 결제 모드"
-              : mock
-                ? "정산 미확정 · Mock 결제"
-                : "정산 미확정"}
-        </small>
-      </span>
-    );
-  }
-  const confirmed =
-    transactionHash !== null &&
-    ["PAYMENT_SETTLED", "DELIVERY_STAGED", "DELIVERED", "AUDITED", "REPUTATION_RECORDED"].includes(
-      status,
-    );
+  const settled = (paymentStatus ?? status) === "PAYMENT_SETTLED";
+  const live = executionMode === "live";
+  const mock = executionMode === "mock";
   return (
-    <span className={`paymentAmount ${confirmed ? "confirmed" : "unconfirmed"}`}>
+    <span className={`paymentAmount ${settled ? "confirmed" : "unconfirmed"}`}>
       <strong>
-        {confirmed ? "" : "예정 "}
-        {credits(amountUnits)} PBLC
+        {settled ? "" : "예정 "}
+        {credits(amountUnits)} {paymentTokenSymbol(tokenAddress)}
       </strong>
       <small>
-        {confirmed
-          ? "온체인 결제 확인"
-          : transactionHash
-            ? "거래 해시 존재 · 결제 미확정"
-            : "결제 미확인"}
+        {settled
+          ? live
+            ? "Facilitator 응답 기준 정산 · 실제 토큰 전송 제출"
+            : mock
+              ? "Facilitator 응답 기준 정산 · Mock 결제"
+              : "Facilitator 응답 기준 정산"
+          : live
+            ? "정산 미확정 · 실제 결제 모드"
+            : mock
+              ? "정산 미확정 · Mock 결제"
+              : "정산 미확정"}
       </small>
     </span>
   );

@@ -6,7 +6,6 @@ const requestUrl = new URL("../src/components/purchase-request.tsx", import.meta
 const overviewUrl = new URL("../src/components/overview.tsx", import.meta.url);
 const homeUrl = new URL("../src/app/page.tsx", import.meta.url);
 const dashboardUrl = new URL("../src/app/dashboard/page.tsx", import.meta.url);
-const legacyUrl = new URL("../src/app/experiments/page.tsx", import.meta.url);
 const navUrl = new URL("../src/components/Nav.tsx", import.meta.url);
 const shellUrl = new URL("../src/components/app-shell.tsx", import.meta.url);
 const statusUrl = new URL("../src/components/status.tsx", import.meta.url);
@@ -91,33 +90,32 @@ test("a stored id is verified before any resume and blocks the run when unverifi
   assert.equal([...source.matchAll(/AbortSignal\.timeout\(8_000\)/g)].length, 2);
 });
 
-test("audit dashboard is read-only and legacy experiments redirects to request", async () => {
-  const [overview, home, dashboard, legacy, nav, shell] = await Promise.all([
+test("audit dashboard is read-only and the navigation only links audit surfaces", async () => {
+  const [overview, home, dashboard, nav, shell] = await Promise.all([
     readFile(overviewUrl, "utf8"),
     readFile(homeUrl, "utf8"),
     readFile(dashboardUrl, "utf8"),
-    readFile(legacyUrl, "utf8"),
     readFile(navUrl, "utf8"),
     readFile(shellUrl, "utf8"),
   ]);
   assert.doesNotMatch(overview, /<form|PurchaseRequest|ExperimentRunner|POST \/purchases/);
   assert.match(home, /<Overview/);
   assert.match(dashboard, /<Overview/);
-  assert.match(legacy, /redirect\("\/request"\)/);
-  assert.doesNotMatch(nav, /\/request|\/experiments/);
+  // The purchase surface is reached on its own, and the removed screens are not linked.
+  assert.doesNotMatch(nav, /\/request|\/experiments|\/agents|\/login/);
   assert.match(shell, /pathname\.startsWith\("\/request"\)/);
   assert.match(shell, /Buyer Agent Request/);
 });
 
-test("purchase detail branches on the stored policy instead of one merged view", async () => {
+test("purchase detail renders the aegis decision from the stored request schema", async () => {
   const [detail, decision] = await Promise.all([
     readFile(purchaseDetailUrl, "utf8"),
     readFile(aegisDecisionUrl, "utf8"),
   ]);
   assert.match(detail, /isAegisRequest\(detail\.summary\.request_summary\)/);
   assert.match(detail, /<AegisPurchaseDecision events=\{detail\.events\}/);
-  // Historical purchases keep their signed-quote evidence view.
-  assert.match(detail, /<AiInferencePurchaseEvidence events=\{detail\.events\}/);
+  // The signed-quote evidence table of the superseded runtime is gone for good.
+  assert.doesNotMatch(detail, /AiInferencePurchaseEvidence|purchase-evidence|legacy/);
   assert.match(decision, /벤치마크 참고 추정치/);
   assert.match(decision, /fixture 스냅샷의 가격·시간·성능 값은 저장된/);
   assert.match(decision, /Provider 응답은 Mock으로 기록됩니다/);
@@ -136,13 +134,13 @@ test("unresolved payments are not presented as actively auditing or paid", async
   assert.match(status, /PAYMENT_RECONCILIATION_REQUIRED: "결제 확인 필요"/);
   assert.match(status, /PAYMENT_FAILED: "결제 실패"/);
   assert.match(status, /"감사 미실행"/);
-  assert.match(status, /const confirmed =/);
-  assert.match(status, /"PAYMENT_SETTLED"/);
-  assert.match(status, /confirmed \? "" : "예정 "/);
-  assert.match(status, /"거래 해시 존재 · 결제 미확정"/);
-  assert.match(status, /"온체인 결제 확인"/);
+  assert.match(status, /\(paymentStatus \?\? status\) === "PAYMENT_SETTLED"/);
+  assert.match(status, /settled \? "" : "예정 "/);
+  assert.match(status, /"정산 미확정"/);
+  // A stored transaction hash alone never upgrades an amount to a confirmed payment.
+  assert.doesNotMatch(status, /transactionHash|온체인 결제 확인|PBLC/);
   assert.match(overview, /<PurchaseStatusBadge value=\{item.status\}/);
-  assert.match(overview, /거래 해시 없음/);
+  assert.doesNotMatch(overview, /온체인 결제 확인|과거 정책/);
   assert.match(purchaseList, /<PaymentAmount/);
   assert.match(purchaseDetail, /결제 결과가 확정되지 않아 감사를 실행하지 않았습니다/);
 });
@@ -152,17 +150,18 @@ test("aegis settlement is never presented as an independently verified chain pay
     readFile(statusUrl, "utf8"),
     readFile(overviewUrl, "utf8"),
   ]);
-  assert.match(status, /policy === "aegis"/);
+  // One settlement basis, no policy switch left to fall back to.
+  assert.doesNotMatch(status, /policy|legacy/);
   assert.match(status, /Facilitator 응답 기준 정산 · Mock 결제/);
   assert.match(status, /Facilitator 응답 기준 정산 · 실제 토큰 전송 제출/);
-  // The aegis branch resolves from its own Facilitator basis, not by claiming an
+  // The amount resolves from its Facilitator basis, not by claiming an
   // application-side chain receipt verification.
-  const aegisBranch = status.slice(
-    status.indexOf('if (policy === "aegis")'),
-    status.indexOf("const confirmed ="),
+  const paymentAmount = status.slice(
+    status.indexOf("export function PaymentAmount"),
+    status.indexOf("export function Empty"),
   );
-  assert.ok(aegisBranch.length > 0);
-  assert.doesNotMatch(aegisBranch, /온체인 결제 확인/);
+  assert.ok(paymentAmount.length > 0);
+  assert.doesNotMatch(paymentAmount, /온체인 결제 확인|basescan/i);
   assert.match(overview, /item\.payment_status === "PAYMENT_SETTLED"/);
   assert.match(overview, /Facilitator 응답 기준/);
   assert.doesNotMatch(overview, /BASE SEPOLIA LIVE/);

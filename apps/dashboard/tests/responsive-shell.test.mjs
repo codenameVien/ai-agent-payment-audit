@@ -4,8 +4,6 @@ import test from "node:test";
 
 const cssUrl = new URL("../src/app/globals.css", import.meta.url);
 const navUrl = new URL("../src/components/Nav.tsx", import.meta.url);
-const agentsUrl = new URL("../src/components/agents.tsx", import.meta.url);
-const agentsPageUrl = new URL("../src/app/agents/page.tsx", import.meta.url);
 
 /** The declaration block of a top-level rule, matched at the start of a line. */
 function ruleBlock(css, selector) {
@@ -61,7 +59,7 @@ test("flex and grid containers that can hold a table are allowed to shrink", asy
   const css = await readFile(cssUrl, "utf8");
   assert.match(ruleBlock(css, ".panel"), /min-width: 0/);
   assert.match(css, /\.auditPrimary, \.auditSidebar \{[^}]*min-width: 0/);
-  assert.match(css, /\.twoCol > \*, \.experimentLayout > \*, \.cardGrid > \* \{ min-width: 0; \}/);
+  assert.match(css, /\.twoCol > \* \{ min-width: 0; \}/);
   assert.match(ruleBlock(css, "dd"), /overflow-wrap: anywhere/);
   assert.match(ruleBlock(css, ".auditIntro h1, .pageHead h1"), /overflow-wrap: break-word/);
 });
@@ -73,7 +71,7 @@ test("the narrow breakpoint keeps the navigation reachable", async () => {
   // `flex: 1` on the base rule keeps a zero basis, so the navigation needs an explicit
   // full basis to get its own row next to the brand and the live status.
   assert.match(narrow, /\.topbar nav \{ order: 3; flex: 0 0 100%; min-width: 0; overflow: auto/);
-  for (const selector of [".walletList", ".twoCol", ".experimentLayout", ".cardGrid", ".alert"]) {
+  for (const selector of [".walletList", ".twoCol", ".alert"]) {
     assert.match(
       narrow,
       new RegExp(`\\${selector} \\{ grid-template-columns: minmax\\(0, 1fr\\); \\}`),
@@ -81,19 +79,18 @@ test("the narrow breakpoint keeps the navigation reachable", async () => {
   }
 });
 
-test("seller agent navigation is labelled as historical, not an active module", async () => {
-  const [nav, agents, page] = await Promise.all([
-    readFile(navUrl, "utf8"),
-    readFile(agentsUrl, "utf8"),
-    readFile(agentsPageUrl, "utf8"),
-  ]);
-  assert.match(nav, /<Link href="\/agents">과거 판매 에이전트<\/Link>/);
-  assert.doesNotMatch(nav, />판매 에이전트</);
-  // ERC-8004 is not presented as part of the new flow.
-  assert.doesNotMatch(agents, /eyebrow">ERC-8004</);
-  assert.match(agents, /신규 aa-three-factor-v1 흐름에는 판매 에이전트 협상과 ERC-8004 평판 실행이 없습니다/);
-  assert.match(agents, /과거 PBLC 거래에 저장된 신원·평판 증거를 읽기 전용으로/);
-  assert.doesNotMatch(agents, /RPC 연결 후 온체인 평판 표시/);
-  // The route stays so the stored historical evidence remains reachable.
-  assert.match(page, /<Agents/);
+test("the navigation links exactly the audit surfaces that still exist", async () => {
+  const nav = await readFile(navUrl, "utf8");
+  const links = [...nav.matchAll(/<Link[^>]*href="([^"]+)"/g)].map((match) => match[1]);
+  // Brand link first, then the menu: overview, purchases, alerts. No seller agent,
+  // login or experiments screen is reachable from the shell any more.
+  assert.deepEqual(links, ["/", "/", "/purchases", "/alerts"]);
+});
+
+test("styles of the removed screens are gone with them", async () => {
+  const css = await readFile(cssUrl, "utf8");
+  assert.doesNotMatch(
+    css,
+    /\.(agentCard|agentIcon|loginCard|centerPage|loginHelp|cardGrid|experimentLayout|experimentSteps)\b/,
+  );
 });
