@@ -43,21 +43,21 @@ function executionModeFor(env: NodeJS.ProcessEnv): "mock" | "live" {
   return mode as "mock" | "live";
 }
 
-/** Live mode may sign only with the explicitly configured user-owned PBLC wallet. */
+/** Live mode may sign only with the explicitly configured user-owned AEGIS wallet. */
 function signerFor(
   env: NodeJS.ProcessEnv,
   network: string,
   mode: "mock" | "live",
 ): AegisAuthorizationSigner {
-  const keyName = mode === "live" ? "PBLC_USER_PRIVATE_KEY" : "AEGIS_SIGNER_PRIVATE_KEY";
+  const keyName = mode === "live" ? "AEGIS_USER_PRIVATE_KEY" : "AEGIS_SIGNER_PRIVATE_KEY";
   if (mode === "live" && env.AEGIS_REAL_PAYMENT_APPROVED !== "yes") {
     throw new Error("live payment is blocked: AEGIS_REAL_PAYMENT_APPROVED=yes is required");
   }
   const signer = new AegisAuthorizationSigner(required(env, keyName) as Hex, chainIdOf(network));
   if (mode === "live") {
-    const configuredAddress = required(env, "PBLC_USER_ADDRESS").toLowerCase();
+    const configuredAddress = required(env, "AEGIS_USER_ADDRESS").toLowerCase();
     if (signer.address.toLowerCase() !== configuredAddress) {
-      throw new Error("PBLC_USER_PRIVATE_KEY does not match PBLC_USER_ADDRESS");
+      throw new Error("AEGIS_USER_PRIVATE_KEY does not match AEGIS_USER_ADDRESS");
     }
   }
   return signer;
@@ -157,7 +157,7 @@ export function createPaymentExecutor(
       internalServiceToken: required(env, "INTERNAL_SERVICE_TOKEN"),
     }),
     // The key never leaves this process. Mock runs use an ephemeral key; live runs use
-    // only the configured user-owned PBLC wallet after an explicit server-side gate.
+    // only the configured user-owned AEGIS wallet after an explicit server-side gate.
     signer: signerFor(env, network, executionMode),
     gatewayRoutes: routes as Record<string, string>,
     network,

@@ -177,8 +177,7 @@ export function readTokenMetadata(source, { sourcePath = SOURCE_PATH } = {}) {
             "name/symbol/version/decimals are compile-time constants with no setter",
             "no delegatecall, proxy initializer or upgrade hook in source",
           ],
-    // The reusable planner also prepares the user-owned PBLC contract; retain the
-    // caller's exact source path instead of relabelling it as the AEGIS contract.
+    // Retain the caller's exact source path rather than assuming the default contract.
     source: relative(REPO_ROOT, sourcePath),
   };
 }
@@ -210,7 +209,7 @@ export function buildPlan({
   options,
   sourcePath = SOURCE_PATH,
   artifactPath = ARTIFACT_PATH,
-  historicalAssetsNote = "Existing PBLC V1/V2 contracts, addresses and transactions are untouched; AEGIS is a separate deployment.",
+  historicalAssetsNote = "Existing token contracts, addresses and transactions are untouched; AEGIS is a separate deployment.",
 }) {
   const token = readTokenMetadata(source, { sourcePath });
   const bytecode = artifact?.bytecode?.object;

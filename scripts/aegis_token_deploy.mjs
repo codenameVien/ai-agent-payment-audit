@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 
 /**
- * Deploy the separate user-owned PBLC ERC-3009 contract.
+ * Deploy the separate user-owned AEGIS ERC-3009 contract.
  *
- * `plan` is public-address-only. `deploy` uses PBLC_USER_PRIVATE_KEY solely in this
- * local process and refuses a key whose derived address differs from PBLC_USER_ADDRESS.
+ * `plan` is public-address-only. `deploy` uses AEGIS_USER_PRIVATE_KEY solely in this
+ * local process and refuses a key whose derived address differs from AEGIS_USER_ADDRESS.
  * It mints the initial supply to the same user wallet in the constructor.
  */
 
@@ -26,11 +26,8 @@ import { baseSepolia } from "viem/chains";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const ENV_PATH = resolve(ROOT, ".env.local");
-const aegis = process.argv.includes("--aegis");
-const tokenSymbol = aegis ? "AEGIS" : "PBLC";
-const ARTIFACT_PATH = resolve(ROOT, aegis
-  ? "infra/contracts/out/AEGISToken.sol/AEGISToken.json"
-  : "infra/contracts/out/DemoTokenV2.sol/DemoTokenV2.json");
+const tokenSymbol = "AEGIS";
+const ARTIFACT_PATH = resolve(ROOT, "infra/contracts/out/AEGISToken.sol/AEGISToken.json");
 const INITIAL_SUPPLY_UNITS = 1_000_000n * 1_000_000n;
 
 function parseEnv(text) {
@@ -51,8 +48,8 @@ function required(values, name) {
 
 async function publicContext() {
   const env = parseEnv(await readFile(ENV_PATH, "utf8"));
-  const userAddress = required(env, "PBLC_USER_ADDRESS");
-  if (!isAddress(userAddress)) throw new Error("PBLC_USER_ADDRESS must be an address");
+  const userAddress = required(env, "AEGIS_USER_ADDRESS");
+  if (!isAddress(userAddress)) throw new Error("AEGIS_USER_ADDRESS must be an address");
   const artifact = JSON.parse(await readFile(ARTIFACT_PATH, "utf8"));
   const rpcUrl = env.BASE_SEPOLIA_RPC_URL || "https://sepolia.base.org";
   const publicClient = createPublicClient({ chain: baseSepolia, transport: http(rpcUrl) });
@@ -94,13 +91,13 @@ async function plan() {
 
 async function deploy() {
   const value = await publicContext();
-  if (process.env.PBLC_USER_TOKEN_DEPLOY_APPROVED !== "yes") {
-    throw new Error("deployment blocked: PBLC_USER_TOKEN_DEPLOY_APPROVED=yes is required");
+  if (process.env.AEGIS_TOKEN_DEPLOY_APPROVED !== "yes") {
+    throw new Error("deployment blocked: AEGIS_TOKEN_DEPLOY_APPROVED=yes is required");
   }
-  const privateKey = required(value.env, "PBLC_USER_PRIVATE_KEY");
+  const privateKey = required(value.env, "AEGIS_USER_PRIVATE_KEY");
   const account = privateKeyToAccount(privateKey.startsWith("0x") ? privateKey : `0x${privateKey}`);
   if (account.address.toLowerCase() !== value.userAddress.toLowerCase()) {
-    throw new Error("PBLC_USER_PRIVATE_KEY does not match PBLC_USER_ADDRESS");
+    throw new Error("AEGIS_USER_PRIVATE_KEY does not match AEGIS_USER_ADDRESS");
   }
   const walletClient = createWalletClient({ account, chain: baseSepolia, transport: http(value.rpcUrl) });
   const hash = await walletClient.deployContract({
@@ -110,7 +107,7 @@ async function deploy() {
   });
   const receipt = await value.publicClient.waitForTransactionReceipt({ hash });
   if (receipt.status !== "success" || !receipt.contractAddress) {
-    throw new Error(`PBLC deployment failed: ${hash}`);
+    throw new Error(`AEGIS deployment failed: ${hash}`);
   }
   process.stdout.write(`${JSON.stringify({
     action: "DEPLOYED_AND_INITIAL_SUPPLY_MINTED",

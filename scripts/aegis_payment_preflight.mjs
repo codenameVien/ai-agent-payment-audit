@@ -1,9 +1,9 @@
 /**
- * Read-only preparation for the deployed user-owned PBLC / x402 payment.
+ * Read-only preparation for the deployed user-owned AEGIS / x402 payment.
  *
  * This script deliberately does not create an authorization, call Facilitator /verify or
  * /settle, or broadcast a transaction. It needs only a public wallet address and proves
- * that it and the configured PBLC contract line up before a separately approved payment.
+ * that it and the configured AEGIS contract line up before a separately approved payment.
  */
 
 import { readFile } from "node:fs/promises";
@@ -80,13 +80,13 @@ if (process.argv.includes("--help")) {
 
 const repoRoot = resolve(new URL("..", import.meta.url).pathname);
 const values = envFromText(await readFile(resolve(repoRoot, ".env.local"), "utf8"));
-const payer = required(values, "PBLC_USER_ADDRESS");
+const payer = required(values, "AEGIS_USER_ADDRESS");
 if (!/^0x[0-9a-fA-F]{40}$/.test(payer)) {
-  throw new Error("PBLC_USER_ADDRESS is not an address");
+  throw new Error("AEGIS_USER_ADDRESS is not an address");
 }
 
-const token = required(values, "PBLC_TOKEN_ADDRESS");
-if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("PBLC_TOKEN_ADDRESS is not an address");
+const token = required(values, "AEGIS_TOKEN_ADDRESS");
+if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("AEGIS_TOKEN_ADDRESS is not an address");
 const rpcUrl = required(values, "BASE_SEPOLIA_RPC_URL");
 const configuredFacilitator = values.get("AEGIS_FACILITATOR_URL") || values.get("FACILITATOR_URL");
 // The normal Mock runner leaves a loopback URL in .env.local. A preflight must stay
@@ -131,7 +131,7 @@ process.stdout.write(`${JSON.stringify({
   network: "eip155:84532",
   payer,
   nativeBalanceWei: nativeWei.toString(),
-  pblc: {
+  token: {
     address: token,
     expectedAddress: EXPECTED_TOKEN,
     addressMatchesExpected: tokenMatches,

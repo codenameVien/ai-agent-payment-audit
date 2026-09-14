@@ -1,5 +1,5 @@
 /**
- * x402 v2 `exact` + ERC-3009 for PBLC V2, with the decision binding carried explicitly.
+ * x402 v2 `exact` + ERC-3009 for the AEGIS token, with the decision binding carried explicitly.
  *
  * A stock 402 only says "pay this much to this address". That is not enough here: the
  * audit thesis is that a payment is provably the one the recorded decision fixed, so the
@@ -9,7 +9,7 @@
  */
 
 import { encodeHeader, X402BindingError } from "../x402.js";
-import { PBLC_TOKEN_VERSION, type AegisTerms } from "./terms.js";
+import { AEGIS_TOKEN_VERSION, type AegisTerms } from "./terms.js";
 
 export { encodeHeader, X402BindingError };
 
@@ -119,7 +119,7 @@ export function requirementsFor(args: {
     extra: {
       assetTransferMethod: "eip3009",
       name: args.tokenName ?? args.terms.token.name,
-      version: args.tokenVersion ?? (args.terms.token.name === "AEGIS" ? "1" : PBLC_TOKEN_VERSION),
+      version: args.tokenVersion ?? AEGIS_TOKEN_VERSION,
     },
   };
 }

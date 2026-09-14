@@ -14,9 +14,8 @@
 import { createHash } from "node:crypto";
 
 export const AA_SCORING_POLICY_VERSION = "aa-three-factor-v1";
-/** The deployed Base Sepolia token used by the current purchase flow. */
-export const PBLC_TOKEN_NAME = "PBL Agent Credit";
-export const PBLC_TOKEN_VERSION = "2";
+/** EIP-712 domain version of the deployed Base Sepolia AEGIS token used by the purchase flow. */
+export const AEGIS_TOKEN_VERSION = "1";
 
 export class AegisTermsError extends Error {
   constructor(message: string) {

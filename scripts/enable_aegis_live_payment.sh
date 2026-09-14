@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Enable the local real-PBLC runtime without handling or printing any secret.
+# Enable the local real-AEGIS runtime without handling or printing any secret.
 # A transaction is still impossible until the user submits one consented `/request`.
 set -euo pipefail
 
@@ -7,8 +7,8 @@ repo_root="$(cd "$(dirname "$0")/.." && pwd)"
 env_file="$repo_root/.env.local"
 [[ -f "$env_file" ]] || { echo "missing: $env_file" >&2; exit 1; }
 
-read -r -p "Type ENABLE_LIVE_PBLC_PAYMENT to enable the live local runtime: " confirmation
-[[ "$confirmation" == "ENABLE_LIVE_PBLC_PAYMENT" ]] || {
+read -r -p "Type ENABLE_LIVE_AEGIS_PAYMENT to enable the live local runtime: " confirmation
+[[ "$confirmation" == "ENABLE_LIVE_AEGIS_PAYMENT" ]] || {
   echo "No changes made."
   exit 1
 }
@@ -29,4 +29,4 @@ for (const [name, value] of Object.entries({
 fs.writeFileSync(path, text, "utf8");
 NODE
 
-echo "Live PBLC runtime enabled in .env.local. No payment was signed or broadcast."
+echo "Live AEGIS runtime enabled in .env.local. No payment was signed or broadcast."
