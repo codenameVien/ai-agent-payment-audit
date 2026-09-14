@@ -4,7 +4,6 @@ import Link from "next/link";
 import { useEffect, useState } from "react";
 
 import { api, short } from "@/lib/api";
-import { isAegisRequest } from "@/lib/aegis";
 import type { PurchaseSummary } from "@/lib/types";
 import {
   Empty,
@@ -47,9 +46,7 @@ export function PurchaseList() {
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => {
-                  const aegis = isAegisRequest(item.request_summary);
-                  return (
+                {items.map((item) => (
                   <tr key={item.purchase_id}>
                     <td>
                       <Link href={`/purchases/${item.purchase_id}`}>
@@ -59,7 +56,7 @@ export function PurchaseList() {
                     </td>
                     <td>
                       {item.domain}
-                      <small>{aegis ? "aegis-aa-v1 · Provider Mock" : "과거 서명 견적 정책"}</small>
+                      <small>aegis-aa-v1 · Provider Mock</small>
                     </td>
                     <td>
                       <PurchaseStatusBadge value={item.status} />
@@ -67,9 +64,7 @@ export function PurchaseList() {
                     <td>
                       <PaymentAmount
                         amountUnits={item.amount_units}
-                        transactionHash={item.transaction_hash}
                         status={item.status}
-                        policy={aegis ? "aegis" : "legacy"}
                         paymentStatus={item.payment_status}
                         tokenAddress={item.token}
                       />
@@ -78,8 +73,7 @@ export function PurchaseList() {
                       <SeverityBadge value={item.audit_severity} />
                     </td>
                   </tr>
-                  );
-                })}
+                ))}
               </tbody>
             </table>
           </div>

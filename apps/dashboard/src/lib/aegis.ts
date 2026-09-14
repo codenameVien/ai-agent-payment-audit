@@ -61,7 +61,7 @@ export function isAegisRequest(requestSummary: unknown): boolean {
 
 /**
  * Storage key of a pending `aegis-aa-v1` request. It is deliberately not one of the
- * keys the superseded PBLC runtime wrote: an id left behind by that runtime must never
+ * keys an earlier runtime wrote: an id left behind by that runtime must never
  * become the target of a new run.
  */
 export const AEGIS_PENDING_PURCHASE_KEY = "aegis:token-v1:purchase-request-id";
@@ -523,8 +523,8 @@ export function readAegisSnapshot(events: EvidenceEvent[]): AegisSnapshotView | 
 }
 
 /**
- * The delivery of an `aa-three-factor-v1` purchase. A stored legacy delivery has no
- * execution mode and no observed duration, so it is not narrowed to this view.
+ * The delivery of an `aa-three-factor-v1` purchase. A stored delivery without an
+ * execution mode has no observed duration either, so it is not narrowed to this view.
  */
 export function readAegisDelivery(events: EvidenceEvent[]): AegisDeliveryView | null {
   const delivered = events.find((event) => event.type === "DELIVERED");

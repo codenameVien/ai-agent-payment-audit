@@ -1,8 +1,3 @@
-export interface MeResponse {
-  owner_address: string;
-  buyer_wallet_address: string | null;
-}
-
 export interface WalletView {
   owner_address: string;
   buyer_wallet_address: string | null;
@@ -66,15 +61,4 @@ export interface PurchaseDetail {
   summary: PurchaseSummary;
   events: EvidenceEvent[];
   audit: AuditReport | null;
-}
-
-export interface AgentSummary {
-  seller_agent_id: string;
-  erc8004_agent_id: string | null;
-  signer_address: string | null;
-  identity_verified: boolean;
-  quote_count: number;
-  reputation_status: string;
-  objective_feedback_value: number | null;
-  reputation_transaction_hash: string | null;
 }
