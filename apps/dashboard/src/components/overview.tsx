@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 
 import { api, credits, short } from "@/lib/api";
-import { AEGIS_PRIORITY_LABELS, isAegisRequest } from "@/lib/aegis";
+import { AEGIS_PRIORITY_LABELS } from "@/lib/aegis";
 import type { AuditFinding, PurchaseSummary, WalletView } from "@/lib/types";
 import {
   Empty,
@@ -13,13 +13,6 @@ import {
   SeverityBadge,
 } from "./status";
 
-const legacyPriorityLabel: Record<string, string> = {
-  balanced: "균형 우선",
-  quality: "품질 우선",
-  price: "가격 우선",
-  speed: "속도 우선",
-};
-
 const balanceStatusLabel: Record<string, string> = {
   base_sepolia_verified: "온체인 잔액 조회 완료",
   rpc_not_configured: "잔액 조회 안 함 · RPC 미구성",
@@ -27,25 +20,13 @@ const balanceStatusLabel: Record<string, string> = {
 };
 
 function requestLabel(item: PurchaseSummary): string {
-  if (isAegisRequest(item.request_summary)) {
-    const effective = item.request_summary.effective_priority;
-    const original = item.request_summary.original_priority;
-    const label =
-      typeof effective === "string"
-        ? AEGIS_PRIORITY_LABELS[effective] ?? effective
-        : "우선순위 미기록";
-    return `AI 모델 선택 · ${label}${original === null ? " (자동 분류)" : ""}`;
-  }
-  const priority = item.request_summary.priority;
-  const capabilities = item.request_summary.required_capabilities;
-  const suffix =
-    typeof priority === "string"
-      ? legacyPriorityLabel[priority] ?? priority
-      : "정책 확인";
-  if (Array.isArray(capabilities) && capabilities.length > 0) {
-    return `${capabilities.slice(0, 2).join(" · ")} · ${suffix}`;
-  }
-  return `AI 모델 선택 · ${suffix}`;
+  const effective = item.request_summary.effective_priority;
+  const original = item.request_summary.original_priority;
+  const label =
+    typeof effective === "string"
+      ? AEGIS_PRIORITY_LABELS[effective] ?? effective
+      : "우선순위 미기록";
+  return `AI 모델 선택 · ${label}${original === null ? " (자동 분류)" : ""}`;
 }
 
 export function Overview() {
@@ -91,7 +72,6 @@ export function Overview() {
   const risk = alerts.filter((item) => item.severity === "RISK").length;
   const caution = alerts.filter((item) => item.severity === "CAUTION").length;
   const settled = purchases.filter((item) => item.payment_status === "PAYMENT_SETTLED");
-  const aegisSettled = settled.filter((item) => isAegisRequest(item.request_summary));
   const audited = purchases.filter((item) => item.audit_severity !== null);
   const chainReady = wallet?.balance_status === "base_sepolia_verified";
   const balanceLabel =
@@ -107,9 +87,8 @@ export function Overview() {
           <h1>AI 에이전트 결제 감사</h1>
           <p>
             로컬 소유자 계정의 모델 선택 증거, 고정 선결제, 감사 경고를 읽기 전용으로
-            확인합니다. 신규 거래는 aa-three-factor-v1 정책과 Mock Provider 응답을 사용하며,
-            결제 모드는 각 거래의 Facilitator 정산 증거에 기록됩니다. 과거 PBLC 거래는 그때의
-            정책과 증거로 그대로 남습니다.
+            확인합니다. 거래는 aa-three-factor-v1 정책과 Mock Provider 응답을 사용하며,
+            결제 모드는 각 거래의 Facilitator 정산 증거에 기록됩니다.
           </p>
         </div>
         <div className="scopePill">
@@ -141,10 +120,7 @@ export function Overview() {
         <article>
           <span>정산 완료 거래</span>
           <strong>{settled.length}</strong>
-          <small>
-            Facilitator 정산 {aegisSettled.length}건 · 과거 정책{" "}
-            {settled.length - aegisSettled.length}건
-          </small>
+          <small>Facilitator 응답 기준 정산</small>
         </article>
         <article>
           <span>감사 완료</span>
@@ -190,9 +166,7 @@ export function Overview() {
                     </tr>
                   </thead>
                   <tbody>
-                    {purchases.slice(0, 6).map((item) => {
-                      const aegis = isAegisRequest(item.request_summary);
-                      return (
+                    {purchases.slice(0, 6).map((item) => (
                       <tr key={item.purchase_id}>
                         <td>
                           <Link href={`/purchases/${item.purchase_id}`}>
@@ -209,9 +183,7 @@ export function Overview() {
                         <td>
                           <PaymentAmount
                             amountUnits={item.amount_units}
-                            transactionHash={item.transaction_hash}
                             status={item.status}
-                            policy={aegis ? "aegis" : "legacy"}
                             paymentStatus={item.payment_status}
                             tokenAddress={item.token}
                           />
@@ -229,15 +201,12 @@ export function Overview() {
                             >
                               {short(item.transaction_hash, 5)} ↗
                             </a>
-                          ) : aegis ? (
-                            <span className="muted">Facilitator 응답 기준</span>
                           ) : (
-                            <span className="muted">거래 해시 없음</span>
+                            <span className="muted">Facilitator 응답 기준</span>
                           )}
                         </td>
                       </tr>
-                      );
-                    })}
+                    ))}
                   </tbody>
                 </table>
               </div>
@@ -335,9 +304,7 @@ export function Overview() {
                 <i className={settled.length > 0 ? "ok" : "idle"} />
                 <span>
                   <strong>정산 기록</strong>
-                  <small>
-                    {settled.length}건 · 신규 {aegisSettled.length}건은 Facilitator 응답 기준
-                  </small>
+                  <small>{settled.length}건 · Facilitator 응답 기준</small>
                 </span>
               </li>
               <li>

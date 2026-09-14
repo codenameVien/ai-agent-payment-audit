@@ -523,8 +523,8 @@ export function readAegisSnapshot(events: EvidenceEvent[]): AegisSnapshotView | 
 }
 
 /**
- * The delivery of an `aa-three-factor-v1` purchase. A stored legacy delivery has no
- * execution mode and no observed duration, so it is not narrowed to this view.
+ * The delivery of an `aa-three-factor-v1` purchase. A stored delivery without an
+ * execution mode has no observed duration either, so it is not narrowed to this view.
  */
 export function readAegisDelivery(events: EvidenceEvent[]): AegisDeliveryView | null {
   const delivered = events.find((event) => event.type === "DELIVERED");
