@@ -18,26 +18,15 @@ LOCAL_TRANSACTION_ID_PATTERN = re.compile(
 
 class EventType(StrEnum):
     REQUESTED = "REQUESTED"
-    QUOTED = "QUOTED"
     AA_SNAPSHOT_RECORDED = "AA_SNAPSHOT_RECORDED"
     DECIDED = "DECIDED"
     PAYMENT_INTENT_CLAIMED = "PAYMENT_INTENT_CLAIMED"
     PAYMENT_AUTHORIZED = "PAYMENT_AUTHORIZED"
     PAYMENT_SETTLED = "PAYMENT_SETTLED"
     PAYMENT_RECONCILIATION_REQUIRED = "PAYMENT_RECONCILIATION_REQUIRED"
-    PAYMENT_SUBMISSION_IDENTIFIED = "PAYMENT_SUBMISSION_IDENTIFIED"
-    PAYMENT_RECONCILIATION_CHECKED = "PAYMENT_RECONCILIATION_CHECKED"
-    PAYMENT_MISMATCH_CONFIRMED = "PAYMENT_MISMATCH_CONFIRMED"
-    PAYMENT_RECONCILED_NO_TRANSFER = "PAYMENT_RECONCILED_NO_TRANSFER"
-    PAYMENT_ATTEMPT_REJECTED = "PAYMENT_ATTEMPT_REJECTED"
     PAYMENT_FAILED = "PAYMENT_FAILED"
-    DELIVERY_STAGED = "DELIVERY_STAGED"
     DELIVERED = "DELIVERED"
     AUDITED = "AUDITED"
-    REPUTATION_RECORDED = "REPUTATION_RECORDED"
-    REPUTATION_DECIDED = "REPUTATION_DECIDED"
-    REPUTATION_PUBLICATION_CONFLICT = "REPUTATION_PUBLICATION_CONFLICT"
-    EVIDENCE_ANCHORED = "EVIDENCE_ANCHORED"
     SENSITIVE_PAYLOAD_ACCESSED = "SENSITIVE_PAYLOAD_ACCESSED"
     CORRECTION_RECORDED = "CORRECTION_RECORDED"
     # Auxiliary evidence is intentionally separate from deterministic lifecycle facts.
@@ -56,11 +45,12 @@ AUXILIARY_EVENT_TYPES: tuple[EventType, ...] = (
 )
 
 
+#: The two terminal outcomes of an AEGIS payment attempt. `PAYMENT_RECONCILIATION_REQUIRED`
+#: is deliberately not terminal: an ambiguous attempt keeps its reservation and is never
+#: followed by a fresh payment.
 TERMINAL_PAYMENT_EVENT_TYPES: tuple[EventType, ...] = (
     EventType.PAYMENT_SETTLED,
     EventType.PAYMENT_FAILED,
-    EventType.PAYMENT_MISMATCH_CONFIRMED,
-    EventType.PAYMENT_RECONCILED_NO_TRANSFER,
 )
 
 
@@ -212,36 +202,6 @@ def transaction_ref_from_payload(value: object) -> TransactionRef:
             ),
         )
     raise ValueError("transaction reference kind must be EVM or LOCAL")
-
-
-def transaction_ref_from_fields(
-    *,
-    transaction_hash: str | None,
-    local_transaction_id: str | None,
-    run_id: str | None = None,
-    evidence_source: EvidenceSource | None = None,
-    block_number: int | None = None,
-    log_index: int | None = None,
-) -> TransactionRef:
-    """Reject type confusion between the EVM hash field and the local identifier field."""
-    if transaction_hash is not None and local_transaction_id is not None:
-        raise ValueError("a payload cannot carry both transactionHash and localTransactionId")
-    if transaction_hash is not None:
-        if transaction_hash.startswith("localtx:"):
-            raise ValueError("a local transaction id cannot be a transactionHash")
-        return EvmTransactionRef(
-            hash=transaction_hash,
-            evidence_source=evidence_source or EvidenceSource.BASE_SEPOLIA_VERIFIED,
-            block_number=block_number,
-            log_index=log_index,
-        )
-    if local_transaction_id is not None:
-        if local_transaction_id.startswith("0x"):
-            raise ValueError("an EVM transaction hash cannot be a localTransactionId")
-        if run_id is None:
-            raise ValueError("a local transaction reference requires its runId")
-        return LocalTransactionRef(id=local_transaction_id, run_id=run_id)
-    raise ValueError("a transaction reference requires transactionHash or localTransactionId")
 
 
 @dataclass(frozen=True, slots=True)

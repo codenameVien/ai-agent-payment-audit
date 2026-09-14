@@ -8,10 +8,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
 from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.aa_policy import amount_units
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.purchase_service import PurchaseService

@@ -304,10 +304,7 @@ export class AegisPaymentExecutor {
     if (intent.termsBindingHash !== derived.termsBindingHash) {
       throw new AegisTermsError("the reservation is bound to different terms");
     }
-    if (intent.state === "FAILED" || intent.state === "MISMATCH_CONFIRMED") {
-      return this.#result({ derived, intent, status: "already_terminal" });
-    }
-    if (intent.state === "RECONCILED_NO_TRANSFER") {
+    if (intent.state === "FAILED") {
       return this.#result({ derived, intent, status: "already_terminal" });
     }
     if (intent.state === "RECONCILIATION_REQUIRED") {
@@ -318,6 +315,11 @@ export class AegisPaymentExecutor {
       // Already paid. Recover the result without signing, verifying or settling again;
       // the gateway serves it from the same durable settlement evidence.
       return await this.#recoverDelivered(args, derived, intent);
+    }
+    if (intent.state !== "CLAIMED" && intent.state !== "AUTHORIZED") {
+      // Only a claimed or authorized attempt may be signed. Any other state is not one
+      // this module can pay from, so it is never treated as permission to pay again.
+      return this.#result({ derived, intent, status: "already_terminal" });
     }
 
     const challenge = await this.#call(derived.providerId, args.purchaseId, args.resourceBody);

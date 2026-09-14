@@ -335,7 +335,6 @@ class AegisPaymentService:
             amount_units=terms.amount_units,
             token=token_address,
             pay_to=terms.recipient,
-            permit2_nonce=None,
             state=PaymentIntentState.CLAIMED,
             claimed_at=now,
             transfer_method="eip3009",

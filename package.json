@@ -13,7 +13,7 @@
     "test": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests && npm test --workspace @pbl/commerce-gateway && npm run test:schemas && npm run test:contracts && npm run test:scripts",
     "test:dashboard": "npm test --workspace @pbl/dashboard",
     "test:scripts": "node --test scripts/aegis_token_plan.test.mjs scripts/test_mongo_runner.test.mjs scripts/aegis_local_stack.test.mjs",
-    "test:aegis:e2e": "npm run build --workspace @pbl/commerce-gateway && node --test --require ./scripts/aegis_outbound_guard.cjs scripts/aegis_phase6_scenarios.test.mjs",
+    "test:aegis:e2e": "npm run build --workspace @pbl/commerce-gateway && node --test --require ./scripts/aegis_outbound_guard.cjs scripts/aegis_scenarios.test.mjs",
     "test:all": "npm run lint && npm test && npm run test:dashboard && npm run test:mongo:local && npm run test:aegis:e2e",
     "test:unit": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests -m 'not mongo'",
     "test:mongo": "uv run --project services/buyer-audit-api pytest services/buyer-audit-api/tests -m mongo",

@@ -33,7 +33,7 @@ function detail(id, body, completed = false) {
       request_summary: { request_schema_version: "aegis-aa-v1", prompt_hash: hash(body.request.prompt),
         original_priority: body.request.priority ?? null, effective_priority: "price" },
       status: completed ? "AUDITED" : "REQUESTED", amount_units: completed ? 8200 : null,
-      token, transaction_hash: null, audit_severity: completed ? "NORMAL" : null, finding_count: 0,
+      token, audit_severity: completed ? "NORMAL" : null, finding_count: 0,
       lifecycle_status: completed ? "DELIVERED" : "REQUESTED",
       payment_status: completed ? "PAYMENT_SETTLED" : "PAYMENT_NOT_STARTED",
       audit_status: completed ? "AUDITED" : "PENDING_AUDIT", audit_covers_head: completed },

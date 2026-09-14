@@ -48,7 +48,6 @@ function detail({
       status: "REQUESTED",
       amount_units: null,
       token: null,
-      transaction_hash: null,
       audit_severity: null,
       finding_count: 0,
       lifecycle_status: "REQUESTED",

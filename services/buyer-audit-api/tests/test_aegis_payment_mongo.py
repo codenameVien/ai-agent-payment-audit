@@ -162,7 +162,14 @@ async def test_a_real_mongo_payment_attempt_survives_a_reopened_store(mongo_uri)
         stored = await reopened.get_payment_intent(purchase_id)
         assert stored is not None
         assert stored.state is PaymentIntentState.SETTLED
-        assert stored.transaction_hash is None
+        # The Facilitator reference is kept as that, never as an EVM transaction hash.
+        assert stored.terminal_proof_ref == "x402mock:" + "9" * 32
+        raw_intent = await cleanup[database]["paymentIntents"].find_one(
+            {"purchaseId": purchase_id}
+        )
+        assert raw_intent is not None
+        assert "transactionHash" not in raw_intent
+        assert raw_intent["transferMethod"] == "eip3009"
         settlement = next(
             event for event in events if event.type == EventType.PAYMENT_SETTLED
         )

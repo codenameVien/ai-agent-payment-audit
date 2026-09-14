@@ -5,8 +5,8 @@ from dataclasses import replace
 from datetime import UTC, datetime
 
 import pytest
+from fakes.memory_repository import InMemoryEvidenceRepository
 
-from buyer_audit_api.adapters.repositories.memory import InMemoryEvidenceRepository
 from buyer_audit_api.core.errors import EvidenceIntegrityError, EvidenceTransitionError
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.hashing import build_event_hash, sha256_json
@@ -160,7 +160,7 @@ async def test_expected_head_compare_and_swap_rejects_stale_append(clock) -> Non
     )
     await repository.append_event(
         purchase_id="purchase-cas",
-        event_type=EventType.QUOTED,
+        event_type=EventType.AA_SNAPSHOT_RECORDED,
         occurred_at=clock.now(),
         actor={"id": "buyer", "type": "agent"},
         payload={},
@@ -171,7 +171,7 @@ async def test_expected_head_compare_and_swap_rejects_stale_append(clock) -> Non
     with pytest.raises(EvidenceTransitionError, match="head changed"):
         await repository.append_event(
             purchase_id="purchase-cas",
-            event_type=EventType.QUOTED,
+            event_type=EventType.AA_SNAPSHOT_RECORDED,
             occurred_at=clock.now(),
             actor={"id": "buyer", "type": "agent"},
             payload={},
@@ -181,5 +181,5 @@ async def test_expected_head_compare_and_swap_rejects_stale_append(clock) -> Non
 
     assert [event.type for event in await repository.list_events("purchase-cas")] == [
         EventType.REQUESTED,
-        EventType.QUOTED,
+        EventType.AA_SNAPSHOT_RECORDED,
     ]

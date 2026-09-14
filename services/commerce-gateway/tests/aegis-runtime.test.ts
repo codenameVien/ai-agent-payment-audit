@@ -391,6 +391,30 @@ test("a terminal purchase is never paid again", async () => {
   }
 });
 
+test("an intent state the executor cannot pay from is never signed or paid", async () => {
+  const harness = await startHarness();
+  try {
+    const purchaseId = "purchase-unpayable-state";
+    record(harness, purchaseId, "openai");
+    await fetch(`${harness.evidence.url}/internal/evidence/aegis/payments/reserve`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${INTERNAL_TOKEN}` },
+      body: JSON.stringify({ purchase_id: purchaseId }),
+    });
+    const intent = harness.evidence.intents.get(purchaseId)!;
+    intent.state = "NOT_A_PAYABLE_STATE";
+    const result = await harness.executor.execute({ purchaseId, resourceBody: { prompt: "시도" } });
+    assert.equal(result.payment_status, "already_terminal");
+    assert.equal(intent.decision_authorization_hash, null);
+    assert.equal(harness.evidence.settlements.length, 0);
+    assert.equal(harness.evidence.failures.length, 0);
+    assert.equal(harness.evidence.reconciliations.length, 0);
+    assert.equal(harness.evidence.ambiguous.length, 0);
+  } finally {
+    await harness.close();
+  }
+});
+
 test("a unit count that lost precision on the wire is refused", async () => {
   const harness = await startHarness();
   try {

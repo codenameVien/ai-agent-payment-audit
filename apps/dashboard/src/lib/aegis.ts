@@ -123,11 +123,12 @@ export function readStoredRequestFacts(detail: PurchaseDetail): StoredRequestFac
   };
 }
 
-/** A terminal no-transfer outcome cannot spend the old purchase, so it must not block
- * a corrected, independent request. Confirmation-unknown and in-flight states stay
- * fail-closed until their existing purchase is reconciled. */
+/** A purchase that never started paying, or whose attempt failed and released its
+ * reservation, cannot spend the old purchase, so it must not block a corrected,
+ * independent request. Confirmation-unknown and in-flight states stay fail-closed until
+ * their existing purchase is reconciled. */
 export function allowsIndependentRequest(facts: StoredRequestFacts): boolean {
-  return ["PAYMENT_NOT_STARTED", "PAYMENT_FAILED", "RECONCILED_NO_TRANSFER"].includes(facts.paymentStatus);
+  return ["PAYMENT_NOT_STARTED", "PAYMENT_FAILED"].includes(facts.paymentStatus);
 }
 
 export async function resolvePendingRequest(
