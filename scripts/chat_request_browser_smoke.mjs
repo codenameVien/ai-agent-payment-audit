@@ -312,8 +312,8 @@ try {
     await page.goto(origin + "/request");
     await send(page);
     assert.equal(writes, 0);
-    await mkdir("docs/images", { recursive: true });
-    await page.screenshot({ path: "docs/images/chat-request.png", fullPage: true });
+    await mkdir("assets/images", { recursive: true });
+    await page.screenshot({ path: "assets/images/chat-request.png", fullPage: true });
     allowed = true;
     await confirm(page).click();
     await result(page, 1);
