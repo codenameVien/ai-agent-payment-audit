@@ -3,7 +3,7 @@
 A new request carries only the four supported priority values, the deterministic priority
 classification evidence and the token estimate the fixed prepayment is computed from. The
 superseded weighted-preset names are rejected with an explicit message rather than being
-re-interpreted, while `NormalizedAiRequest` keeps serving stored history unchanged.
+re-interpreted.
 
 The prompt itself never enters this model: only its hash, its byte length and dictionary
 keywords that matched, so recording the classification reason leaks no prompt content.

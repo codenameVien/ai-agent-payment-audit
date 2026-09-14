@@ -88,7 +88,7 @@ if (!/^0x[0-9a-fA-F]{40}$/.test(payer)) {
 const token = required(values, "AEGIS_TOKEN_ADDRESS");
 if (!/^0x[0-9a-fA-F]{40}$/.test(token)) throw new Error("AEGIS_TOKEN_ADDRESS is not an address");
 const rpcUrl = required(values, "BASE_SEPOLIA_RPC_URL");
-const configuredFacilitator = values.get("AEGIS_FACILITATOR_URL") || values.get("FACILITATOR_URL");
+const configuredFacilitator = values.get("AEGIS_FACILITATOR_URL");
 // The normal Mock runner leaves a loopback URL in .env.local. A preflight must stay
 // useful before live mode is enabled, so only an explicit HTTPS Facilitator overrides
 // the public read-only default.

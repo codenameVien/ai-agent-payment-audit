@@ -15,7 +15,7 @@ const fs = require("node:fs");
 const path = process.env.ENV_FILE;
 let text = fs.readFileSync(path, "utf8");
 const created = [];
-for (const name of ["SESSION_SECRET_BASE64", "PAYLOAD_MASTER_KEY_BASE64"]) {
+for (const name of ["PAYLOAD_MASTER_KEY_BASE64"]) {
   const expression = new RegExp(`^${name}=(.*)$`, "m");
   const current = expression.exec(text)?.[1]?.trim() ?? "";
   if (current) continue;
@@ -26,6 +26,6 @@ for (const name of ["SESSION_SECRET_BASE64", "PAYLOAD_MASTER_KEY_BASE64"]) {
 }
 fs.writeFileSync(path, text, { encoding: "utf8", mode: 0o600 });
 process.stdout.write(created.length
-  ? `Created local-only encryption/session keys: ${created.join(", ")}\n`
-  : "Local encryption/session keys already configured; no values changed.\n");
+  ? `Created local-only encryption keys: ${created.join(", ")}\n`
+  : "Local encryption keys already configured; no values changed.\n");
 NODE

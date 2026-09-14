@@ -300,20 +300,6 @@ class SensitivePayload:
 
 
 @dataclass(frozen=True, slots=True)
-class SiweChallenge:
-    owner_address: str
-    nonce: str
-    message: str
-    expires_at: datetime
-
-
-@dataclass(frozen=True, slots=True)
-class VerifiedIdentity:
-    owner_address: str
-    nonce: str
-
-
-@dataclass(frozen=True, slots=True)
 class WalletBinding:
     owner_address: str
     buyer_wallet_address: str

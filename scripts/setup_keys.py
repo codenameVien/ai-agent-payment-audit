@@ -14,19 +14,11 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = REPO_ROOT / ".env.local"
 EXAMPLE_FILE = REPO_ROOT / ".env.example"
 KEY_NAMES = (
-    "SESSION_SECRET_BASE64",
     "PAYLOAD_MASTER_KEY_BASE64",
     "INTERNAL_SERVICE_TOKEN",
     "ADMIN_SERVICE_TOKEN",
     "GATEWAY_SERVICE_TOKEN",
 )
-PRIVATE_KEY_NAMES = (
-    "DEPLOYER_PRIVATE_KEY",
-    "GEMINI_SELLER_PRIVATE_KEY",
-    "NEMOTRON_SELLER_PRIVATE_KEY",
-    "BUYER_AGENT_PRIVATE_KEY",
-)
-SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -67,14 +59,6 @@ def main() -> None:
         if existing.get(name):
             continue
         value = base64.b64encode(secrets.token_bytes(32)).decode("ascii")
-        text = replace_value(text, name, value)
-        generated.append(name)
-
-    for name in PRIVATE_KEY_NAMES:
-        if existing.get(name):
-            continue
-        private_value = secrets.randbelow(SECP256K1_ORDER - 1) + 1
-        value = f"0x{private_value:064x}"
         text = replace_value(text, name, value)
         generated.append(name)
 
