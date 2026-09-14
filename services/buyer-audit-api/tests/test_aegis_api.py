@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-from eth_account import Account
-from eth_account.messages import encode_defunct
 from fastapi.testclient import TestClient
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
@@ -29,23 +27,10 @@ INTERNAL_HEADERS = {"Authorization": "Bearer test-internal-token"}
 PROMPT = "x" * 100
 
 
-def authenticate(client: TestClient, account: Account) -> None:
-    challenge = client.post(
-        "/auth/siwe/challenge", json={"owner_address": account.address}
-    )
-    message = challenge.json()["message"]
-    signature = account.sign_message(encode_defunct(text=message)).signature.hex()
-    assert (
-        client.post(
-            "/auth/siwe/verify", json={"message": message, "signature": signature}
-        ).status_code
-        == 204
-    )
-
-
 @pytest.fixture
 def aegis_container(container: AppContainer) -> AppContainer:
-    """The shared container plus the ai_inference domain and the new decision workflow."""
+    """The shared local container (fixed owner, testserver host) plus the ai_inference
+    domain and the new decision workflow."""
     return replace(
         container,
         purchase_service=PurchaseService(
@@ -91,7 +76,6 @@ def _create(client: TestClient, *, budget_units: int = 5_000, **request: object)
 
 def test_request_to_decision_round_trip_over_http(aegis_container: AppContainer) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         purchase_id = _create(client)
 
         decided = client.post(f"/purchases/{purchase_id}/decide")
@@ -110,7 +94,6 @@ def test_repeating_the_decision_returns_the_same_recorded_event(
     aegis_container: AppContainer,
 ) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         purchase_id = _create(client)
         first = client.post(f"/purchases/{purchase_id}/decide").json()
         second = client.post(f"/purchases/{purchase_id}/decide").json()
@@ -121,7 +104,6 @@ def test_a_request_with_no_affordable_model_is_refused_without_a_decision(
     aegis_container: AppContainer,
 ) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         purchase_id = _create(client, budget_units=10)
         refused = client.post(f"/purchases/{purchase_id}/decide")
         assert refused.status_code == 409
@@ -137,7 +119,6 @@ def test_a_superseded_priority_name_is_refused_by_the_new_request_api(
     aegis_container: AppContainer,
 ) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         response = client.post(
             "/purchases",
             json={
@@ -158,7 +139,6 @@ def test_internal_decision_evidence_is_protected_and_complete(
     aegis_container: AppContainer,
 ) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         purchase_id = _create(client)
         client.post(f"/purchases/{purchase_id}/decide")
 
@@ -184,7 +164,6 @@ def test_internal_decision_evidence_is_absent_before_a_decision(
     aegis_container: AppContainer,
 ) -> None:
     with TestClient(create_app(aegis_container)) as client:
-        authenticate(client, Account.create())
         purchase_id = _create(client)
         missing = client.get(
             f"/internal/purchases/{purchase_id}/aegis-decision", headers=INTERNAL_HEADERS

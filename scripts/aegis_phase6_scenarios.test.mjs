@@ -283,9 +283,7 @@ describe("the runnable default composition end to end", () => {
       `/purchases/${purchaseId}`,
       `/purchases/${purchaseId}/events`,
       "/audit-alerts",
-      "/agents",
       "/wallet",
-      "/auth/me",
     ]) {
       const read = await api(path);
       assert.equal(read.status, 200, `${path} -> ${read.status}`);

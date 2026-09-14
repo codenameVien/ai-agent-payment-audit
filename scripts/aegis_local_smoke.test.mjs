@@ -158,19 +158,6 @@ test("internal routes refuse an unauthenticated caller", async () => {
   assert.equal(reserve.status, 401);
 });
 
-test("the superseded Phase 6 endpoints are not part of this composition", async () => {
-  const purchaseId = await createPurchase("anthropic", "레거시 경계 검증용 프롬프트입니다.");
-  const legacy = await api(`/internal/evidence/purchases/${purchaseId}/payment-view`, {
-    headers: { authorization: `Bearer ${stack.internalServiceToken}` },
-  });
-  assert.equal(legacy.status, 404);
-  const siwe = await api("/auth/siwe/challenge", {
-    method: "POST",
-    body: JSON.stringify({ owner_address: stack.buyerWalletAddress }),
-  });
-  assert.equal(siwe.status, 404);
-});
-
 test("a cross-site browser POST cannot drive the local owner", async () => {
   const response = await fetch(`${stack.evidenceUrl}/purchases`, {
     method: "POST",

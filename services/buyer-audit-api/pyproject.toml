@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Reusable buyer audit foundation for the PBL agent payment project"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "abnf==2.2.0",
   "cryptography>=44,<47",
   "eth-account>=0.13.7,<0.14",
   "fastapi>=0.115,<1",
@@ -12,7 +11,6 @@ dependencies = [
   "pydantic-settings>=2.7,<3",
   "pymongo>=4.13,<5",
   "rfc8785>=0.1.4,<1",
-  "siwe==4.4.0",
   "uvicorn[standard]>=0.32,<1",
 ]
 

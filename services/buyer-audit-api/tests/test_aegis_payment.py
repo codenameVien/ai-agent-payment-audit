@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.api.app import create_app, is_legacy_surface
+from buyer_audit_api.api.app import create_app
 from buyer_audit_api.composition import AppContainer
 from buyer_audit_api.core.aegis_payment import AegisPaymentService, read_terms
 from buyer_audit_api.core.domain_registry import DomainRegistry
@@ -682,29 +682,27 @@ def test_the_local_composition_has_no_siwe_and_no_phase6_surface(
     with TestClient(create_app(runtime_container)) as client:
         siwe = client.post("/auth/siwe/challenge", json={"owner_address": BUYER_WALLET})
         assert siwe.status_code == 404
-        assert client.get("/auth/me").json()["owner_address"] == LOCAL_OWNER
-        for path in (
-            "/internal/evidence/seller-executions/claim",
-            "/internal/evidence/payment-intents/settle",
-            "/internal/evidence/payment-intents/reconcile-no-transfer",
-            "/internal/evidence/reputation-outbox/claim",
+        assert client.post("/auth/siwe/verify", json={}).status_code == 404
+        # The owner is server configuration: no login route reports or selects one.
+        assert client.get("/auth/me").status_code == 404
+        assert client.get("/agents").status_code == 404
+        assert client.get("/wallet").json()["owner_address"] == LOCAL_OWNER
+        # No handler exists for any of these. The two payment-intent paths share the shape
+        # of the GET-only `payment-intents/{purchase_id}` read, so a POST there is 405.
+        for path, expected in (
+            ("/internal/evidence/seller-executions/claim", 404),
+            ("/internal/evidence/payment-intents/settle", 405),
+            ("/internal/evidence/payment-intents/reconcile-no-transfer", 405),
+            ("/internal/evidence/reputation-outbox/claim", 404),
         ):
-            assert client.post(path, json={}, headers=INTERNAL_HEADERS).status_code == 404
-
-
-def test_the_legacy_composition_still_serves_its_historical_surfaces(
-    container: AppContainer,
-) -> None:
-    """With no local owner configured, the pre-AEGIS history composition is untouched."""
-    with TestClient(create_app(container)) as client:
-        challenge = client.post(
-            "/auth/siwe/challenge",
-            json={"owner_address": "0x0000000000000000000000000000000000000001"},
+            response = client.post(path, json={}, headers=INTERNAL_HEADERS)
+            assert response.status_code == expected, path
+        assert (
+            client.get(
+                "/internal/evidence/purchases/any/payment-view", headers=INTERNAL_HEADERS
+            ).status_code
+            == 404
         )
-        assert challenge.status_code == 200
-        # Present, and protected, rather than removed.
-        assert client.get("/internal/evidence/seller-executions/anything").status_code == 401
-        assert client.get("/internal/evidence/purchases/anything/payment-view").status_code == 401
 
 
 @pytest.mark.parametrize(
@@ -734,15 +732,6 @@ def test_the_allowed_local_origin_is_still_accepted(runtime_container: AppContai
             headers={"origin": "http://localhost:3000", "sec-fetch-site": "same-origin"},
         )
         assert response.status_code == 200
-
-
-def test_the_legacy_surface_predicate_keeps_the_new_runtime_routes() -> None:
-    assert is_legacy_surface("/internal/evidence/purchases/abc/payment-view")
-    assert is_legacy_surface("/internal/evidence/payment-intents/claim")
-    assert not is_legacy_surface("/internal/evidence/payment-intents/authorize")
-    assert not is_legacy_surface("/internal/evidence/payment-intents/reconciliation")
-    assert not is_legacy_surface("/internal/evidence/aegis/payments/reserve")
-    assert not is_legacy_surface("/internal/evidence/aegis/purchases/abc/delivery")
 
 
 def test_the_service_refuses_an_unknown_execution_mode() -> None:

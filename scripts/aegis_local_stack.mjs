@@ -323,7 +323,6 @@ export async function startAegisStack(options = {}) {
       internalServiceToken: token(),
       adminServiceToken: token(),
       gatewayServiceToken: token(),
-      sessionSecret: base64Key(),
       payloadMasterKey: base64Key(),
       // Ephemeral test key, generated per run. No real wallet key is ever used here.
       signerPrivateKey: `0x${randomBytes(32).toString("hex")}`,
@@ -359,7 +358,6 @@ export async function startAegisStack(options = {}) {
         ...baseEnv(),
         MONGODB_URI: mongo.uri,
         MONGODB_DATABASE: DATABASE,
-        SESSION_SECRET_BASE64: secrets.sessionSecret,
         PAYLOAD_MASTER_KEY_BASE64: secrets.payloadMasterKey,
         INTERNAL_SERVICE_TOKEN: secrets.internalServiceToken,
         ADMIN_SERVICE_TOKEN: secrets.adminServiceToken,
