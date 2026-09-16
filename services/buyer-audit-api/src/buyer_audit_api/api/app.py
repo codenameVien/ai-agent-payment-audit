@@ -39,7 +39,6 @@ from buyer_audit_api.api.schemas import (
     PurchaseRunResponse,
     PurchaseSummaryResponse,
     ScenarioResponse,
-    SensitivePayloadResponse,
     WalletDashboardResponse,
     WalletPolicyRequest,
     WalletPolicyResponse,
@@ -90,10 +89,10 @@ from buyer_audit_api.core.payment import (
 )
 from buyer_audit_api.core.projections import PurchaseProjection, PurchaseProjectionService
 from buyer_audit_api.core.request_classification import StoredRequestClassifier
+from buyer_audit_api.core.sensitive_payloads import read_sensitive_payload
 
 _REDACTED_KEYS = {
     "apikey",
-    "ciphertext",
     "privatekey",
     "prompt",
     "response",
@@ -287,13 +286,10 @@ def create_app(container: AppContainer) -> FastAPI:
     audit_service = AuditService(
         repository=cast(AuditRepository, container.repository),
         clock=container.clock,
-        # The audit decrypts the stored original request under its own authority to
+        # The audit reads the stored original request under its own authority to
         # re-derive the priority classification. Nothing but the classification result
         # leaves that boundary.
-        original_requests=StoredRequestClassifier(
-            store=container.repository,
-            cipher=container.cipher,
-        ),
+        original_requests=StoredRequestClassifier(store=container.repository),
     )
 
     @asynccontextmanager
@@ -435,7 +431,7 @@ def create_app(container: AppContainer) -> FastAPI:
             if isinstance(payload_id, str):
                 sensitive_payload = await container.repository.get_sensitive_payload(payload_id)
                 if sensitive_payload is not None and sensitive_payload.purchase_id == purchase_id:
-                    raw = container.cipher.decrypt_json(sensitive_payload)
+                    raw = read_sensitive_payload(sensitive_payload)
                     candidate = raw.get("prompt")
                     prompt = candidate if isinstance(candidate, str) else None
         current_count, current_hash = len(events), events[-1].event_hash
@@ -1155,7 +1151,7 @@ def create_app(container: AppContainer) -> FastAPI:
         sensitive = await container.repository.get_sensitive_payload(payload_id)
         if sensitive is None or sensitive.purchase_id != purchase_id:
             raise HTTPException(status_code=409, detail="request payload missing")
-        raw_request = container.cipher.decrypt_json(sensitive)
+        raw_request = read_sensitive_payload(sensitive)
         prompt = raw_request.get("prompt")
         if not isinstance(prompt, str) or not prompt:
             raise HTTPException(status_code=409, detail="request prompt missing")
@@ -1294,39 +1290,5 @@ def create_app(container: AppContainer) -> FastAPI:
         if not events or events[0].actor.get("id") != owner.lower():
             raise HTTPException(status_code=404)
         return [_event_response(event) for event in events]
-
-    @app.post(
-        "/purchases/{purchase_id}/sensitive/{payload_id}/access",
-        response_model=SensitivePayloadResponse,
-        status_code=201,
-    )
-    async def access_sensitive(purchase_id: str, payload_id: str) -> SensitivePayloadResponse:
-        """H4: reading sensitive material is an explicit mutation, never a GET.
-
-        Every read of an encrypted payload must leave an append-only access record, so
-        this operation is a POST and the GET/read contract stays strictly zero-write.
-        """
-        owner = require_owner()
-        events = await verified_events(purchase_id)
-        if not events or events[0].actor.get("id") != owner.lower():
-            raise HTTPException(status_code=404)
-        payload = await container.repository.get_sensitive_payload(payload_id)
-        if payload is None or payload.purchase_id != purchase_id:
-            raise HTTPException(status_code=404)
-        value = container.cipher.decrypt_json(payload)
-        await container.repository.append_event(
-            purchase_id=purchase_id,
-            event_type=EventType.SENSITIVE_PAYLOAD_ACCESSED,
-            occurred_at=container.clock.now(),
-            actor={"id": owner.lower(), "type": "user"},
-            payload={"kind": payload.kind, "payloadId": payload.payload_id},
-        )
-        return SensitivePayloadResponse(
-            purchase_id=purchase_id,
-            payload_id=payload.payload_id,
-            kind=payload.kind,
-            content_hash=payload.content_hash,
-            value=value,
-        )
 
     return app

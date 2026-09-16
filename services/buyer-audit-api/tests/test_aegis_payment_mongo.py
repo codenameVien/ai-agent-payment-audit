@@ -19,7 +19,6 @@ import pytest
 from pymongo import AsyncMongoClient
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.aegis_payment import AegisPaymentService
 from buyer_audit_api.core.audit import AuditService
@@ -83,14 +82,12 @@ def _workflow(repository: MongoEvidenceRepository, clock: FrozenClock) -> AegisD
 async def test_a_real_mongo_payment_attempt_survives_a_reopened_store(mongo_uri) -> None:
     database = f"pbl_aegis_test_{uuid.uuid4().hex}"
     clock = FrozenClock()
-    cipher = LocalEnvelopeCipher(master_key=b"m" * 32)
     repository = _repository(mongo_uri, database)
     cleanup: AsyncMongoClient = AsyncMongoClient(mongo_uri)
     try:
         await repository.ensure_indexes()
         purchases = PurchaseService(
             repository=repository,
-            cipher=cipher,
             domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
             clock=clock,
         )
@@ -186,7 +183,7 @@ async def test_a_real_mongo_payment_attempt_survives_a_reopened_store(mongo_uri)
         report = await AuditService(
             repository=reopened,
             clock=FrozenClock(),
-            original_requests=StoredRequestClassifier(store=reopened, cipher=cipher),
+            original_requests=StoredRequestClassifier(store=reopened),
         ).audit(purchase_id)
         rules = {finding.rule_id for finding in report.findings}
         assert "AUD-AA-PRIORITY-CLASSIFICATION-UNVERIFIABLE" not in rules

@@ -8,7 +8,6 @@ class Settings(BaseSettings):
     mongodb_database: str = "pbl_audit"
     # Base Sepolia. The AEGIS token identity recorded with every decision carries it.
     aegis_chain_id: int = 84532
-    payload_master_key_base64: str
     internal_service_token: str
     admin_service_token: str
     commerce_gateway_url: str = "http://localhost:8081"

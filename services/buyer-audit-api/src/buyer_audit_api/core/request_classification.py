@@ -2,9 +2,9 @@
 
 `AEGIS-01` could check that a decision's recorded priority justification was internally
 consistent, but not that it described the request the user actually sent: the prompt is
-deliberately absent from the evidence chain. The original request is nevertheless stored,
-encrypted, by the purchase service, so the audit server can decrypt it under its own
-authority and re-run the deterministic classifier over it.
+deliberately absent from the evidence chain. The original request is nevertheless stored
+outside the chain by the purchase service, bound by its content hash, so the audit server
+can read it back and re-run the deterministic classifier over it.
 
 What leaves this module is only the classification result - policy names, the reason and
 the fixed dictionary terms that matched. The prompt itself never reaches an audit finding,
@@ -23,8 +23,9 @@ from buyer_audit_api.core.aa_policy import (
     classification_inputs,
     classify_priority,
 )
+from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.models import JsonObject, SensitivePayload
-from buyer_audit_api.core.ports import PayloadCipher
+from buyer_audit_api.core.sensitive_payloads import read_sensitive_payload
 
 #: The kind the purchase service stores the original request under.
 REQUEST_PAYLOAD_KIND = "request"
@@ -68,11 +69,10 @@ class OriginalRequestStore(Protocol):
 
 
 class StoredRequestClassifier:
-    """Decrypts one stored request and returns only its deterministic classification."""
+    """Reads one stored request and returns only its deterministic classification."""
 
-    def __init__(self, *, store: OriginalRequestStore, cipher: PayloadCipher) -> None:
+    def __init__(self, *, store: OriginalRequestStore) -> None:
         self._store = store
-        self._cipher = cipher
 
     async def classify(
         self, *, purchase_id: str, requested_payload: JsonObject
@@ -109,12 +109,11 @@ class StoredRequestClassifier:
                 detail="요청 원문 해시가 REQUESTED에 기록된 값과 다릅니다.",
             )
         try:
-            raw_request = self._cipher.decrypt_json(stored)
-        except Exception:  # noqa: BLE001 - any cipher failure is reported without detail
-            # The exception text could echo ciphertext or key material, so it is dropped.
+            raw_request = read_sensitive_payload(stored)
+        except EvidenceIntegrityError:
             return OriginalClassification(
-                status="unavailable",
-                detail="요청 원문을 복호화하지 못했습니다.",
+                status="binding_invalid",
+                detail="요청 원문 내용이 기록된 해시와 다릅니다.",
             )
         prompt, explicit = classification_inputs(raw_request)
         try:

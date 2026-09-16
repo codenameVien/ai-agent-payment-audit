@@ -24,7 +24,6 @@
     "test:observer:e2e": "npm run build --workspace @pbl/commerce-gateway && node scripts/decision_observer_smoke.mjs",
     "aegis:live-payment": "npm run build --workspace @pbl/commerce-gateway && node scripts/aegis_live_payment_stack.mjs",
     "aegis:live-reconcile": "node scripts/aegis_reconcile_live_settlement.mjs",
-    "aegis:local-crypto:setup": "bash scripts/setup_aegis_local_crypto.sh",
     "aegis:smoke": "npm run build --workspace @pbl/commerce-gateway && node --test scripts/aegis_local_smoke.test.mjs",
     "aegis:payment:preflight": "node scripts/aegis_payment_preflight.mjs",
     "aegis:token:plan": "forge build --root infra/contracts && node scripts/aegis_token_deploy.mjs plan",

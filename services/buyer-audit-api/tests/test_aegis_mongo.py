@@ -9,7 +9,6 @@ import pytest
 from pymongo import AsyncMongoClient
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.audit import AuditService, AuditSeverity
 from buyer_audit_api.core.documents import verify_immutable_document
@@ -62,7 +61,6 @@ async def test_real_mongo_aa_snapshot_round_trip_and_immutability(mongo_uri) -> 
 
         purchases = PurchaseService(
             repository=repository,
-            cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
             domains=DomainRegistry(
                 [AiInferenceDomainModule(default_max_output_tokens=1024)]
             ),

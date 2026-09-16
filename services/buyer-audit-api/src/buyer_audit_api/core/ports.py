@@ -67,16 +67,3 @@ class EvidenceRepository(Protocol):
     async def put_document(self, document: ImmutableDocument) -> ImmutableDocument: ...
 
     async def get_document(self, document_id: str) -> ImmutableDocument | None: ...
-
-
-class PayloadCipher(Protocol):
-    def encrypt_json(
-        self,
-        *,
-        purchase_id: str,
-        kind: str,
-        payload: Mapping[str, Any],
-        created_at: datetime,
-    ) -> SensitivePayload: ...
-
-    def decrypt_json(self, payload: SensitivePayload) -> JsonObject: ...

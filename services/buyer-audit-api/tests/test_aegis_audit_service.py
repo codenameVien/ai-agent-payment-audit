@@ -16,7 +16,6 @@ import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.core.aegis_payment import AegisPaymentService
 from buyer_audit_api.core.audit import (
     LEGACY_RULESET_VERSION,
@@ -65,7 +64,6 @@ class FrozenClock:
 async def _decided(repository: InMemoryEvidenceRepository, clock: FrozenClock) -> str:
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
         clock=clock,
     )
@@ -391,10 +389,10 @@ async def test_reaudit_fails_closed_once_evidence_passes_the_audited_head() -> N
     first = await service.audit(purchase_id)
     await repository.append_event(
         purchase_id=purchase_id,
-        event_type=EventType.SENSITIVE_PAYLOAD_ACCESSED,
+        event_type=EventType.CORRECTION_RECORDED,
         occurred_at=clock.now(),
         actor={"id": OWNER, "type": "user"},
-        payload={"kind": "request", "payloadId": "payload-1"},
+        payload={"reason": "unrelated correction note"},
     )
 
     with pytest.raises(EvidenceIntegrityError, match="advanced after the terminal audit"):
@@ -518,10 +516,10 @@ async def test_append_race_loser_never_returns_a_stale_audit() -> None:
     await AuditService(repository=repository, clock=clock).audit(purchase_id)
     await repository.append_event(
         purchase_id=purchase_id,
-        event_type=EventType.SENSITIVE_PAYLOAD_ACCESSED,
+        event_type=EventType.CORRECTION_RECORDED,
         occurred_at=clock.now(),
         actor={"id": OWNER, "type": "user"},
-        payload={"kind": "request", "payloadId": "payload-1"},
+        payload={"reason": "unrelated correction note"},
     )
 
     racing = RacingRepository(repository, before_events, before_head)
@@ -533,7 +531,7 @@ async def test_append_race_loser_never_returns_a_stale_audit() -> None:
     assert racing.append_attempts == 1
     events = await repository.list_events(purchase_id)
     assert [event.type for event in events].count(EventType.AUDITED) == 1
-    assert events[-1].type is EventType.SENSITIVE_PAYLOAD_ACCESSED
+    assert events[-1].type is EventType.CORRECTION_RECORDED
 
 
 async def test_append_race_loser_returns_the_winner_report_when_it_is_current() -> None:

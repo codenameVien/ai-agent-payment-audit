@@ -15,7 +15,6 @@ import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.core.aegis_payment import AegisPaymentService
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import PaymentConflictError, PaymentPolicyError
@@ -51,7 +50,6 @@ async def decided_purchase(
     """A real decision; returns its purchase id and the decided amount."""
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
         clock=clock,
     )

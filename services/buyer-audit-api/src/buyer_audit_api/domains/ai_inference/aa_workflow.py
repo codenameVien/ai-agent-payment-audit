@@ -41,7 +41,7 @@ from buyer_audit_api.domains.ai_inference.aa_selection import select
 
 #: Events that may appear anywhere without changing the business lifecycle position.
 _AUXILIARY_EVENT_TYPES = frozenset(
-    {EventType.SENSITIVE_PAYLOAD_ACCESSED, EventType.CORRECTION_RECORDED}
+    {EventType.CORRECTION_RECORDED}
 )
 
 

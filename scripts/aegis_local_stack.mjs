@@ -47,10 +47,6 @@ const LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
-function base64Key() {
-  return randomBytes(32).toString("base64");
-}
-
 function token() {
   return randomBytes(24).toString("hex");
 }
@@ -323,7 +319,6 @@ export async function startAegisStack(options = {}) {
       internalServiceToken: token(),
       adminServiceToken: token(),
       gatewayServiceToken: token(),
-      payloadMasterKey: base64Key(),
       // Ephemeral test key, generated per run. No real wallet key is ever used here.
       signerPrivateKey: `0x${randomBytes(32).toString("hex")}`,
     };
@@ -358,7 +353,6 @@ export async function startAegisStack(options = {}) {
         ...baseEnv(),
         MONGODB_URI: mongo.uri,
         MONGODB_DATABASE: DATABASE,
-        PAYLOAD_MASTER_KEY_BASE64: secrets.payloadMasterKey,
         INTERNAL_SERVICE_TOKEN: secrets.internalServiceToken,
         ADMIN_SERVICE_TOKEN: secrets.adminServiceToken,
         GATEWAY_SERVICE_TOKEN: secrets.gatewayServiceToken,

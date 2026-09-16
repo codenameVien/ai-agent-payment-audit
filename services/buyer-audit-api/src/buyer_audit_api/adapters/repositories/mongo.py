@@ -102,17 +102,12 @@ def _event_from_document(document: dict[str, Any]) -> EvidenceEvent:
 
 def _sensitive_document(payload: SensitivePayload) -> dict[str, Any]:
     return {
-        "algorithm": payload.algorithm,
-        "ciphertext": payload.ciphertext,
         "contentHash": payload.content_hash,
         "createdAt": payload.created_at,
-        "dekNonce": payload.dek_nonce,
-        "encryptedDek": payload.encrypted_dek,
-        "keyVersion": payload.key_version,
         "kind": payload.kind,
-        "nonce": payload.nonce,
         "payloadId": payload.payload_id,
         "purchaseId": payload.purchase_id,
+        "value": payload.value,
     }
 
 
@@ -121,12 +116,7 @@ def _sensitive_from_document(document: dict[str, Any]) -> SensitivePayload:
         payload_id=str(document["payloadId"]),
         purchase_id=str(document["purchaseId"]),
         kind=str(document["kind"]),
-        algorithm=str(document["algorithm"]),
-        ciphertext=str(document["ciphertext"]),
-        nonce=str(document["nonce"]),
-        encrypted_dek=str(document["encryptedDek"]),
-        dek_nonce=str(document["dekNonce"]),
-        key_version=str(document["keyVersion"]),
+        value=cast(JsonObject, document["value"]),
         content_hash=str(document["contentHash"]),
         created_at=cast(datetime, document["createdAt"]),
     )

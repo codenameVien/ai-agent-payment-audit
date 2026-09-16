@@ -292,7 +292,7 @@ def test_audit_coverage_is_reported_when_evidence_advances() -> None:
         (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
         (EventType.PAYMENT_SETTLED, settled_payload()),
         (EventType.AUDITED, audited_payload("NORMAL")),
-        (EventType.SENSITIVE_PAYLOAD_ACCESSED, {"kind": "request", "payloadId": "p-1"}),
+        (EventType.CORRECTION_RECORDED, {"reason": "unrelated correction note"}),
     )
 
     assert PROJECTIONS.project(covered).audit_covers_head is True
@@ -341,12 +341,12 @@ def test_summary_still_reads_an_older_ruleset_audit_as_history() -> None:
         READER.current(events)
 
 
-def test_access_records_do_not_advance_the_lifecycle_label() -> None:
+def test_correction_records_do_not_advance_the_lifecycle_label() -> None:
     projection = PROJECTIONS.project(
         chain(
             *prefix(),
             (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
-            (EventType.SENSITIVE_PAYLOAD_ACCESSED, {"kind": "request", "payloadId": "p-1"}),
+            (EventType.CORRECTION_RECORDED, {"reason": "unrelated correction note"}),
         )
     )
     assert projection.lifecycle_status == EventType.PAYMENT_INTENT_CLAIMED.value

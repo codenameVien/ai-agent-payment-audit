@@ -7,7 +7,6 @@ import httpx
 import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.local_priority import (
     LocalQwenPriorityClassifier,
     PriorityClassificationError,
@@ -141,7 +140,6 @@ def test_purchase_creation_bypasses_explicit_and_fails_before_any_write() -> Non
         classifier = FailingClassifier()
         service = PurchaseService(
             repository=repository,
-            cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
             domains=DomainRegistry(
                 [
                     AiInferenceDomainModule(
@@ -175,6 +173,6 @@ def test_purchase_creation_bypasses_explicit_and_fails_before_any_write() -> Non
             )
         assert classifier.calls == 1
         assert len(repository._events) == 1  # noqa: SLF001 - proves no purchase event
-        assert len(repository._sensitive) == 1  # noqa: SLF001 - proves no encrypted request write
+        assert len(repository._sensitive) == 1  # noqa: SLF001 - proves no second request write
 
     asyncio.run(exercise())
