@@ -45,7 +45,11 @@ interface Harness {
 }
 
 async function startHarness(
-  options: { providers?: Record<string, MockProvider>; wrap?: Record<string, Wrapper> } = {},
+  options: {
+    providers?: Record<string, MockProvider>;
+    wrap?: Record<string, Wrapper>;
+    wrapFacilitator?: Wrapper;
+  } = {},
 ): Promise<Harness> {
   const signer = new AegisAuthorizationSigner(SIGNER_KEY, 84532);
   const evidence = await startEvidenceApiDouble({
@@ -53,7 +57,10 @@ async function startHarness(
     buyerWalletAddress: signer.address.toLowerCase(),
   });
   const facilitator = new MockFacilitator();
-  const facilitatorServer = await startHandlerServer((request) => facilitator.handle(request));
+  const facilitatorBase = (request: Request): Promise<Response> => facilitator.handle(request);
+  const facilitatorServer = await startHandlerServer(
+    options.wrapFacilitator === undefined ? facilitatorBase : options.wrapFacilitator(facilitatorBase),
+  );
   const closers: (() => Promise<void>)[] = [facilitatorServer.close, evidence.close];
   const routes: Record<string, string> = {};
   for (const providerId of Object.keys(TEST_MODELS)) {
@@ -181,6 +188,64 @@ test("AEGIS name/version binding settles once using the new token identity", asy
     assert.equal(harness.evidence.settlements.length, 1);
     assert.equal(harness.evidence.deliveries.length, 2);
   } finally { await harness.close(); }
+});
+
+test("the executor signs from validAfter 0, like the official x402 client", async () => {
+  const seen: string[] = [];
+  const capture: Wrapper = (handler) => async (request) => {
+    if (new URL(request.url).pathname.endsWith("/verify")) {
+      const body = (await request.clone().json()) as {
+        paymentPayload: { payload: { authorization: { validAfter: string } } };
+      };
+      seen.push(body.paymentPayload.payload.authorization.validAfter);
+    }
+    return handler(request);
+  };
+  const harness = await startHarness({ wrapFacilitator: capture });
+  try {
+    const purchaseId = "purchase-valid-after";
+    record(harness, purchaseId, "google");
+    const result = await harness.executor.execute({
+      purchaseId,
+      resourceBody: { prompt: "validAfter 검증" },
+    });
+    assert.equal(result.payment_status, "settled");
+    assert.deepEqual(seen, ["0"]);
+  } finally {
+    await harness.close();
+  }
+});
+
+test("a Facilitator refusal keeps its own message in the failure record", async () => {
+  const refuseSettle: Wrapper = (handler) => async (request) => {
+    if (!new URL(request.url).pathname.endsWith("/settle")) return handler(request);
+    return Response.json({
+      success: false,
+      transaction: "",
+      network: TEST_NETWORK,
+      errorReason: "invalid_exact_evm_transaction_failed",
+      errorMessage: "execution reverted: AuthorizationNotYetValid()",
+    });
+  };
+  const harness = await startHarness({ wrapFacilitator: refuseSettle });
+  try {
+    const purchaseId = "purchase-refusal-message";
+    record(harness, purchaseId, "google");
+    const result = await harness.executor.execute({
+      purchaseId,
+      resourceBody: { prompt: "거절 사유 검증" },
+    });
+    assert.equal(result.payment_status, "failed");
+    assert.equal(result.state, "FAILED");
+    assert.equal(harness.evidence.settlements.length, 0);
+    assert.equal(harness.evidence.failures.length, 1);
+    assert.equal(
+      harness.evidence.failures[0]!.reason,
+      "invalid_exact_evm_transaction_failed: execution reverted: AuthorizationNotYetValid()",
+    );
+  } finally {
+    await harness.close();
+  }
 });
 
 test("delivery identity ignores mock timing but keeps result changes distinct", () => {
