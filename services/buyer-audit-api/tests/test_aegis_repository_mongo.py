@@ -5,7 +5,7 @@ fails, BSON millisecond round trips, wallet binding uniqueness, the per-token wa
 policy index, the atomic reservation and authorization (now driven by the AEGIS
 reservation), the release of a failed attempt's reservation, the hold of a parked one,
 a race between different terminal outcomes, hash-chain tamper detection and
-ciphertext-only storage.
+plain original payloads bound by their content hash.
 
 It also pins the index set: an existing database already holds every index earlier
 releases created, so `ensure_indexes` must succeed there without changing any of them.
@@ -28,7 +28,6 @@ from pymongo import AsyncMongoClient
 from pymongo.errors import DuplicateKeyError
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.aegis_payment import AegisPaymentService
 from buyer_audit_api.core.domain_registry import DomainRegistry
@@ -42,6 +41,7 @@ from buyer_audit_api.core.payment import (
     WalletPolicy,
 )
 from buyer_audit_api.core.purchase_service import PurchaseService
+from buyer_audit_api.core.sensitive_payloads import new_sensitive_payload, read_sensitive_payload
 from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
 from buyer_audit_api.domains.ai_inference.aa_catalog import (
     FIXTURE_CATALOG_PATH,
@@ -101,7 +101,6 @@ async def store(mongo_uri: str) -> AsyncIterator[Store]:
 async def _decided(repository: MongoEvidenceRepository, clock: FrozenClock) -> tuple[str, int]:
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"m" * 32),
         domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
         clock=clock,
     )
@@ -297,25 +296,31 @@ async def test_concurrent_appends_chain_and_tampering_is_detected(store: Store) 
         )
 
 
-async def test_sensitive_payloads_are_stored_only_as_ciphertext(store: Store) -> None:
+async def test_original_payloads_are_plain_json_bound_to_their_hash(store: Store) -> None:
     await store.repository.ensure_indexes()
-    cipher = LocalEnvelopeCipher(master_key=b"m" * 32)
-    payload = cipher.encrypt_json(
+    payload = new_sensitive_payload(
         purchase_id="purchase-mongo",
         kind="request",
-        payload={"prompt": "mongo-private-value"},
+        value={"prompt": "mongo-readable-value"},
         created_at=FrozenClock().now(),
     )
     await store.repository.store_sensitive_payload(payload)
 
-    raw = await store.raw[store.database]["sensitivePayloads"].find_one(
-        {"payloadId": payload.payload_id}
-    )
+    collection = store.raw[store.database]["sensitivePayloads"]
+    raw = await collection.find_one({"payloadId": payload.payload_id})
     assert raw is not None
-    assert "mongo-private-value" not in str(raw)
+    assert raw["value"] == {"prompt": "mongo-readable-value"}
     stored = await store.repository.get_sensitive_payload(payload.payload_id)
     assert stored is not None
-    assert cipher.decrypt_json(stored)["prompt"] == "mongo-private-value"
+    assert read_sensitive_payload(stored)["prompt"] == "mongo-readable-value"
+
+    await collection.update_one(
+        {"payloadId": payload.payload_id}, {"$set": {"value.prompt": "edited later"}}
+    )
+    edited = await store.repository.get_sensitive_payload(payload.payload_id)
+    assert edited is not None
+    with pytest.raises(EvidenceIntegrityError, match="content hash mismatch"):
+        read_sensitive_payload(edited)
 
 
 # --------------------------------------------------------------------------------------

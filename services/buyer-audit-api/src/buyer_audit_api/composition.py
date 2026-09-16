@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import base64
 import json
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,14 +11,13 @@ from buyer_audit_api.adapters.artificial_analysis import (
     HttpArtificialAnalysisSource,
 )
 from buyer_audit_api.adapters.commerce_gateway import HttpCommerceGatewayClient
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.adapters.local_priority import LocalQwenPriorityClassifier
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
 from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import ConfigurationError
 from buyer_audit_api.core.observer import LocalQwenEvidenceObserver, ObserverMode
-from buyer_audit_api.core.ports import Clock, EvidenceRepository, PayloadCipher
+from buyer_audit_api.core.ports import Clock, EvidenceRepository
 from buyer_audit_api.core.purchase_service import PurchaseService
 from buyer_audit_api.core.time import SystemClock
 from buyer_audit_api.domains.ai_inference import AiInferenceDomainModule
@@ -42,20 +40,9 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import (
 from buyer_audit_api.settings import Settings
 
 
-def decode_key(value: str, *, name: str) -> bytes:
-    try:
-        decoded = base64.b64decode(value, validate=True)
-    except ValueError as exc:
-        raise ConfigurationError(f"{name} must be valid base64") from exc
-    if len(decoded) != 32:
-        raise ConfigurationError(f"{name} must decode to exactly 32 bytes")
-    return decoded
-
-
 @dataclass(slots=True)
 class AppContainer:
     repository: EvidenceRepository
-    cipher: PayloadCipher
     clock: Clock
     auth_service: AuthService
     purchase_service: PurchaseService
@@ -126,12 +113,6 @@ def build_container(settings: Settings) -> AppContainer:
         uri=settings.mongodb_uri,
         database=settings.mongodb_database,
     )
-    cipher = LocalEnvelopeCipher(
-        master_key=decode_key(
-            settings.payload_master_key_base64,
-            name="PAYLOAD_MASTER_KEY_BASE64",
-        )
-    )
     auth_service = AuthService(repository=repository, clock=clock)
     classifier_mode = settings.aegis_priority_classifier.strip().lower()
     if classifier_mode not in {"deterministic", "local-qwen"}:
@@ -157,7 +138,6 @@ def build_container(settings: Settings) -> AppContainer:
         )
     purchase_service = PurchaseService(
         repository=repository,
-        cipher=cipher,
         domains=DomainRegistry(
             [
                 AiInferenceDomainModule(
@@ -190,7 +170,6 @@ def build_container(settings: Settings) -> AppContainer:
     )
     return AppContainer(
         repository=repository,
-        cipher=cipher,
         clock=clock,
         auth_service=auth_service,
         purchase_service=purchase_service,

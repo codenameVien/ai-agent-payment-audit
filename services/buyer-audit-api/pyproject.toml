@@ -4,7 +4,6 @@ version = "0.1.0"
 description = "Reusable buyer audit foundation for the PBL agent payment project"
 requires-python = ">=3.12,<3.13"
 dependencies = [
-  "cryptography>=44,<47",
   "eth-account>=0.13.7,<0.14",
   "fastapi>=0.115,<1",
   "httpx>=0.28,<1",

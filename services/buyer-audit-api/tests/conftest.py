@@ -7,7 +7,6 @@ from typing import Any
 import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.composition import AppContainer
 from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry
@@ -50,17 +49,14 @@ def container(
     repository: InMemoryEvidenceRepository,
     clock: MutableClock,
 ) -> AppContainer:
-    cipher = LocalEnvelopeCipher(master_key=b"p" * 32)
     auth_service = AuthService(repository=repository, clock=clock)
     purchase_service = PurchaseService(
         repository=repository,
-        cipher=cipher,
         domains=DomainRegistry([FakeDomain()]),
         clock=clock,
     )
     return AppContainer(
         repository=repository,
-        cipher=cipher,
         clock=clock,
         auth_service=auth_service,
         purchase_service=purchase_service,

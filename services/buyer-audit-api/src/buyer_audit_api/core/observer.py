@@ -1,8 +1,8 @@
 """Bounded, local-only advisory evidence observer.
 
 The deterministic audit and payment services never consume this module's findings as
-authority. The only model input is a short local context and (when needed) the decrypted
-request prompt; neither credentials nor encrypted payload records are sent. Advisory text
+authority. The only model input is a short local context and (when needed) the stored
+request prompt; neither credentials nor stored payload records are sent. Advisory text
 is model-generated and can contain an excerpt despite the instruction not to reproduce it.
 """
 

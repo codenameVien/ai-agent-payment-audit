@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from buyer_audit_api.core.sensitive_payloads import read_sensitive_payload
+
 CORE = Path(__file__).parents[1] / "src" / "buyer_audit_api" / "core"
 FORBIDDEN = ("domains.ai_inference", "gemini", "nemotron")
 
@@ -41,4 +43,4 @@ async def test_fake_domain_creates_protocol_neutral_evidence(container, reposito
     assert events[0].payload["normalizedRequest"] == {"normalized": "hello"}
     assert "do-not-leak" not in str(events[0].payload)
     assert sensitive is not None
-    assert container.cipher.decrypt_json(sensitive)["secret"] == "do-not-leak"
+    assert read_sensitive_payload(sensitive)["secret"] == "do-not-leak"

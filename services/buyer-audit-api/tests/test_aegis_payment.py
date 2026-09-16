@@ -55,7 +55,6 @@ def runtime_container(container: AppContainer) -> AppContainer:
         local_allowed_hosts=("localhost", "127.0.0.1", "testserver"),
         purchase_service=PurchaseService(
             repository=container.repository,
-            cipher=container.cipher,
             domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
             clock=container.clock,
         ),

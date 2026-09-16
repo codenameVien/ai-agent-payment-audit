@@ -6,7 +6,8 @@ from typing import Any
 
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import EventType, PurchaseCreated
-from buyer_audit_api.core.ports import Clock, EvidenceRepository, PayloadCipher
+from buyer_audit_api.core.ports import Clock, EvidenceRepository
+from buyer_audit_api.core.sensitive_payloads import new_sensitive_payload
 
 
 class PurchaseService:
@@ -14,12 +15,10 @@ class PurchaseService:
         self,
         *,
         repository: EvidenceRepository,
-        cipher: PayloadCipher,
         domains: DomainRegistry,
         clock: Clock,
     ) -> None:
         self._repository = repository
-        self._cipher = cipher
         self._domains = domains
         self._clock = clock
 
@@ -38,10 +37,10 @@ class PurchaseService:
         normalized = domain.normalize_request(raw_request)
         purchase_id = str(uuid.uuid4())
         now = self._clock.now()
-        sensitive = self._cipher.encrypt_json(
+        sensitive = new_sensitive_payload(
             purchase_id=purchase_id,
             kind="request",
-            payload=raw_request,
+            value=raw_request,
             created_at=now,
         )
         await self._repository.store_sensitive_payload(sensitive)

@@ -2,7 +2,8 @@
 
 `AEGIS-01` could only confirm that a decision's recorded justification was internally
 consistent, so a normalization and a decision edited together looked fine. These cover the
-closing of that gap: the encrypted original is decrypted server-side, re-classified, and
+closing of that gap: the stored original is read server-side, checked against its hash,
+re-classified, and
 compared - while the prompt itself stays out of every finding, event and advisor input.
 """
 
@@ -50,7 +51,6 @@ def runtime_container(container: AppContainer) -> AppContainer:
         local_allowed_hosts=("localhost", "127.0.0.1", "testserver"),
         purchase_service=PurchaseService(
             repository=container.repository,
-            cipher=container.cipher,
             domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
             clock=container.clock,
         ),
@@ -88,7 +88,7 @@ def _decide(client: TestClient, prompt: str, **request: object) -> str:
 
 
 def _classifier(container: AppContainer) -> StoredRequestClassifier:
-    return StoredRequestClassifier(store=container.repository, cipher=container.cipher)
+    return StoredRequestClassifier(store=container.repository)
 
 
 def _events(container: AppContainer, purchase_id: str) -> list[EvidenceEvent]:
@@ -238,25 +238,27 @@ def test_a_missing_original_is_reported_as_unverified_not_as_agreement(
     assert "AUD-AA-PRIORITY-ORIGINAL-MISMATCH" not in rules
 
 
-def test_an_undecryptable_original_is_reported_without_any_cipher_detail(
+def test_an_original_edited_after_the_decision_is_binding_invalid_without_its_text(
     runtime_container: AppContainer,
 ) -> None:
     with TestClient(create_app(runtime_container)) as client:
         purchase_id = _decide(client, CHEAP_PROMPT)
 
-    class BrokenCipher:
-        def decrypt_json(self, payload: object) -> dict[str, object]:
-            raise ValueError("nonce mismatch for key material aabbccdd")
-
-    classifier = StoredRequestClassifier(
-        store=runtime_container.repository,
-        cipher=BrokenCipher(),  # type: ignore[arg-type]
-    )
     requested = _events(runtime_container, purchase_id)[0]
+    payload_id = str(requested.payload["sensitivePayloadId"])
+    repository = runtime_container.repository
+    stored = asyncio.run(repository.get_sensitive_payload(payload_id))
+    assert stored is not None
+    # The stored hash is left as recorded; only the readable text is changed.
+    edited = replace(stored, value={**stored.value, "prompt": "edited later aabbccdd"})
+    repository._sensitive[payload_id] = edited  # type: ignore[attr-defined]  # noqa: SLF001
+
     result = asyncio.run(
-        classifier.classify(purchase_id=purchase_id, requested_payload=requested.payload)
+        _classifier(runtime_container).classify(
+            purchase_id=purchase_id, requested_payload=requested.payload
+        )
     )
-    assert result.status == "unavailable"
+    assert result.status == "binding_invalid"
     assert result.effective_priority is None
     assert "aabbccdd" not in str(result.detail)
 

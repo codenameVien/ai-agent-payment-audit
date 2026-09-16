@@ -8,7 +8,6 @@ import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.core.aa_policy import (
     AA_SCORING_POLICY_VERSION,
     LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD,
@@ -80,7 +79,6 @@ def purchases(
 ) -> PurchaseService:
     return PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry(
             [AiInferenceDomainModule(default_max_output_tokens=MAX_OUTPUT_TOKENS)]
         ),
@@ -197,7 +195,6 @@ async def test_local_qwen_priority_reaches_selection_and_deterministic_explanati
 
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry(
             [
                 AiInferenceDomainModule(

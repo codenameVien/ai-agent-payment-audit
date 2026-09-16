@@ -35,7 +35,6 @@ def aegis_container(container: AppContainer) -> AppContainer:
         container,
         purchase_service=PurchaseService(
             repository=container.repository,
-            cipher=container.cipher,
             domains=DomainRegistry([AiInferenceDomainModule(default_max_output_tokens=1024)]),
             clock=container.clock,
         ),

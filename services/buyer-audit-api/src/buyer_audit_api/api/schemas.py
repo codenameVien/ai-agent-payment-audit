@@ -180,14 +180,6 @@ class EventResponse(BaseModel):
     transaction_ref: EvmTransactionRefModel | LocalTransactionRefModel | None = None
 
 
-class SensitivePayloadResponse(BaseModel):
-    purchase_id: str
-    payload_id: str
-    kind: str
-    content_hash: str
-    value: dict[str, Any]
-
-
 class WalletPolicyRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 

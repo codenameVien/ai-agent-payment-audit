@@ -11,7 +11,6 @@ import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.core.aa_policy import amount_units
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.purchase_service import PurchaseService
@@ -48,7 +47,6 @@ def decision_payloads() -> tuple[dict[str, Any], dict[str, Any]]:
         clock = FrozenClock()
         purchases = PurchaseService(
             repository=repository,
-            cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
             domains=DomainRegistry(
                 [AiInferenceDomainModule(default_max_output_tokens=1024)]
             ),

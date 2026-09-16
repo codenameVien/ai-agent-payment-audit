@@ -14,7 +14,6 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 ENV_FILE = REPO_ROOT / ".env.local"
 EXAMPLE_FILE = REPO_ROOT / ".env.example"
 KEY_NAMES = (
-    "PAYLOAD_MASTER_KEY_BASE64",
     "INTERNAL_SERVICE_TOKEN",
     "ADMIN_SERVICE_TOKEN",
     "GATEWAY_SERVICE_TOKEN",

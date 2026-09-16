@@ -11,7 +11,6 @@ import pytest
 from fakes.memory_repository import InMemoryEvidenceRepository
 
 from buyer_audit_api.adapters.artificial_analysis import FixtureArtificialAnalysisSource
-from buyer_audit_api.adapters.crypto.local_aes_gcm import LocalEnvelopeCipher
 from buyer_audit_api.core.audit import AuditEvaluator, AuditSeverity
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import EventType, EvidenceEvent
@@ -44,7 +43,6 @@ async def _decided_events(
     clock = FrozenClock()
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry(
             [AiInferenceDomainModule(default_max_output_tokens=MAX_OUTPUT_TOKENS)]
         ),
@@ -419,7 +417,6 @@ async def test_audit_service_loads_the_snapshot_body_it_recomputes_from() -> Non
     clock = FrozenClock()
     purchases = PurchaseService(
         repository=repository,
-        cipher=LocalEnvelopeCipher(master_key=b"p" * 32),
         domains=DomainRegistry(
             [AiInferenceDomainModule(default_max_output_tokens=MAX_OUTPUT_TOKENS)]
         ),

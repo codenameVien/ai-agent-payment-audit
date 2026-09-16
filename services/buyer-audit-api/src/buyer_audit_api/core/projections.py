@@ -56,7 +56,6 @@ _AUDIT_READER = AuditReportReader()
 
 _NON_LIFECYCLE_EVENT_TYPES = frozenset(
     {
-        EventType.SENSITIVE_PAYLOAD_ACCESSED,
         EventType.CORRECTION_RECORDED,
         # Advisory observer/checkpoint records never move a purchase to another stage.
         *AUXILIARY_EVENT_TYPES,

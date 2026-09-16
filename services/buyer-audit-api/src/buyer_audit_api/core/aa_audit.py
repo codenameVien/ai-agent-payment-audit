@@ -728,13 +728,13 @@ def _original_request_issues(
                     "요청 원문으로 분류를 재도출하지 못했습니다. "
                     f"기록된 근거의 내부 정합성만 확인했습니다. {original_request.detail}"
                 ),
-                expected={"originalRequest": "decryptable"},
+                expected={"originalRequest": "readable"},
                 observed={"originalRequest": "unavailable"},
                 is_contradiction=False,
             )
         ]
     if classification_method == LOCAL_QWEN_PRIORITY_CLASSIFICATION_METHOD:
-        # Binding/decryption was checked above. Do not equate a deterministic keyword
+        # Binding and the content hash were checked above. Do not equate a deterministic keyword
         # re-classification with the intentionally recorded local-model inference.
         return []
     recorded = {

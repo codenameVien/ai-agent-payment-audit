@@ -27,7 +27,6 @@ class EventType(StrEnum):
     PAYMENT_FAILED = "PAYMENT_FAILED"
     DELIVERED = "DELIVERED"
     AUDITED = "AUDITED"
-    SENSITIVE_PAYLOAD_ACCESSED = "SENSITIVE_PAYLOAD_ACCESSED"
     CORRECTION_RECORDED = "CORRECTION_RECORDED"
     # Auxiliary evidence is intentionally separate from deterministic lifecycle facts.
     # It may advise a reviewer but can never authorize or reject a payment.
@@ -249,12 +248,7 @@ class SensitivePayload:
     payload_id: str
     purchase_id: str
     kind: str
-    algorithm: str
-    ciphertext: str
-    nonce: str
-    encrypted_dek: str
-    dek_nonce: str
-    key_version: str
+    value: JsonObject
     content_hash: str
     created_at: datetime
 
