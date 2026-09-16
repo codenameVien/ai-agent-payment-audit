@@ -16,6 +16,7 @@ from buyer_audit_api.core.audit import AuditReportReader
 from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.events import create_event, verify_event_chain
 from buyer_audit_api.core.models import (
+    AUXILIARY_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceSource,
@@ -350,6 +351,76 @@ def test_access_records_do_not_advance_the_lifecycle_label() -> None:
     )
     assert projection.lifecycle_status == EventType.PAYMENT_INTENT_CLAIMED.value
     assert projection.event_count == 5
+
+
+def auxiliary_payload(event_type: EventType, phase: str) -> JsonObject:
+    """The payload shapes the observer and checkpoint coordinator actually append."""
+    target: JsonObject = {
+        "phase": phase,
+        "eventCount": 1,
+        "headEventHash": "sha256:" + "88" * 32,
+    }
+    payloads: dict[EventType, JsonObject] = {
+        EventType.OBSERVER_COMPLETED: {
+            "phase": phase,
+            "mode": "mock",
+            "model": "mock-observer-v1",
+            "findings": [],
+        },
+        EventType.OBSERVER_UNAVAILABLE: {
+            "phase": phase,
+            "mode": "local-qwen",
+            "status": "unavailable",
+            "diagnosticCode": "TIMEOUT",
+            "reason": "local observer unavailable",
+        },
+        EventType.CHECKPOINT_TARGET_SELECTED: target,
+        EventType.CHECKPOINT_RECORDED: {
+            **target,
+            "mode": "mock",
+            "transactionHash": None,
+            "chainId": None,
+            "contractAddress": None,
+        },
+    }
+    return payloads[event_type]
+
+
+def delivered_specs() -> list[tuple[EventType, JsonObject]]:
+    return [
+        *prefix(),
+        (EventType.PAYMENT_INTENT_CLAIMED, claim_payload()),
+        (EventType.PAYMENT_AUTHORIZED, {"authorizationHash": "0xauth"}),
+        (EventType.PAYMENT_SETTLED, settled_payload()),
+        (EventType.DELIVERED, {"responseHash": "sha256:" + "2" * 64}),
+    ]
+
+
+LIFECYCLE_STAGES: dict[EventType, list[tuple[EventType, JsonObject]]] = {
+    EventType.DECIDED: [*prefix()],
+    EventType.DELIVERED: delivered_specs(),
+    EventType.AUDITED: [*delivered_specs(), (EventType.AUDITED, audited_payload("NORMAL"))],
+}
+
+
+@pytest.mark.parametrize("auxiliary", AUXILIARY_EVENT_TYPES, ids=str)
+@pytest.mark.parametrize("stage", list(LIFECYCLE_STAGES), ids=str)
+def test_auxiliary_evidence_does_not_advance_the_lifecycle_label(
+    stage: EventType, auxiliary: EventType
+) -> None:
+    """Observer and checkpoint records are advisory: the status stays at the real stage."""
+    specs = LIFECYCLE_STAGES[stage]
+    phase = "audit" if stage is EventType.AUDITED else "decision"
+    before = PROJECTIONS.project(chain(*specs))
+    events = chain(*specs, (auxiliary, auxiliary_payload(auxiliary, phase)))
+    after = PROJECTIONS.project(events)
+
+    assert after.lifecycle_status == stage.value
+    assert after.payment_status is before.payment_status
+    assert after.audit_status is before.audit_status
+    assert after.audit_covers_head is before.audit_covers_head
+    assert after.event_count == before.event_count + 1
+    assert after.head_event_hash == events[-1].event_hash
 
 
 # --------------------------------------------------------------------------------------

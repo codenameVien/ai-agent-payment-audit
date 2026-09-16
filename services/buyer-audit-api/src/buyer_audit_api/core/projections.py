@@ -15,6 +15,7 @@ from enum import StrEnum
 from buyer_audit_api.core.audit import AuditReportReader
 from buyer_audit_api.core.errors import EvidenceIntegrityError
 from buyer_audit_api.core.models import (
+    AUXILIARY_EVENT_TYPES,
     EventType,
     EvidenceEvent,
     EvidenceSource,
@@ -57,6 +58,8 @@ _NON_LIFECYCLE_EVENT_TYPES = frozenset(
     {
         EventType.SENSITIVE_PAYLOAD_ACCESSED,
         EventType.CORRECTION_RECORDED,
+        # Advisory observer/checkpoint records never move a purchase to another stage.
+        *AUXILIARY_EVENT_TYPES,
     }
 )
 
