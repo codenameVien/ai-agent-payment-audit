@@ -289,6 +289,7 @@ export class ProviderGateway {
       isValid: boolean;
       payer?: string;
       invalidReason?: string;
+      invalidMessage?: string;
     }>("/verify", context);
     if (verified.isValid !== true || typeof verified.payer !== "string") {
       return {
@@ -297,6 +298,9 @@ export class ProviderGateway {
           transaction: "",
           network: context.paymentRequirements.network,
           errorReason: verified.invalidReason ?? "facilitator rejected the payment",
+          ...(typeof verified.invalidMessage === "string"
+            ? { errorMessage: verified.invalidMessage }
+            : {}),
         },
         mismatch: null,
       };

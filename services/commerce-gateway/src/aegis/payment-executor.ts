@@ -250,6 +250,10 @@ export class AegisPaymentExecutor {
     }
     // Deterministic window: a retry of the same reservation reproduces the same
     // authorization instead of creating a second payable one.
+    // validAfter is 0, as in the official x402 exact client. The token reverts on
+    // `block.timestamp <= validAfter`, so a lower bound one second before the reservation
+    // let a Facilitator whose RPC node was a block behind refuse a valid authorization at
+    // settle. The single-use nonce and validBefore bound this attempt; validAfter does not.
     const claimedAt = Math.floor(Date.parse(intent.claimedAt) / 1000);
     if (!Number.isSafeInteger(claimedAt)) {
       throw new PaymentExecutionError("the reservation timestamp is malformed");
@@ -258,7 +262,7 @@ export class AegisPaymentExecutor {
       from: this.#signer.address,
       to: derived.recipient as Address,
       value: derived.amountUnits.toString(),
-      validAfter: String(claimedAt - 1),
+      validAfter: "0",
       validBefore: String(claimedAt + this.#window),
       nonce: intent.authorizationNonce as Hex,
     };
@@ -458,15 +462,23 @@ export class AegisPaymentExecutor {
     if (paid.status === 402) {
       // An explicit payment refusal. Releasing the reservation is safe precisely because
       // the Facilitator never reported a successful settlement for it.
+      // The code alone cannot tell a clock window from a bad signature; the Facilitator's
+      // own message names the on-chain cause, so it is kept with the refusal.
+      const code = settlement?.errorReason ?? bodyError(paid.body);
+      const message = settlement?.errorMessage;
+      const refusal = (typeof message === "string" && message.length > 0
+        ? `${code}: ${message}`
+        : code
+      ).slice(0, 500);
       intent = await this.#evidence.fail({
         purchaseId: args.purchaseId,
-        reason: (settlement?.errorReason ?? bodyError(paid.body)).slice(0, 200),
+        reason: refusal,
       });
       return this.#result({
         derived,
         intent,
         status: "failed",
-        providerError: settlement?.errorReason ?? bodyError(paid.body),
+        providerError: refusal,
       });
     }
 

@@ -84,6 +84,7 @@ export interface AegisSettlementResponse {
   payer?: string;
   amount?: string;
   errorReason?: string;
+  errorMessage?: string;
 }
 
 export function bindingFor(terms: AegisTerms, executionMode: string): AegisBinding {
