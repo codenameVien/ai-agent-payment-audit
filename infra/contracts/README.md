@@ -26,11 +26,14 @@ forge install OpenZeppelin/openzeppelin-contracts --no-git   # lib/ 는 커밋�
 FOUNDRY_PROFILE=oz forge test
 ```
 
-| | 첫 배포 | 두 번째 배포 |
+| | 첫 배포 | 현재 |
 |---|---|---|
-| 소스 | `src/AEGISToken.sol` (직접 구현) | `src-oz/AegisTokenOz.sol` (OpenZeppelin) |
+| 소스 | 직접 구현 (삭제됨, git 히스토리에 남음) | `src-oz/AegisTokenOz.sol` (OpenZeppelin) |
 | 주소 | `0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b` | `0xE208f63B826FcDD9De0836EFFEb0FA49d1c4142b` |
-| solc | 0.8.24 (`profile.default`) | 0.8.28 (`profile.oz`) |
+| solc | 0.8.24 | 0.8.28 (`profile.oz`) |
+
+첫 배포 토큰은 체인에 그대로 남아 있고 잔액도 옮길 수 없다. 두 번째 배포로 실제 x402 결제
+(`AuthorizationUsed` + `Transfer`)가 확인된 뒤 첫 배포 소스는 저장소에서 제거했다.
 
 이름·심볼·소수점·EIP-712 버전이 같아서 x402 결제 조건은 주소만 바꾸면 된다.
 첫 배포 토큰과 잔액은 서로 옮길 수 없다.
