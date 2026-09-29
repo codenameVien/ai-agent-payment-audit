@@ -38,7 +38,7 @@ class Settings(BaseSettings):
     aegis_checkpoint_mode: str = "off"
     # User-owned six-decimal ERC-3009 AEGIS token on Base Sepolia. Whether a request can
     # settle is controlled only by the server-side execution mode and approval gate.
-    aegis_token_address: str = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b"
+    aegis_token_address: str = "0xE208f63B826FcDD9De0836EFFEb0FA49d1c4142b"
     aegis_token_status: str = "deployed-base-sepolia"
     payment_token_name: str = "AEGIS"
     payment_token_symbol: str = "AEGIS"
