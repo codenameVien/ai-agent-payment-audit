@@ -8,3 +8,14 @@ optimizer_runs = 200
 
 [fmt]
 line_length = 100
+
+# OpenZeppelin 기반 새 토큰만 별도로 컴파일한다.
+# 기존 AEGISToken.sol 은 배포된 바이트코드를 그대로 재현해야 해서 solc 0.8.24 설정을 건드리지 않는다.
+[profile.oz]
+src = "src-oz"
+test = "test-oz"
+out = "out-oz"
+solc_version = "0.8.28"
+optimizer = true
+optimizer_runs = 200
+remappings = ["@openzeppelin/contracts/=lib/openzeppelin-contracts/contracts/"]

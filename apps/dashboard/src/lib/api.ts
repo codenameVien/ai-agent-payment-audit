@@ -38,6 +38,6 @@ export function credits(value: number | null): string {
 
 /** Contract identity of the deployed AEGIS token; any other address stays unlabelled. */
 export function paymentTokenSymbol(address: string | null | undefined): string {
-  if (address?.toLowerCase() === "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b") return "AEGIS";
+  if (address?.toLowerCase() === "0xE208f63B826FcDD9De0836EFFEb0FA49d1c4142b") return "AEGIS";
   return "토큰";
 }
