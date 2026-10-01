@@ -116,35 +116,6 @@ export function PurchaseDetail({ purchaseId }: { purchaseId: string }) {
           )}
         </section>
       )}
-      <section className="panel">
-        <div className="sectionHead">
-          <div>
-            <p className="eyebrow">증거 타임라인</p>
-            <h2>Append-only lifecycle</h2>
-          </div>
-        </div>
-        <ol className="timeline">
-          {detail.events.map((event) => (
-            <li key={event.event_id}>
-              <i />
-              <div>
-                <div className="timelineHead">
-                  <strong>{event.type}</strong>
-                  <time>{new Date(event.occurred_at).toLocaleString("ko-KR")}</time>
-                </div>
-                <p className="hash">
-                  #{event.sequence} · {short(event.event_hash, 13)}{" "}
-                  {event.redacted && "· 민감 필드 가림"}
-                </p>
-                <details>
-                  <summary>구조화 증거 보기</summary>
-                  <pre className="evidenceJson">{JSON.stringify(event.payload, null, 2)}</pre>
-                </details>
-              </div>
-            </li>
-          ))}
-        </ol>
-      </section>
     </main>
   );
 }

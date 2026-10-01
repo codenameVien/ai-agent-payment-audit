@@ -73,7 +73,6 @@ export function Overview() {
   const caution = alerts.filter((item) => item.severity === "CAUTION").length;
   const settled = purchases.filter((item) => item.payment_status === "PAYMENT_SETTLED");
   const audited = purchases.filter((item) => item.audit_severity !== null);
-  const chainReady = wallet?.balance_status === "base_sepolia_verified";
   const balanceLabel =
     wallet === null
       ? "조회 중"
@@ -81,25 +80,6 @@ export function Overview() {
 
   return (
     <main className="auditMain">
-      <section className="auditIntro">
-        <div>
-          <p className="eyebrow">AUDIT OVERVIEW</p>
-          <h1>AI 에이전트 결제 감사</h1>
-          <p>
-            로컬 소유자 계정의 모델 선택 증거, 고정 선결제, 감사 경고를 읽기 전용으로
-            확인합니다. 거래는 aa-three-factor-v1 정책과 Mock Provider 응답을 사용하며,
-            결제 모드는 각 거래의 Facilitator 정산 증거에 기록됩니다.
-          </p>
-        </div>
-        <div className="scopePill">
-          <i className={chainReady ? "ok" : "warn"} />
-          <span>
-            <strong>{chainReady ? "잔액 조회됨" : "잔액 미조회"}</strong>
-            <small>{balanceLabel} · 이 화면에서는 구매를 실행하지 않습니다</small>
-          </span>
-        </div>
-      </section>
-
       {error && (
         <div className="notice risk" role="alert">
           데이터가 최신이 아닐 수 있습니다: {error}{" "}
@@ -276,49 +256,6 @@ export function Overview() {
             )}
           </article>
 
-          <article className="panel evidencePanel">
-            <p className="eyebrow">EVIDENCE STATUS</p>
-            <h2>실제 증거 연결 상태</h2>
-            <ul className="evidenceChecks">
-              <li>
-                <i className={chainReady ? "ok" : "warn"} />
-                <span>
-                  <strong>토큰 잔액 RPC</strong>
-                  <small>
-                    {balanceLabel}
-                  </small>
-                </span>
-              </li>
-              <li>
-                <i className={settled.length > 0 ? "ok" : "idle"} />
-                <span>
-                  <strong>정산 기록</strong>
-                  <small>{settled.length}건 · Facilitator 응답 기준</small>
-                </span>
-              </li>
-              <li>
-                <i className={audited.length > 0 ? "ok" : "idle"} />
-                <span>
-                  <strong>MongoDB 감사 증거</strong>
-                  <small>{audited.length}건 감사 완료</small>
-                </span>
-              </li>
-            </ul>
-            <p className="panelNote">
-              세부 이벤트 해시 체인과 감사 bundle은 각 거래 상세에서 확인합니다.
-            </p>
-          </article>
-
-          <article className="panel readOnlyPanel">
-            <span className="readOnlyIcon">⌁</span>
-            <div>
-              <strong>이 화면은 모니터 전용입니다</strong>
-              <p>
-                구매 요청과 실행은 /request 화면에만 있습니다. 여기서는 기록된 증거만
-                읽습니다.
-              </p>
-            </div>
-          </article>
         </aside>
       </section>
     </main>
