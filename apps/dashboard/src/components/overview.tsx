@@ -191,12 +191,6 @@ export function Overview() {
             </div>
             <dl className="walletList">
               <div>
-                <dt>로컬 소유자</dt>
-                <dd title={wallet?.owner_address ?? undefined}>
-                  {short(wallet?.owner_address, 9)}
-                </dd>
-              </div>
-              <div>
                 <dt>구매 에이전트</dt>
                 <dd title={wallet?.buyer_wallet_address ?? undefined}>
                   {short(wallet?.buyer_wallet_address, 9)}

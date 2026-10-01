@@ -87,7 +87,6 @@ class AegisPaymentTerms:
     """The immutable terms a 402 challenge and an ERC-3009 signature must reproduce."""
 
     purchase_id: str
-    owner_address: str
     budget_units: int
     max_transaction_units: int | None
     decision_event_hash: str
@@ -228,7 +227,6 @@ def read_terms(events: list[EvidenceEvent]) -> AegisPaymentTerms:
     raw_limit = policy.get("maxTransactionUnits") if isinstance(policy, dict) else None
     return AegisPaymentTerms(
         purchase_id=decided.purchase_id,
-        owner_address=_string(requested.actor, "id", field="owner address").lower(),
         budget_units=_units(requested.payload.get("budgetUnits"), field="request budget"),
         max_transaction_units=(
             None if raw_limit is None else _units(raw_limit, field="request transaction limit")
@@ -317,7 +315,7 @@ class AegisPaymentService:
             and terms.amount_units > terms.max_transaction_units
         ):
             raise PaymentPolicyError("selected model exceeds the request transaction limit")
-        binding = await self._repository.get_wallet_binding(terms.owner_address)
+        binding = await self._repository.get_wallet_binding()
         if binding is None:
             raise PaymentPolicyError("buyer wallet is not bound")
         token_address = str(terms.token.get("address", "")).lower()

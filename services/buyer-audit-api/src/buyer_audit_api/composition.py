@@ -4,8 +4,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from eth_utils import is_address
-
 from buyer_audit_api.adapters.artificial_analysis import (
     FixtureArtificialAnalysisSource,
     HttpArtificialAnalysisSource,
@@ -47,8 +45,6 @@ class AppContainer:
     clock: Clock
     auth_service: AuthService
     purchase_service: PurchaseService
-    #: Fixed single-user demo owner. Server configuration, never a browser-selected value.
-    local_owner_address: str
     internal_service_token: str = "test-internal-token"
     admin_service_token: str = "test-admin-token"
     local_allowed_origins: tuple[str, ...] = ()
@@ -106,12 +102,9 @@ def build_aa_capture_source(settings: Settings, catalog: ModelCatalog) -> AaCapt
 
 def build_container(settings: Settings) -> AppContainer:
     clock = SystemClock()
-    # aa-three-factor-v1: a single local owner, mock providers and a mock Facilitator.
+    # aa-three-factor-v1: a single-user local demo, mock providers and a mock Facilitator.
     # The only chain access is a read-only balanceOf for the dashboard, and only when
     # BASE_SEPOLIA_RPC_URL is set. Nothing here signs or sends a transaction.
-    local_owner = settings.aegis_local_owner_address.strip().lower()
-    if not local_owner or not is_address(local_owner):
-        raise ConfigurationError("AEGIS_LOCAL_OWNER_ADDRESS must be an Ethereum address")
     repository = MongoEvidenceRepository(
         uri=settings.mongodb_uri,
         database=settings.mongodb_database,
@@ -176,7 +169,6 @@ def build_container(settings: Settings) -> AppContainer:
         clock=clock,
         auth_service=auth_service,
         purchase_service=purchase_service,
-        local_owner_address=local_owner,
         internal_service_token=settings.internal_service_token,
         admin_service_token=settings.admin_service_token,
         local_allowed_origins=tuple(

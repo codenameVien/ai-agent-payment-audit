@@ -158,7 +158,7 @@ test("internal routes refuse an unauthenticated caller", async () => {
   assert.equal(reserve.status, 401);
 });
 
-test("a cross-site browser POST cannot drive the local owner", async () => {
+test("a cross-site browser POST cannot create a purchase", async () => {
   const response = await fetch(`${stack.evidenceUrl}/purchases`, {
     method: "POST",
     headers: {

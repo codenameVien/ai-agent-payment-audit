@@ -44,10 +44,6 @@ class Settings(BaseSettings):
     base_sepolia_rpc_url: str = ""
     payment_token_name: str = "AEGIS"
     payment_token_symbol: str = "AEGIS"
-    # Single-user local demo identity. This is server configuration, not a login: the
-    # browser can never choose it. The service refuses to start when it is blank or not
-    # an Ethereum address.
-    aegis_local_owner_address: str = "0x00000000000000000000000000000000000a6e15"
     aegis_local_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     aegis_local_allowed_hosts: str = "localhost,127.0.0.1"
     # The server records this mode; a client can never label its own evidence as live.

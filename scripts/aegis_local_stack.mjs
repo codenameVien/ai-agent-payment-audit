@@ -43,7 +43,6 @@ const PROVIDERS = ["openai", "anthropic", "google"];
 const NETWORK = "eip155:84532";
 const ZERO_ADDRESS = "0x0000000000000000000000000000000000000000";
 const AEGIS_TOKEN_ADDRESS = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b";
-const LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15";
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -357,7 +356,6 @@ export async function startAegisStack(options = {}) {
         ADMIN_SERVICE_TOKEN: secrets.adminServiceToken,
         GATEWAY_SERVICE_TOKEN: secrets.gatewayServiceToken,
         COMMERCE_GATEWAY_URL: executorUrl,
-        AEGIS_LOCAL_OWNER_ADDRESS: LOCAL_OWNER,
         AEGIS_LOCAL_ALLOWED_ORIGINS: "http://localhost:3000,http://127.0.0.1:3000,http://127.0.0.1:3100",
         AEGIS_TOKEN_ADDRESS,
         AEGIS_TOKEN_STATUS: "deployed-base-sepolia",
@@ -441,10 +439,7 @@ export async function startAegisStack(options = {}) {
         "content-type": "application/json",
         authorization: `Bearer ${secrets.adminServiceToken}`,
       },
-      body: JSON.stringify({
-        owner_address: LOCAL_OWNER,
-        buyer_wallet_address: buyerWalletAddress,
-      }),
+      body: JSON.stringify({ buyer_wallet_address: buyerWalletAddress }),
     });
     if (!bound.ok) throw new Error(`binding the buyer wallet failed: ${await bound.text()}`);
 
@@ -485,7 +480,6 @@ export async function startAegisStack(options = {}) {
 
     const handle = (started) => ({
       ...started,
-      ownerAddress: LOCAL_OWNER,
       internalServiceToken: secrets.internalServiceToken,
       mongodbUri: mongo.uri,
       /**

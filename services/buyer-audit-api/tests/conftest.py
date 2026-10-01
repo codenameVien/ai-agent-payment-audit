@@ -13,9 +13,6 @@ from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.models import JsonObject
 from buyer_audit_api.core.purchase_service import PurchaseService
 
-#: The single-user demo owner, identical to the server default in `Settings`.
-LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15"
-
 
 class MutableClock:
     def __init__(self) -> None:
@@ -60,7 +57,6 @@ def container(
         clock=clock,
         auth_service=auth_service,
         purchase_service=purchase_service,
-        local_owner_address=LOCAL_OWNER,
         # Every app enforces the local Host boundary; TestClient sends Host: testserver.
         local_allowed_hosts=("localhost", "127.0.0.1", "testserver"),
     )

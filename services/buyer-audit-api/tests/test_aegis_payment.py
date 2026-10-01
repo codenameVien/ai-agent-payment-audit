@@ -36,7 +36,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import (
 )
 from buyer_audit_api.domains.ai_inference.module import AiInferenceDomainModule
 
-LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15"
 BUYER_WALLET = "0x00000000000000000000000000000000000b0001"
 TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
 INTERNAL_HEADERS = {"Authorization": "Bearer test-internal-token"}
@@ -48,10 +47,9 @@ OPENAI_AMOUNT_UNITS = 1_649
 
 @pytest.fixture
 def runtime_container(container: AppContainer) -> AppContainer:
-    """The runnable local composition: fixed owner, runtime catalog, no SIWE."""
+    """The runnable local composition: runtime catalog, no SIWE."""
     return replace(
         container,
-        local_owner_address=LOCAL_OWNER,
         local_allowed_origins=("http://localhost:3000",),
         local_allowed_hosts=("localhost", "127.0.0.1", "testserver"),
         purchase_service=PurchaseService(
@@ -78,7 +76,7 @@ def runtime_container(container: AppContainer) -> AppContainer:
 
 async def _bind_wallet(container: AppContainer) -> None:
     await container.auth_service.bind_buyer_wallet(
-        owner_address=LOCAL_OWNER, buyer_wallet_address=BUYER_WALLET
+        buyer_wallet_address=BUYER_WALLET
     )
     await PaymentService(
         repository=container.repository, clock=container.clock
@@ -702,10 +700,10 @@ def test_the_local_composition_has_no_siwe_and_no_phase6_surface(
         siwe = client.post("/auth/siwe/challenge", json={"owner_address": BUYER_WALLET})
         assert siwe.status_code == 404
         assert client.post("/auth/siwe/verify", json={}).status_code == 404
-        # The owner is server configuration: no login route reports or selects one.
+        # There is no login: no route reports or selects a user.
         assert client.get("/auth/me").status_code == 404
         assert client.get("/agents").status_code == 404
-        assert client.get("/wallet").json()["owner_address"] == LOCAL_OWNER
+        assert "owner_address" not in client.get("/wallet").json()
         # No handler exists for any of these. The two payment-intent paths share the shape
         # of the GET-only `payment-intents/{purchase_id}` read, so a POST there is 405.
         for path, expected in (
@@ -731,7 +729,7 @@ def test_the_local_composition_has_no_siwe_and_no_phase6_surface(
         {"host": "attacker.example"},
     ],
 )
-def test_a_cross_origin_browser_request_cannot_reach_the_local_owner(
+def test_a_cross_origin_browser_request_cannot_create_a_purchase(
     runtime_container: AppContainer, headers: dict[str, str]
 ) -> None:
     with TestClient(create_app(runtime_container)) as client:

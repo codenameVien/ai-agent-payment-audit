@@ -53,7 +53,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import AegisDecisionWorkfl
 
 pytestmark = pytest.mark.mongo
 
-OWNER = "0x0000000000000000000000000000000000000001"
 BUYER = "0x0000000000000000000000000000000000000002"
 TOKEN = "0x0000000000000000000000000000000000000000"
 PROMPT = "x" * 100
@@ -105,7 +104,6 @@ async def _decided(repository: MongoEvidenceRepository, clock: FrozenClock) -> t
         clock=clock,
     )
     created = await purchases.create(
-        owner_address=OWNER,
         domain_id="ai_inference",
         raw_request={"requestSchema": "aegis-aa-v1", "prompt": PROMPT},
         budget_units=5_000,
@@ -129,7 +127,7 @@ async def _authorized(
     """A decided purchase whose single attempt is reserved and then authorized."""
     purchase_id, amount_units = await _decided(repository, clock)
     await repository.bind_buyer_wallet(
-        owner_address=OWNER, buyer_wallet_address=BUYER, bound_at=clock.now()
+        buyer_wallet_address=BUYER, bound_at=clock.now()
     )
     await repository.put_wallet_policy(
         WalletPolicy(
@@ -328,21 +326,24 @@ async def test_original_payloads_are_plain_json_bound_to_their_hash(store: Store
 # --------------------------------------------------------------------------------------
 
 
-async def test_a_buyer_wallet_binds_to_exactly_one_owner(store: Store) -> None:
+async def test_exactly_one_buyer_wallet_is_bound(store: Store) -> None:
     clock = FrozenClock()
     await store.repository.ensure_indexes()
+    assert await store.repository.get_wallet_binding() is None
     binding = await store.repository.bind_buyer_wallet(
-        owner_address="0xowner", buyer_wallet_address="0xbuyer", bound_at=clock.now()
+        buyer_wallet_address="0xbuyer", bound_at=clock.now()
     )
     assert binding.buyer_wallet_address == "0xbuyer"
+    # Binding the same wallet again is idempotent and keeps the first binding time.
+    again = await store.repository.bind_buyer_wallet(
+        buyer_wallet_address="0xbuyer", bound_at=datetime(2026, 9, 9, 4, 0, tzinfo=UTC)
+    )
+    assert again == binding
     with pytest.raises(ValueError, match="already bound"):
         await store.repository.bind_buyer_wallet(
-            owner_address="0xother", buyer_wallet_address="0xbuyer", bound_at=clock.now()
+            buyer_wallet_address="0xreplacement", bound_at=clock.now()
         )
-    with pytest.raises(ValueError, match="already bound"):
-        await store.repository.bind_buyer_wallet(
-            owner_address="0xowner", buyer_wallet_address="0xreplacement", bound_at=clock.now()
-        )
+    assert await store.repository.get_wallet_binding() == binding
 
 
 async def test_the_policy_index_is_per_token_and_an_active_policy_survives_a_race(
@@ -437,7 +438,7 @@ async def test_reserve_and_authorize_roll_back_atomically_and_serialize(
         await repository.ensure_indexes()
         purchase_id, amount_units = await _decided(repository, clock)
         await repository.bind_buyer_wallet(
-            owner_address=OWNER, buyer_wallet_address=BUYER, bound_at=clock.now()
+            buyer_wallet_address=BUYER, bound_at=clock.now()
         )
         await repository.put_wallet_policy(
             WalletPolicy(
@@ -730,13 +731,6 @@ def _per_purchase(name: str, event_type: str) -> IndexSpec:
 #: Indexes both main (25eaab3) and the cleaned-up code create, with main's exact specs.
 #: Captured by running main's `ensure_indexes` against a scratch server.
 KEPT_INDEXES: tuple[IndexSpec, ...] = (
-    ("users", "ownerAddress_1", [("ownerAddress", 1)], {"unique": True}),
-    (
-        "users",
-        "unique_buyer_wallet_binding",
-        [("buyerWalletAddress", 1)],
-        {"unique": True, "partialFilterExpression": {"buyerWalletAddress": {"$type": "string"}}},
-    ),
     ("purchaseEvents", "eventId_1", [("eventId", 1)], {"unique": True}),
     (
         "purchaseEvents",
@@ -798,6 +792,14 @@ KEPT_INDEXES: tuple[IndexSpec, ...] = (
 #: Indexes only main created. Existing databases still hold them; the cleaned-up code
 #: neither creates nor drops them. Same capture as above.
 NO_LONGER_CREATED_INDEXES: tuple[IndexSpec, ...] = (
+    # The owner-keyed `users` collection was replaced by the single `buyerWallet` doc.
+    ("users", "ownerAddress_1", [("ownerAddress", 1)], {"unique": True}),
+    (
+        "users",
+        "unique_buyer_wallet_binding",
+        [("buyerWalletAddress", 1)],
+        {"unique": True, "partialFilterExpression": {"buyerWalletAddress": {"$type": "string"}}},
+    ),
     _per_purchase("unique_quoted_per_purchase", "QUOTED"),
     (
         "purchaseEvents",

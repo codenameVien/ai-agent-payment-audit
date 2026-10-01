@@ -36,7 +36,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import (
     AegisEvidenceReader,
 )
 
-OWNER = "0x0000000000000000000000000000000000000001"
 ALPHA = "openai:fixture-openai-alpha:fixture-2026-09-09"
 BETA = "anthropic:fixture-anthropic-beta:fixture-2026-09-09"
 GAMMA = "google:fixture-google-gamma:fixture-2026-09-09"
@@ -106,7 +105,6 @@ async def _create(
     request: Mapping[str, Any] | None = None,
 ) -> str:
     created = await purchases.create(
-        owner_address=OWNER,
         domain_id="ai_inference",
         raw_request={
             "requestSchema": "aegis-aa-v1",

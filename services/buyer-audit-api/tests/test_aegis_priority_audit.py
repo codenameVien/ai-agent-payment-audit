@@ -36,7 +36,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import (
 )
 from buyer_audit_api.domains.ai_inference.module import AiInferenceDomainModule
 
-LOCAL_OWNER = "0x00000000000000000000000000000000000a6e15"
 #: A prompt long enough to price, carrying one price keyword and nothing else.
 CHEAP_PROMPT = "이 작업을 최대한 싸게 처리해 주세요. " + "세부 요구 사항입니다. " * 6
 CONFLICT_PROMPT = "싸게 그리고 빨리 처리해 주세요. " + "세부 요구 사항입니다. " * 6
@@ -47,7 +46,6 @@ PLAIN_PROMPT = "이 문서를 요약해 주세요. " + "세부 요구 사항입�
 def runtime_container(container: AppContainer) -> AppContainer:
     return replace(
         container,
-        local_owner_address=LOCAL_OWNER,
         local_allowed_hosts=("localhost", "127.0.0.1", "testserver"),
         purchase_service=PurchaseService(
             repository=container.repository,

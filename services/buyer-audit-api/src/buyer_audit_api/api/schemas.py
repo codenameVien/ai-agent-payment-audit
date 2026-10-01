@@ -96,12 +96,10 @@ def transaction_ref_response(
 class BuyerWalletRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    owner_address: str
     buyer_wallet_address: str
 
 
 class BuyerWalletResponse(BaseModel):
-    owner_address: str
     buyer_wallet_address: str
 
 
@@ -253,7 +251,6 @@ class AuditReportResponse(BaseModel):
 
 
 class WalletDashboardResponse(BaseModel):
-    owner_address: str
     buyer_wallet_address: str | None
     token: str | None
     token_balance_units: int | None

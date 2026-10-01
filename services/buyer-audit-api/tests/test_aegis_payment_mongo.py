@@ -39,7 +39,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import AegisDecisionWorkfl
 
 pytestmark = pytest.mark.mongo
 
-OWNER = "0x00000000000000000000000000000000000a6e15"
 BUYER_WALLET = "0x00000000000000000000000000000000000b0001"
 TOKEN_ADDRESS = "0x0000000000000000000000000000000000000000"
 PROMPT = "이 작업을 최대한 싸게 처리해 주세요. " + "세부 요구 사항입니다. " * 6
@@ -92,7 +91,6 @@ async def test_a_real_mongo_payment_attempt_survives_a_reopened_store(mongo_uri)
             clock=clock,
         )
         created = await purchases.create(
-            owner_address=OWNER,
             domain_id="ai_inference",
             raw_request={
                 "requestSchema": "aegis-aa-v1",
@@ -106,7 +104,6 @@ async def test_a_real_mongo_payment_attempt_survives_a_reopened_store(mongo_uri)
         decision = await _workflow(repository, clock).decide(purchase_id=purchase_id)
 
         await repository.bind_buyer_wallet(
-            owner_address=OWNER,
             buyer_wallet_address=BUYER_WALLET,
             bound_at=clock.now(),
         )

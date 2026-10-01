@@ -255,7 +255,6 @@ class SensitivePayload:
 
 @dataclass(frozen=True, slots=True)
 class WalletBinding:
-    owner_address: str
     buyer_wallet_address: str
     bound_at: datetime
 

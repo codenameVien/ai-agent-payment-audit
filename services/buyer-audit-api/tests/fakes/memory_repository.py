@@ -66,7 +66,7 @@ def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bo
 
 class InMemoryEvidenceRepository:
     def __init__(self) -> None:
-        self._users: dict[str, dict[str, object]] = {}
+        self._buyer_wallet: WalletBinding | None = None
         self._events: dict[str, list[EvidenceEvent]] = {}
         self._heads: dict[str, list[EvidenceHead]] = {}
         self._sensitive: dict[str, SensitivePayload] = {}
@@ -84,48 +84,21 @@ class InMemoryEvidenceRepository:
     async def bind_buyer_wallet(
         self,
         *,
-        owner_address: str,
         buyer_wallet_address: str,
         bound_at: datetime,
     ) -> WalletBinding:
         async with self._lock:
-            normalized_owner = owner_address.lower()
             normalized_buyer = buyer_wallet_address.lower()
-            owner = self._users.get(normalized_owner)
-            if owner is not None and "buyerWalletAddress" in owner:
-                existing_buyer = str(owner["buyerWalletAddress"])
-                if existing_buyer != normalized_buyer:
-                    raise ValueError("owner already has a different buyer wallet")
-                return WalletBinding(
-                    normalized_owner,
-                    existing_buyer,
-                    owner["buyerWalletBoundAt"],  # type: ignore[arg-type]
-                )
-            for existing_owner, user in self._users.items():
-                if (
-                    existing_owner != normalized_owner
-                    and user.get("buyerWalletAddress") == normalized_buyer
-                ):
-                    raise ValueError("buyer wallet is already bound")
-            owner = self._users.setdefault(normalized_owner, {})
-            owner.update(
-                {
-                    "buyerWalletAddress": normalized_buyer,
-                    "buyerWalletBoundAt": bound_at,
-                }
-            )
-            return WalletBinding(normalized_owner, normalized_buyer, bound_at)
+            if self._buyer_wallet is not None:
+                if self._buyer_wallet.buyer_wallet_address != normalized_buyer:
+                    raise ValueError("a different buyer wallet is already bound")
+                return self._buyer_wallet
+            self._buyer_wallet = WalletBinding(normalized_buyer, bound_at)
+            return self._buyer_wallet
 
-    async def get_wallet_binding(self, owner_address: str) -> WalletBinding | None:
+    async def get_wallet_binding(self) -> WalletBinding | None:
         async with self._lock:
-            user = self._users.get(owner_address.lower())
-            if user is None or "buyerWalletAddress" not in user:
-                return None
-            return WalletBinding(
-                owner_address=owner_address.lower(),
-                buyer_wallet_address=str(user["buyerWalletAddress"]),
-                bound_at=user["buyerWalletBoundAt"],  # type: ignore[arg-type]
-            )
+            return self._buyer_wallet
 
     def _validate_chain_locked(
         self,
@@ -463,15 +436,12 @@ class InMemoryEvidenceRepository:
         async with self._lock:
             return deepcopy(self._events.get(purchase_id, []))
 
-    async def list_owner_purchase_ids(self, owner_address: str) -> list[str]:
-        normalized = owner_address.lower()
+    async def list_purchase_ids(self) -> list[str]:
         async with self._lock:
             matches = [
                 (events[0].occurred_at, purchase_id)
                 for purchase_id, events in self._events.items()
-                if events
-                and events[0].type == EventType.REQUESTED
-                and events[0].actor.get("id") == normalized
+                if events and events[0].type == EventType.REQUESTED
             ]
             return [
                 purchase_id

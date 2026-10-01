@@ -296,7 +296,7 @@ try {
   const bind = await fetch(`${apiUrl}/internal/auth/buyer-wallet`, {
     method: "PUT",
     headers: { ...headers, authorization: `Bearer ${env.ADMIN_SERVICE_TOKEN}` },
-    body: JSON.stringify({ owner_address: env.AEGIS_LOCAL_OWNER_ADDRESS, buyer_wallet_address: buyerWalletAddress }),
+    body: JSON.stringify({ buyer_wallet_address: buyerWalletAddress }),
   });
   if (!bind.ok) throw new Error(`binding live payer failed: HTTP ${bind.status}`);
   const policy = await fetch(`${apiUrl}/internal/evidence/wallet-policies`, {
