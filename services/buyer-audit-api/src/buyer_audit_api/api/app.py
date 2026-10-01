@@ -700,14 +700,23 @@ def create_app(container: AppContainer) -> FastAPI:
         policy = (
             await payment_service.get_latest_wallet_policy(buyer) if buyer is not None else None
         )
-        # This composition holds no chain reader, so no balance is ever queried and the
-        # dashboard is told so instead of being shown an unqueried number.
+        token = policy.token if policy is not None else None
+        # Without an RPC the dashboard is told so instead of being shown an unqueried number.
+        balance_units: int | None = None
+        balance_status = "rpc_not_configured"
+        reader = container.token_balance_reader
+        if reader is not None and buyer is not None and token is not None:
+            try:
+                balance_units = await reader.balance_of(token=token, holder=buyer)
+                balance_status = "base_sepolia_verified"
+            except (httpx.HTTPError, ValueError):
+                balance_status = "rpc_unavailable"
         return WalletDashboardResponse(
             owner_address=owner,
             buyer_wallet_address=buyer,
-            token=policy.token if policy is not None else None,
-            token_balance_units=None,
-            balance_status="rpc_not_configured",
+            token=token,
+            token_balance_units=balance_units,
+            balance_status=balance_status,
             policy_date=policy.policy_date if policy is not None else None,
             daily_limit_units=(policy.daily_limit_units if policy is not None else None),
             spent_units=policy.spent_units if policy is not None else 0,

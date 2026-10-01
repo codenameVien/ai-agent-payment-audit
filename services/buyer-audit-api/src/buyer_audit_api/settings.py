@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     # settle is controlled only by the server-side execution mode and approval gate.
     aegis_token_address: str = "0xE208f63B826FcDD9De0836EFFEb0FA49d1c4142b"
     aegis_token_status: str = "deployed-base-sepolia"
+    # Read-only RPC for the dashboard's token balance. Empty means the balance is not queried.
+    base_sepolia_rpc_url: str = ""
     payment_token_name: str = "AEGIS"
     payment_token_symbol: str = "AEGIS"
     # Single-user local demo identity. This is server configuration, not a login: the
