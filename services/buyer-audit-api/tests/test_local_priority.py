@@ -151,7 +151,6 @@ def test_purchase_creation_bypasses_explicit_and_fails_before_any_write() -> Non
             clock=SystemClock(),
         )
         created = await service.create(
-            owner_address="0x00000000000000000000000000000000000a6e15",
             domain_id="ai_inference",
             raw_request={
                 "requestSchema": "aegis-aa-v1",
@@ -165,7 +164,6 @@ def test_purchase_creation_bypasses_explicit_and_fails_before_any_write() -> Non
         assert len(await repository.list_events(created.purchase_id)) == 1
         with pytest.raises(PriorityClassificationError, match="safe local model failure"):
             await service.create(
-                owner_address="0x00000000000000000000000000000000000a6e15",
                 domain_id="ai_inference",
                 raw_request={"requestSchema": "aegis-aa-v1", "prompt": "아무거나"},
                 budget_units=1,

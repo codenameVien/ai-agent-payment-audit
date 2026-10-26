@@ -30,7 +30,6 @@ from buyer_audit_api.domains.ai_inference.aa_workflow import (
 
 pytestmark = pytest.mark.mongo
 
-OWNER = "0x0000000000000000000000000000000000000001"
 PROMPT = "x" * 100
 
 
@@ -67,7 +66,6 @@ async def test_real_mongo_aa_snapshot_round_trip_and_immutability(mongo_uri) -> 
             clock=clock,
         )
         created = await purchases.create(
-            owner_address=OWNER,
             domain_id="ai_inference",
             raw_request={"requestSchema": "aegis-aa-v1", "prompt": PROMPT},
             budget_units=5_000,

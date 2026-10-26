@@ -1,5 +1,4 @@
 export interface WalletView {
-  owner_address: string;
   buyer_wallet_address: string | null;
   token: string | null;
   token_balance_units: number | null;

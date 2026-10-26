@@ -29,7 +29,7 @@ PROMPT = "x" * 100
 
 @pytest.fixture
 def aegis_container(container: AppContainer) -> AppContainer:
-    """The shared local container (fixed owner, testserver host) plus the ai_inference
+    """The shared local container (testserver host) plus the ai_inference
     domain and the new decision workflow."""
     return replace(
         container,

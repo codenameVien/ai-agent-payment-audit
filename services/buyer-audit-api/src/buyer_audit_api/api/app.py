@@ -8,7 +8,6 @@ from contextlib import asynccontextmanager
 from typing import Any, Literal, cast
 
 import httpx
-from eth_utils import is_address
 from fastapi import FastAPI, Header, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse, StreamingResponse
 
@@ -55,7 +54,6 @@ from buyer_audit_api.core.audit import (
 )
 from buyer_audit_api.core.errors import (
     AuthenticationError,
-    ConfigurationError,
     DomainNotRegisteredError,
     EvidenceIntegrityError,
     EvidenceTransitionError,
@@ -270,11 +268,6 @@ def create_app(container: AppContainer) -> FastAPI:
         clock=container.clock,
         execution_mode=container.aegis_execution_mode,
     )
-    # aa-three-factor-v1 runs as a single-user local demo: the owner identity is server
-    # configuration, never a browser-selected value. There is no login surface.
-    local_owner = container.local_owner_address.strip().lower()
-    if not local_owner or not is_address(local_owner):
-        raise ConfigurationError("local owner address must be an Ethereum address")
     allowed_origins = frozenset(
         origin.strip().lower().rstrip("/")
         for origin in container.local_allowed_origins
@@ -303,7 +296,7 @@ def create_app(container: AppContainer) -> FastAPI:
     # No CORS middleware is installed, so no wildcard and no reflected origin exists.
     # This guard additionally refuses a foreign Host (DNS rebinding) and any browser
     # request that declares a cross-site fetch, so a page on another origin cannot
-    # drive the local owner's purchases even with credentials attached.
+    # drive the demo's purchases even with credentials attached.
     @app.middleware("http")
     async def local_boundary(request: Request, call_next: Any) -> Response:
         host = (request.headers.get("host") or "").split(":")[0].strip().lower()
@@ -346,10 +339,6 @@ def create_app(container: AppContainer) -> FastAPI:
                 detail="evidence integrity check failed",
             ) from exc
         return events
-
-    def require_owner() -> str:
-        # The demo has exactly one owner. No request header or cookie can select another.
-        return local_owner
 
     def require_internal(authorization: str | None) -> None:
         expected = f"Bearer {container.internal_service_token}"
@@ -684,30 +673,36 @@ def create_app(container: AppContainer) -> FastAPI:
         ) as exc:
             raise payment_error(exc) from exc
 
-    async def owner_purchase_events(owner: str) -> list[list[EvidenceEvent]]:
-        purchase_ids = await container.repository.list_owner_purchase_ids(owner)
+    async def purchase_events() -> list[list[EvidenceEvent]]:
         result: list[list[EvidenceEvent]] = []
-        for purchase_id in purchase_ids:
+        for purchase_id in await container.repository.list_purchase_ids():
             events = await verified_events(purchase_id)
-            if events and events[0].actor.get("id") == owner.lower():
+            if events:
                 result.append(events)
         return result
 
     @app.get("/wallet", response_model=WalletDashboardResponse)
     async def wallet_dashboard() -> WalletDashboardResponse:
-        owner = require_owner()
-        buyer = await container.auth_service.get_buyer_wallet(owner)
+        buyer = await container.auth_service.get_buyer_wallet()
         policy = (
             await payment_service.get_latest_wallet_policy(buyer) if buyer is not None else None
         )
-        # This composition holds no chain reader, so no balance is ever queried and the
-        # dashboard is told so instead of being shown an unqueried number.
+        token = policy.token if policy is not None else None
+        # Without an RPC the dashboard is told so instead of being shown an unqueried number.
+        balance_units: int | None = None
+        balance_status = "rpc_not_configured"
+        reader = container.token_balance_reader
+        if reader is not None and buyer is not None and token is not None:
+            try:
+                balance_units = await reader.balance_of(token=token, holder=buyer)
+                balance_status = "base_sepolia_verified"
+            except (httpx.HTTPError, ValueError):
+                balance_status = "rpc_unavailable"
         return WalletDashboardResponse(
-            owner_address=owner,
             buyer_wallet_address=buyer,
-            token=policy.token if policy is not None else None,
-            token_balance_units=None,
-            balance_status="rpc_not_configured",
+            token=token,
+            token_balance_units=balance_units,
+            balance_status=balance_status,
             policy_date=policy.policy_date if policy is not None else None,
             daily_limit_units=(policy.daily_limit_units if policy is not None else None),
             spent_units=policy.spent_units if policy is not None else 0,
@@ -716,12 +711,10 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.get("/purchases", response_model=list[PurchaseSummaryResponse])
     async def purchase_list() -> list[PurchaseSummaryResponse]:
-        owner = require_owner()
-        return [_summary(events) for events in await owner_purchase_events(owner)]
+        return [_summary(events) for events in await purchase_events()]
 
     @app.get("/api/events")
     async def live_evidence_events(request: Request) -> StreamingResponse:
-        owner = require_owner()
 
         async def stream() -> AsyncIterator[str]:
             previous: dict[str, str] = {}
@@ -730,7 +723,7 @@ def create_app(container: AppContainer) -> FastAPI:
                 if await request.is_disconnected():
                     return
                 current: dict[str, str] = {}
-                for purchase_id in await container.repository.list_owner_purchase_ids(owner):
+                for purchase_id in await container.repository.list_purchase_ids():
                     head = await container.repository.get_event_head(purchase_id)
                     if head is not None:
                         current[purchase_id] = head.head_event_hash
@@ -758,9 +751,8 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.get("/purchases/{purchase_id}", response_model=PurchaseDetailResponse)
     async def purchase_detail(purchase_id: str) -> PurchaseDetailResponse:
-        owner = require_owner()
         events = await verified_events(purchase_id)
-        if not events or events[0].actor.get("id") != owner.lower():
+        if not events:
             raise HTTPException(status_code=404)
         # Read-only: the persisted audit reader parses evidence and never appends.
         persisted = _AUDIT_READER.persisted(events)
@@ -772,9 +764,8 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.get("/audit-alerts", response_model=list[AuditAlertResponse])
     async def audit_alerts() -> list[AuditAlertResponse]:
-        owner = require_owner()
         alerts: list[AuditAlertResponse] = []
-        for events in await owner_purchase_events(owner):
+        for events in await purchase_events():
             report = _AUDIT_READER.persisted(events)
             if report is None:
                 continue
@@ -808,23 +799,18 @@ def create_app(container: AppContainer) -> FastAPI:
         require_admin(authorization)
         try:
             buyer_wallet = await container.auth_service.bind_buyer_wallet(
-                owner_address=body.owner_address,
                 buyer_wallet_address=body.buyer_wallet_address,
             )
         except (AuthenticationError, ValueError) as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
-        return BuyerWalletResponse(
-            owner_address=body.owner_address.lower(),
-            buyer_wallet_address=buyer_wallet,
-        )
+        return BuyerWalletResponse(buyer_wallet_address=buyer_wallet)
 
     @app.post("/purchases", response_model=PurchaseResponse, status_code=201)
     async def create_purchase(body: PurchaseRequest) -> PurchaseResponse:
-        owner = require_owner()
         try:
             budget_units = body.budget_units
             if budget_units is None:
-                buyer_wallet = await container.auth_service.get_buyer_wallet(owner)
+                buyer_wallet = await container.auth_service.get_buyer_wallet()
                 if buyer_wallet is None:
                     raise PaymentPolicyError("buyer wallet is not bound")
                 wallet_policy = await payment_service.get_latest_wallet_policy(buyer_wallet)
@@ -832,7 +818,6 @@ def create_app(container: AppContainer) -> FastAPI:
                     raise PaymentPolicyError("wallet policy is not configured")
                 budget_units = wallet_policy.per_transaction_limit_units
             created = await container.purchase_service.create(
-                owner_address=owner,
                 domain_id=body.domain,
                 raw_request=body.request,
                 budget_units=budget_units,
@@ -854,9 +839,8 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.post("/purchases/{purchase_id}/decide", response_model=EventResponse)
     async def decide_purchase(purchase_id: str) -> EventResponse:
-        owner = require_owner()
         events = await verified_events(purchase_id)
-        if not events or events[0].actor.get("id") != owner.lower():
+        if not events:
             raise HTTPException(status_code=404)
         existing = next((event for event in events if event.type == EventType.DECIDED), None)
         if existing is not None:
@@ -1124,9 +1108,8 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.post("/purchases/{purchase_id}/run", response_model=PurchaseRunResponse)
     async def run_purchase(purchase_id: str) -> PurchaseRunResponse:
-        owner = require_owner()
         events = await verified_events(purchase_id)
-        if not events or events[0].actor.get("id") != owner.lower():
+        if not events:
             raise HTTPException(status_code=404)
         if container.commerce_gateway is None:
             raise HTTPException(status_code=503, detail="payment executor unavailable")
@@ -1285,9 +1268,8 @@ def create_app(container: AppContainer) -> FastAPI:
 
     @app.get("/purchases/{purchase_id}/events", response_model=list[EventResponse])
     async def list_events(purchase_id: str) -> list[EventResponse]:
-        owner = require_owner()
         events = await verified_events(purchase_id)
-        if not events or events[0].actor.get("id") != owner.lower():
+        if not events:
             raise HTTPException(status_code=404)
         return [_event_response(event) for event in events]
 

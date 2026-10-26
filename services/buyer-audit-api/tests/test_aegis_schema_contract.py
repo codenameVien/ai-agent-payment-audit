@@ -53,7 +53,6 @@ def decision_payloads() -> tuple[dict[str, Any], dict[str, Any]]:
             clock=clock,
         )
         created = await purchases.create(
-            owner_address="0x0000000000000000000000000000000000000001",
             domain_id="ai_inference",
             raw_request={"requestSchema": "aegis-aa-v1", "prompt": PROMPT},
             budget_units=5_000,

@@ -28,3 +28,5 @@ CLAUDE.md
 /aidlc-docs/
 /.agent/
 /work-orders/
+infra/contracts/out-oz/
+infra/contracts/lib/

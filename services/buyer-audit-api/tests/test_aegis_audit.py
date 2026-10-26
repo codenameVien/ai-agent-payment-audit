@@ -24,7 +24,6 @@ from buyer_audit_api.domains.ai_inference.aa_catalog import (
 from buyer_audit_api.domains.ai_inference.aa_models import TokenIdentity
 from buyer_audit_api.domains.ai_inference.aa_workflow import AegisDecisionWorkflow
 
-OWNER = "0x0000000000000000000000000000000000000001"
 PROMPT = "x" * 100
 MAX_OUTPUT_TOKENS = 1024
 BETA = "anthropic:fixture-anthropic-beta:fixture-2026-09-09"
@@ -49,7 +48,6 @@ async def _decided_events(
         clock=clock,
     )
     created = await purchases.create(
-        owner_address=OWNER,
         domain_id="ai_inference",
         raw_request={
             "requestSchema": "aegis-aa-v1",
@@ -279,7 +277,7 @@ def test_a_legacy_purchase_is_not_judged_by_the_new_rules() -> None:
         sequence=1,
         event_type=EventType.REQUESTED,
         occurred_at=datetime(2026, 9, 1, tzinfo=UTC),
-        actor={"id": OWNER, "type": "user"},
+        actor={"type": "user"},
         payload={
             "budgetUnits": 100,
             "domain": "ai_inference",
@@ -423,7 +421,6 @@ async def test_audit_service_loads_the_snapshot_body_it_recomputes_from() -> Non
         clock=clock,
     )
     created = await purchases.create(
-        owner_address=OWNER,
         domain_id="ai_inference",
         raw_request={"requestSchema": "aegis-aa-v1", "prompt": PROMPT},
         budget_units=5_000,

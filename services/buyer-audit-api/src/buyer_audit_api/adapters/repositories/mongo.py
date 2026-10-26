@@ -262,6 +262,8 @@ def _same_payment_claim_binding(left: PaymentIntent, right: PaymentIntent) -> bo
     )
 
 
+_BUYER_WALLET_ID = "buyer"
+
 class MongoEvidenceRepository:
     def __init__(self, *, uri: str, database: str) -> None:
         self._client: AsyncMongoClient[dict[str, Any]] = AsyncMongoClient(
@@ -270,7 +272,7 @@ class MongoEvidenceRepository:
             tz_aware=True,
         )
         self._database = self._client[database]
-        self._users = self._database["users"]
+        self._buyer_wallet = self._database["buyerWallet"]
         self._events = self._database["purchaseEvents"]
         self._heads = self._database["evidenceHeads"]
         self._sensitive = self._database["sensitivePayloads"]
@@ -291,13 +293,6 @@ class MongoEvidenceRepository:
         ever drops.
         """
         await self._client.admin.command({"ping": 1})
-        await self._users.create_index([("ownerAddress", ASCENDING)], unique=True)
-        await self._users.create_index(
-            [("buyerWalletAddress", ASCENDING)],
-            unique=True,
-            name="unique_buyer_wallet_binding",
-            partialFilterExpression={"buyerWalletAddress": {"$type": "string"}},
-        )
         await self._events.create_index([("eventId", ASCENDING)], unique=True)
         await self._events.create_index(
             [("purchaseId", ASCENDING), ("sequence", ASCENDING)],
@@ -380,43 +375,30 @@ class MongoEvidenceRepository:
     async def bind_buyer_wallet(
         self,
         *,
-        owner_address: str,
         buyer_wallet_address: str,
         bound_at: datetime,
     ) -> WalletBinding:
-        normalized_owner = owner_address.lower()
         normalized_buyer = buyer_wallet_address.lower()
+        # One fixed document: binding the same wallet again is a no-op, and a different
+        # wallet collides on `_id` instead of silently replacing the first.
         try:
-            await self._users.update_one(
-                {
-                    "ownerAddress": normalized_owner,
-                    "$or": [
-                        {"buyerWalletAddress": {"$exists": False}},
-                        {"buyerWalletAddress": normalized_buyer},
-                    ],
-                },
-                {
-                    "$set": {
-                        "buyerWalletAddress": normalized_buyer,
-                        "buyerWalletBoundAt": bound_at,
-                        "ownerAddress": normalized_owner,
-                    }
-                },
+            await self._buyer_wallet.update_one(
+                {"_id": _BUYER_WALLET_ID, "buyerWalletAddress": normalized_buyer},
+                {"$setOnInsert": {"buyerWalletBoundAt": bound_at}},
                 upsert=True,
             )
         except DuplicateKeyError as exc:
-            raise ValueError("owner or buyer wallet is already bound") from exc
-        return WalletBinding(normalized_owner, normalized_buyer, bound_at)
+            raise ValueError("a different buyer wallet is already bound") from exc
+        binding = await self.get_wallet_binding()
+        if binding is None:
+            raise RuntimeError("buyer wallet binding was not stored")
+        return binding
 
-    async def get_wallet_binding(self, owner_address: str) -> WalletBinding | None:
-        document = await self._users.find_one(
-            {"ownerAddress": owner_address.lower()},
-            {"_id": 0, "buyerWalletAddress": 1, "buyerWalletBoundAt": 1, "ownerAddress": 1},
-        )
-        if document is None or "buyerWalletAddress" not in document:
+    async def get_wallet_binding(self) -> WalletBinding | None:
+        document = await self._buyer_wallet.find_one({"_id": _BUYER_WALLET_ID})
+        if document is None:
             return None
         return WalletBinding(
-            owner_address=str(document["ownerAddress"]),
             buyer_wallet_address=str(document["buyerWalletAddress"]),
             bound_at=cast(datetime, document["buyerWalletBoundAt"]),
         )
@@ -916,12 +898,9 @@ class MongoEvidenceRepository:
         cursor = self._events.find({"purchaseId": purchase_id}).sort("sequence", ASCENDING)
         return [_event_from_document(document) async for document in cursor]
 
-    async def list_owner_purchase_ids(self, owner_address: str) -> list[str]:
+    async def list_purchase_ids(self) -> list[str]:
         cursor = self._events.find(
-            {
-                "type": EventType.REQUESTED.value,
-                "actor.id": owner_address.lower(),
-            },
+            {"type": EventType.REQUESTED.value},
             {"purchaseId": 1, "occurredAt": 1},
         ).sort([("occurredAt", DESCENDING), ("purchaseId", DESCENDING)])
         return [str(document["purchaseId"]) async for document in cursor]

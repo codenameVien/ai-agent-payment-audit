@@ -66,7 +66,6 @@ button, input, textarea, select { font: inherit; }
   font-weight: 900;
 }
 .brand span:last-child { display: flex; flex-direction: column; }
-.brand small { color: #aaa1c5; }
 .topbar nav { display: flex; gap: 25px; flex: 1; }
 .topbar nav a {
   color: #c8c4d3;
@@ -112,16 +111,6 @@ button, input, textarea, select { font: inherit; }
 
 main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
 .auditMain { padding-top: 30px; }
-.auditIntro {
-  min-height: 126px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 32px;
-  border-bottom: 1px solid var(--line);
-  margin-bottom: 20px;
-  padding: 12px 4px 28px;
-}
 .auditIntro h1, .pageHead h1 {
   font-size: clamp(31px, 4vw, 48px);
   letter-spacing: -0.045em;
@@ -143,34 +132,6 @@ main { max-width: 1280px; margin: 0 auto; padding: 38px 24px 72px; }
   color: var(--violet);
   margin: 0 0 8px;
 }
-.scopePill {
-  min-width: 230px;
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  border: 1px solid var(--line-strong);
-  border-radius: 13px;
-  padding: 14px 16px;
-  background: var(--card);
-}
-.scopePill > i, .evidenceChecks i {
-  width: 10px;
-  height: 10px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-}
-.scopePill i.ok, .evidenceChecks i.ok {
-  background: var(--green);
-  box-shadow: 0 0 0 5px rgba(104, 215, 167, 0.1);
-}
-.scopePill i.warn, .evidenceChecks i.warn {
-  background: var(--amber);
-  box-shadow: 0 0 0 5px rgba(242, 189, 102, 0.1);
-}
-.evidenceChecks i.idle { background: #5c5868; }
-.scopePill span { display: flex; flex-direction: column; gap: 3px; }
-.scopePill strong { font-size: 12px; letter-spacing: 0.06em; }
-.scopePill small { color: var(--muted); }
 
 .auditMetrics {
   display: grid;
@@ -323,38 +284,6 @@ dd {
 .compactAlerts span:last-child { display: flex; flex-direction: column; gap: 5px; }
 .compactAlerts strong { font-size: 13px; }
 
-.evidenceChecks { list-style: none; padding: 0; margin: 20px 0 0; }
-.evidenceChecks li {
-  display: flex;
-  align-items: center;
-  gap: 13px;
-  padding: 13px 0;
-  border-bottom: 1px solid var(--line);
-}
-.evidenceChecks li span { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-.evidenceChecks li strong { font-size: 13px; }
-.readOnlyPanel {
-  display: flex;
-  gap: 15px;
-  background: var(--violet-soft);
-  border-color: #4a3b70;
-}
-.readOnlyIcon {
-  display: grid;
-  place-items: center;
-  flex: 0 0 auto;
-  width: 37px;
-  height: 37px;
-  border-radius: 10px;
-  background: #7557c0;
-  font-size: 20px;
-}
-.readOnlyPanel p {
-  margin: 7px 0 0;
-  color: #c7bee2;
-  font-size: 12px;
-  line-height: 1.55;
-}
 
 .notice {
   margin: 18px 0;
@@ -421,32 +350,6 @@ input:focus, textarea:focus, select:focus, button:focus, a:focus {
 .finding.risk { background: var(--red-soft); }
 .finding.caution { background: var(--amber-soft); }
 .finding p { margin: 6px 0; }
-.timeline { list-style: none; padding: 0; margin: 0; }
-.timeline li {
-  display: grid;
-  grid-template-columns: 22px minmax(0, 1fr);
-  gap: 14px;
-  position: relative;
-  padding-bottom: 22px;
-}
-.timeline li > i {
-  width: 12px;
-  height: 12px;
-  border: 3px solid var(--violet);
-  border-radius: 50%;
-  margin-top: 4px;
-}
-.timeline li:not(:last-child) > i::after {
-  content: "";
-  position: absolute;
-  width: 2px;
-  background: var(--line-strong);
-  top: 16px;
-  bottom: 0;
-  left: 5px;
-}
-.timelineHead { display: flex; justify-content: space-between; gap: 10px; }
-.timeline time { color: var(--muted); font-size: 12px; }
 .alertList { display: flex; flex-direction: column; gap: 12px; }
 .alert {
   display: grid;
@@ -558,7 +461,6 @@ footer {
   .auditMetrics article:nth-child(-n + 2) { border-bottom: 1px solid var(--line); }
   .auditLayout { grid-template-columns: minmax(0, 1fr); }
   .auditSidebar { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .readOnlyPanel { grid-column: 1 / -1; }
 }
 @media (max-width: 800px) {
   .topbar {
@@ -577,8 +479,6 @@ footer {
      full basis moves it onto its own row, where it can scroll locally. */
   .topbar nav { order: 3; flex: 0 0 100%; min-width: 0; overflow: auto; gap: 18px; }
   .live { margin-left: auto; }
-  .auditIntro { align-items: start; flex-direction: column; }
-  .scopePill { width: 100%; }
   .walletList { grid-template-columns: minmax(0, 1fr); }
   .twoCol { grid-template-columns: minmax(0, 1fr); }
   .alert { grid-template-columns: minmax(0, 1fr); }

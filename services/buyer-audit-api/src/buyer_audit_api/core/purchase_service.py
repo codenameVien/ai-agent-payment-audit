@@ -25,7 +25,6 @@ class PurchaseService:
     async def create(
         self,
         *,
-        owner_address: str,
         domain_id: str,
         raw_request: Mapping[str, Any],
         budget_units: int,
@@ -48,7 +47,7 @@ class PurchaseService:
             purchase_id=purchase_id,
             event_type=EventType.REQUESTED,
             occurred_at=now,
-            actor={"id": owner_address.lower(), "type": "user"},
+            actor={"type": "user"},
             payload={
                 "budgetUnits": budget_units,
                 "domain": domain_id,

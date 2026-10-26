@@ -4,8 +4,6 @@ import json
 from dataclasses import dataclass
 from pathlib import Path
 
-from eth_utils import is_address
-
 from buyer_audit_api.adapters.artificial_analysis import (
     FixtureArtificialAnalysisSource,
     HttpArtificialAnalysisSource,
@@ -13,6 +11,7 @@ from buyer_audit_api.adapters.artificial_analysis import (
 from buyer_audit_api.adapters.commerce_gateway import HttpCommerceGatewayClient
 from buyer_audit_api.adapters.local_priority import LocalQwenPriorityClassifier
 from buyer_audit_api.adapters.repositories.mongo import MongoEvidenceRepository
+from buyer_audit_api.adapters.token_balance import RpcTokenBalanceReader
 from buyer_audit_api.core.auth_service import AuthService
 from buyer_audit_api.core.domain_registry import DomainRegistry
 from buyer_audit_api.core.errors import ConfigurationError
@@ -46,8 +45,6 @@ class AppContainer:
     clock: Clock
     auth_service: AuthService
     purchase_service: PurchaseService
-    #: Fixed single-user demo owner. Server configuration, never a browser-selected value.
-    local_owner_address: str
     internal_service_token: str = "test-internal-token"
     admin_service_token: str = "test-admin-token"
     local_allowed_origins: tuple[str, ...] = ()
@@ -61,6 +58,8 @@ class AppContainer:
     observer_mode: str = "off"
     checkpoint_mode: str = "off"
     evidence_observer: LocalQwenEvidenceObserver | None = None
+    #: Read-only balance lookup for the dashboard. `None` means no RPC is configured.
+    token_balance_reader: RpcTokenBalanceReader | None = None
 
 
 def build_aa_capture_source(settings: Settings, catalog: ModelCatalog) -> AaCaptureSource:
@@ -103,12 +102,9 @@ def build_aa_capture_source(settings: Settings, catalog: ModelCatalog) -> AaCapt
 
 def build_container(settings: Settings) -> AppContainer:
     clock = SystemClock()
-    # aa-three-factor-v1: a single local owner, mock providers and a mock Facilitator.
-    # No chain reader is constructed, so this composition cannot reach an RPC even by
-    # accident.
-    local_owner = settings.aegis_local_owner_address.strip().lower()
-    if not local_owner or not is_address(local_owner):
-        raise ConfigurationError("AEGIS_LOCAL_OWNER_ADDRESS must be an Ethereum address")
+    # aa-three-factor-v1: a single-user local demo, mock providers and a mock Facilitator.
+    # The only chain access is a read-only balanceOf for the dashboard, and only when
+    # BASE_SEPOLIA_RPC_URL is set. Nothing here signs or sends a transaction.
     repository = MongoEvidenceRepository(
         uri=settings.mongodb_uri,
         database=settings.mongodb_database,
@@ -173,7 +169,6 @@ def build_container(settings: Settings) -> AppContainer:
         clock=clock,
         auth_service=auth_service,
         purchase_service=purchase_service,
-        local_owner_address=local_owner,
         internal_service_token=settings.internal_service_token,
         admin_service_token=settings.admin_service_token,
         local_allowed_origins=tuple(
@@ -200,5 +195,10 @@ def build_container(settings: Settings) -> AppContainer:
         commerce_gateway=HttpCommerceGatewayClient(
             base_url=settings.commerce_gateway_url,
             service_token=settings.gateway_service_token,
+        ),
+        token_balance_reader=(
+            RpcTokenBalanceReader(rpc_url=settings.base_sepolia_rpc_url.strip())
+            if settings.base_sepolia_rpc_url.strip()
+            else None
         ),
     )

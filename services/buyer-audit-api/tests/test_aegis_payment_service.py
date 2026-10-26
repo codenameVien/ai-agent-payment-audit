@@ -30,7 +30,6 @@ from buyer_audit_api.domains.ai_inference.aa_catalog import (
 from buyer_audit_api.domains.ai_inference.aa_models import TokenIdentity
 from buyer_audit_api.domains.ai_inference.aa_workflow import AegisDecisionWorkflow
 
-OWNER = "0x0000000000000000000000000000000000000001"
 BUYER = "0x0000000000000000000000000000000000000002"
 TOKEN = "0x0000000000000000000000000000000000000000"
 PROMPT = "x" * 100
@@ -54,7 +53,6 @@ async def decided_purchase(
         clock=clock,
     )
     created = await purchases.create(
-        owner_address=OWNER,
         domain_id="ai_inference",
         raw_request={"requestSchema": "aegis-aa-v1", "prompt": PROMPT},
         budget_units=5_000,
@@ -81,7 +79,7 @@ async def bind_and_configure(
     spent_units: int = 0,
 ) -> None:
     await repository.bind_buyer_wallet(
-        owner_address=OWNER, buyer_wallet_address=BUYER, bound_at=clock.now()
+        buyer_wallet_address=BUYER, bound_at=clock.now()
     )
     await repository.put_wallet_policy(
         WalletPolicy(

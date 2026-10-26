@@ -38,14 +38,12 @@ class Settings(BaseSettings):
     aegis_checkpoint_mode: str = "off"
     # User-owned six-decimal ERC-3009 AEGIS token on Base Sepolia. Whether a request can
     # settle is controlled only by the server-side execution mode and approval gate.
-    aegis_token_address: str = "0x3440294d5fdc4849461c6f383a7fcf89af0c4a4b"
+    aegis_token_address: str = "0xE208f63B826FcDD9De0836EFFEb0FA49d1c4142b"
     aegis_token_status: str = "deployed-base-sepolia"
+    # Read-only RPC for the dashboard's token balance. Empty means the balance is not queried.
+    base_sepolia_rpc_url: str = ""
     payment_token_name: str = "AEGIS"
     payment_token_symbol: str = "AEGIS"
-    # Single-user local demo identity. This is server configuration, not a login: the
-    # browser can never choose it. The service refuses to start when it is blank or not
-    # an Ethereum address.
-    aegis_local_owner_address: str = "0x00000000000000000000000000000000000a6e15"
     aegis_local_allowed_origins: str = "http://localhost:3000,http://127.0.0.1:3000"
     aegis_local_allowed_hosts: str = "localhost,127.0.0.1"
     # The server records this mode; a client can never label its own evidence as live.

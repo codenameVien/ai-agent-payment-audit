@@ -30,7 +30,6 @@ def test_core_does_not_import_ai_inference_implementation() -> None:
 @pytest.mark.asyncio
 async def test_fake_domain_creates_protocol_neutral_evidence(container, repository) -> None:
     created = await container.purchase_service.create(
-        owner_address="0x0000000000000000000000000000000000000001",
         domain_id="fake",
         raw_request={"value": "  HELLO  ", "secret": "do-not-leak"},
         budget_units=10,

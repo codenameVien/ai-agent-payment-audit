@@ -7,11 +7,10 @@ from buyer_audit_api.core.ports import Clock, EvidenceRepository
 
 
 class AuthService:
-    """Owner-to-buyer-wallet binding for the single-user local demo.
+    """The single buyer wallet the local demo pays from.
 
-    The owner identity is server configuration, so this service never issues a
-    challenge or a session; it only validates addresses and delegates the binding to
-    the evidence repository, which keeps one buyer wallet per owner.
+    The stack registers the payment executor's address once at startup; the evidence
+    repository keeps exactly one buyer wallet and refuses a different one.
     """
 
     def __init__(
@@ -23,23 +22,15 @@ class AuthService:
         self._repository = repository
         self._clock = clock
 
-    async def bind_buyer_wallet(
-        self,
-        *,
-        owner_address: str,
-        buyer_wallet_address: str,
-    ) -> str:
-        if not is_address(owner_address):
-            raise AuthenticationError("invalid owner wallet address")
+    async def bind_buyer_wallet(self, *, buyer_wallet_address: str) -> str:
         if not is_address(buyer_wallet_address):
             raise AuthenticationError("invalid buyer wallet address")
         binding = await self._repository.bind_buyer_wallet(
-            owner_address=to_checksum_address(owner_address).lower(),
             buyer_wallet_address=to_checksum_address(buyer_wallet_address).lower(),
             bound_at=self._clock.now(),
         )
         return binding.buyer_wallet_address
 
-    async def get_buyer_wallet(self, owner_address: str) -> str | None:
-        binding = await self._repository.get_wallet_binding(owner_address)
+    async def get_buyer_wallet(self) -> str | None:
+        binding = await self._repository.get_wallet_binding()
         return binding.buyer_wallet_address if binding else None
